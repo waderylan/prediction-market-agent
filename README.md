@@ -59,6 +59,33 @@ uv run pytest -m live_smoke
 
 Live-smoke tests are never part of the default deterministic suite.
 
+## Market Data Layer
+
+Milestone 2 provides typed, asynchronous, read-only clients without MCP wrappers:
+
+```python
+from market_agent.providers import KalshiClient, PolymarketClient
+
+async with PolymarketClient() as polymarket:
+    candidates = await polymarket.search_markets("2028 presidential election", limit=5)
+
+async with KalshiClient() as kalshi:
+    market = await kalshi.get_market("KXPRESPERSON-28-JVAN")
+```
+
+Both clients return the shared `CanonicalMarket` type and raise typed errors for transport, HTTP,
+validation, and missing-data failures. Normal tests use saved fixtures. Run the bounded public API
+checks only when intended:
+
+```powershell
+$env:RUN_LIVE_SMOKE = "1"
+uv run pytest -m live_smoke
+Remove-Item Env:RUN_LIVE_SMOKE
+```
+
+The provider findings, endpoint choices, limitations, and fixture policy are documented in
+[Market API feasibility](docs/MARKET_API_FEASIBILITY.md).
+
 ## Documentation
 
 - [Focused project proposal](PROJECT_PROPOSAL.md)

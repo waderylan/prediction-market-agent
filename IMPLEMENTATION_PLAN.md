@@ -269,6 +269,25 @@ Multi-server MCP client
 
 - Change internal models and API boundaries now, before MCP schemas make them externally visible.
 
+#### Execution Record
+
+- **Status:** Complete on 2026-09-18.
+- **Implemented:** Added the immutable canonical market model and status/platform enums; separate
+  asynchronous Polymarket and Kalshi clients; isolated provider parsers; explicit 10-second
+  timeouts; at most two retries by default; typed transport, HTTP, validation, and missing-data
+  failures; UTC/probability normalization; bounded Kalshi local discovery; and opt-in live tests.
+- **Verification:** Observed 22 deterministic tests pass with 2 live tests deselected, then enabled
+  the bounded live suite and observed both provider detail tests pass. Ruff and strict mypy passed.
+  Tests cover success, empty search, incomplete fields, malformed data, missing required identity,
+  `4xx`, retried `5xx`, and timeout behavior.
+- **Learned:** Provider status vocabulary requires explicit mappings (`active`/`finalized` versus
+  canonical `open`/`resolved`). Kalshi series metadata reliably enriches resolution sources, while
+  Polymarket's rules often carry authority details even when its source field is empty.
+- **Deviations:** Kalshi detail performs an optional series lookup for settlement sources, and
+  search uses summary-page ranking before nested-event retrieval. No order-book call was added.
+- **Recommendation:** Keep these client and model boundaries for the later separate MCP servers;
+  no fixed architecture change or project pivot is supported by current evidence.
+
 ### Milestone 3: Polymarket MCP Server
 
 #### Work

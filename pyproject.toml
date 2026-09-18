@@ -29,14 +29,12 @@ packages = ["src/market_agent"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
+asyncio_mode = "auto"
 markers = [
   "unit: isolated tests with no external services",
   "integration: tests spanning local components",
   "live_smoke: opt-in tests that call bounded public endpoints",
 ]
-
-[tool.pytest-asyncio]
-asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100

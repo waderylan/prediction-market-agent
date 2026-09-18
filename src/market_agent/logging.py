@@ -18,8 +18,7 @@ def _sanitize(key: str, value: Any) -> Any:
         return f"[OMITTED length={len(str(value))}]"
     if isinstance(value, Mapping):
         return {
-            str(child_key): _sanitize(str(child_key), child)
-            for child_key, child in value.items()
+            str(child_key): _sanitize(str(child_key), child) for child_key, child in value.items()
         }
     if isinstance(value, (list, tuple)):
         return [_sanitize(key, item) for item in value]
