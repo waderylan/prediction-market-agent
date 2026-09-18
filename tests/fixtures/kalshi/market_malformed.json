@@ -1,0 +1,11 @@
+{
+  "market": {
+    "ticker": "KXMALFORMED-1",
+    "event_ticker": "KXMALFORMED",
+    "title": "Will malformed data be rejected?",
+    "status": "active",
+    "yes_bid_dollars": "not-a-price",
+    "yes_ask_dollars": "1.50",
+    "rules_primary": ""
+  }
+}

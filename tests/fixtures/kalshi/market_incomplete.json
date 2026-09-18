@@ -1,0 +1,14 @@
+{
+  "market": {
+    "ticker": "KXINCOMPLETE-1",
+    "event_ticker": "KXINCOMPLETE",
+    "title": "Will an example event occur?",
+    "yes_sub_title": "Example",
+    "status": "active",
+    "yes_bid_dollars": null,
+    "yes_ask_dollars": null,
+    "last_price_dollars": null,
+    "rules_primary": "The market resolves Yes if the example event occurs.",
+    "rules_secondary": ""
+  }
+}

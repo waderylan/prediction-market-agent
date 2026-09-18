@@ -1,0 +1,31 @@
+{
+  "_fixture": {
+    "retrieved_at": "2026-09-18T18:40:00Z",
+    "source": "https://external-api.kalshi.com/trade-api/v2/markets/KXPRESPERSON-28-JVAN",
+    "sanitized": true
+  },
+  "market": {
+    "ticker": "KXPRESPERSON-28-JVAN",
+    "event_ticker": "KXPRESPERSON-28",
+    "series_ticker": "KXPRESPERSON",
+    "title": "Who will win the next presidential election?",
+    "subtitle": "Republican",
+    "yes_sub_title": "J.D. Vance",
+    "no_sub_title": "J.D. Vance",
+    "status": "active",
+    "yes_bid_dollars": "0.2200",
+    "yes_ask_dollars": "0.2300",
+    "no_bid_dollars": "0.7700",
+    "no_ask_dollars": "0.7800",
+    "last_price_dollars": "0.2200",
+    "created_time": "2025-05-10T13:18:37.659307Z",
+    "open_time": "2025-05-10T14:00:00Z",
+    "close_time": "2029-11-07T15:00:00Z",
+    "expected_expiration_time": "2029-01-21T15:00:00Z",
+    "expiration_time": "2029-11-07T15:00:00Z",
+    "rules_primary": "If J.D. Vance is inaugurated as President for the term beginning in 2029, the market resolves Yes.",
+    "rules_secondary": "",
+    "liquidity_dollars": "0.0000",
+    "volume_fp": "4130554.92"
+  }
+}

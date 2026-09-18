@@ -1,0 +1,14 @@
+{
+  "series": {
+    "ticker": "KXPRESPERSON",
+    "title": "Presidential winner",
+    "category": "Elections",
+    "settlement_sources": [
+      {
+        "name": "Office of the Presidency",
+        "url": "https://www.whitehouse.gov/administration/executive-office-of-the-president/"
+      }
+    ],
+    "contract_terms_url": "https://assets.kalshi.com/contract_terms/PRESPERSON.pdf"
+  }
+}

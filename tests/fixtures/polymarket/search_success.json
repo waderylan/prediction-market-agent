@@ -1,0 +1,28 @@
+{
+  "events": [
+    {
+      "id": "31552",
+      "title": "Presidential Election Winner 2028",
+      "slug": "presidential-election-winner-2028",
+      "markets": [
+        {
+          "id": "561229",
+          "question": "Will JD Vance win the 2028 US Presidential Election?",
+          "slug": "will-jd-vance-win-the-2028-us-presidential-election",
+          "description": "The market resolves to the winner of the 2028 US Presidential Election.",
+          "outcomes": "[\"Yes\", \"No\"]",
+          "outcomePrices": "[\"0.2105\", \"0.7895\"]",
+          "bestBid": 0.21,
+          "bestAsk": 0.211,
+          "active": true,
+          "closed": false,
+          "acceptingOrders": true,
+          "endDate": "2028-11-07T00:00:00Z",
+          "liquidity": "415265.72387",
+          "volume": "16413361.618651984"
+        }
+      ]
+    }
+  ],
+  "pagination": {"hasMore": false, "totalResults": 1}
+}

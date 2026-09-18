@@ -1,0 +1,11 @@
+{
+  "id": "incomplete-1",
+  "question": "Will an example event occur?",
+  "slug": "will-an-example-event-occur",
+  "description": "Example incomplete public response.",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "outcomePrices": "[null, null]",
+  "active": true,
+  "closed": false,
+  "events": [{"id": "example-event"}]
+}

@@ -1,0 +1,40 @@
+{
+  "events": [
+    {
+      "event_ticker": "KXPRESPERSON-28",
+      "series_ticker": "KXPRESPERSON",
+      "title": "2028 U.S. Presidential Election winner?",
+      "sub_title": "In 2028",
+      "category": "Elections",
+      "markets": [
+        {
+          "ticker": "KXPRESPERSON-28-JVAN",
+          "event_ticker": "KXPRESPERSON-28",
+          "series_ticker": "KXPRESPERSON",
+          "title": "Who will win the next presidential election?",
+          "yes_sub_title": "J.D. Vance",
+          "status": "active",
+          "yes_bid_dollars": "0.2200",
+          "yes_ask_dollars": "0.2300",
+          "last_price_dollars": "0.2200",
+          "open_time": "2025-05-10T14:00:00Z",
+          "close_time": "2029-11-07T15:00:00Z",
+          "expected_expiration_time": "2029-01-21T15:00:00Z",
+          "rules_primary": "If J.D. Vance is inaugurated as President for the term beginning in 2029, the market resolves Yes.",
+          "rules_secondary": "",
+          "liquidity_dollars": "0.0000",
+          "volume_fp": "4130554.92"
+        }
+      ]
+    },
+    {
+      "event_ticker": "KXUNRELATED-28",
+      "series_ticker": "KXUNRELATED",
+      "title": "Unrelated weather event",
+      "sub_title": "In 2028",
+      "category": "Climate and Weather",
+      "markets": []
+    }
+  ],
+  "cursor": ""
+}

@@ -226,6 +226,26 @@ Multi-server MCP client
 - If reliable topic search is unavailable, use a bounded local candidate-ranking layer over paginated event or market results.
 - If full rules cannot be retrieved reliably, narrow the supported market categories or reconsider the matching workflow before building MCP servers.
 
+#### Execution Record
+
+- **Status:** Complete on 2026-09-18.
+- **Implemented:** Reviewed current official API documentation, ran bounded public GET checks across
+  several categories and failure cases, documented endpoint behavior and canonical mappings in
+  `docs/MARKET_API_FEASIBILITY.md`, and added reduced fixtures for success, empty, incomplete, and
+  malformed responses.
+- **Verification:** Observed successful discovery/detail/rules/prices/status calls for both
+  providers; distinct cursor pages; empty `200` results; Polymarket `422` and Kalshi `404` errors;
+  one plausible 2028 presidential pair; several near-matches; and valid JSON for all 11 fixtures.
+  The deterministic 4-test suite, Ruff, and strict mypy remained green.
+- **Learned:** Polymarket supports public free-text search but can rank stale results. Kalshi has no
+  documented natural-language search and requires a bounded catalog scan plus local ranking.
+  Summary responses expose sufficient prices for version one, so order-book depth is unnecessary.
+- **Deviations:** Selected Polymarket public search plus keyset feeds and Kalshi event pagination as
+  the concrete discovery boundaries. Kalshi series lookup will enrich settlement-source metadata.
+- **Recommendation:** Apply the plan's existing smallest fallback: scan a fixed number of Kalshi
+  event pages, rank locally, and fetch nested markets only for top candidates. No fixed-decision
+  change or major pivot is warranted.
+
 ### Milestone 2: Shared Domain Layer and API Clients
 
 #### Work

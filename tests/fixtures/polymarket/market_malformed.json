@@ -1,0 +1,6 @@
+{
+  "id": "malformed-1",
+  "question": "Will malformed data be rejected?",
+  "outcomes": "not-json",
+  "outcomePrices": "[\"1.4\", \"-0.4\"]"
+}
