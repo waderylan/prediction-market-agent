@@ -1,3 +1,4 @@
+import json
 from contextlib import asynccontextmanager
 
 import httpx
@@ -39,6 +40,10 @@ def kalshi_protocol(load_fixture):
             payload = load_fixture("kalshi", name)
             if mode == "long" and name == "market_success":
                 payload["market"]["rules_primary"] = "r" * 20000
+            if mode == "ambiguous" and name == "market_success":
+                payload["market"]["rules_primary"] = (
+                    "The winner is determined under official rules."
+                )
             return httpx.Response(200, json=payload)
 
         async with httpx.AsyncClient(
@@ -107,7 +112,8 @@ async def test_kalshi_empty_and_bound(kalshi_protocol):
 
 
 @pytest.mark.parametrize("platforms", [[], ["polymarket"], ["kalshi"], ["polymarket", "kalshi"]])
-async def test_platform_tool_paths(kalshi_protocol, load_fixture, platforms):
+@pytest.mark.parametrize("mode", ["success", "ambiguous"])
+async def test_platform_tool_paths(kalshi_protocol, load_fixture, platforms, mode):
     from market_agent.mcp.polymarket import create_server as poly_server
     from market_agent.providers import PolymarketClient
 
@@ -123,7 +129,7 @@ async def test_platform_tool_paths(kalshi_protocol, load_fixture, platforms):
             create_connected_server_and_client_session(
                 poly_server(PolymarketClient(http_client=http))
             ) as poly,
-            kalshi_protocol() as (kalshi, _),
+            kalshi_protocol(mode) as (kalshi, _),
         ):
             yield [*await load_mcp_tools(poly), *await load_mcp_tools(kalshi)]
 
@@ -137,7 +143,17 @@ async def test_platform_tool_paths(kalshi_protocol, load_fixture, platforms):
     ]
     model = ScriptedModel(replies=[*replies, AIMessage("Done"), AIMessage("Earlier quote")])
     agent = ChatAgent(model, connect)
-    assert await agent.chat("Inspect selected contracts", "a") == "Done"
+    answer = await agent.chat("Inspect selected contracts", "a")
+    assert answer.endswith("Done")
+    if len(platforms) == 2:
+        assert (
+            "Not equivalent: settlement trigger" if mode == "success" else "Equivalence unverified"
+        ) in answer
+        # Deterministic evidence reaches the model BEFORE its final synthesis.
+        audit = json.loads(model.observed[-1][-1].content)["matching_report"]
+        assert audit["pairs"][0]["verdict"] == ("different" if mode == "success" else "ambiguous")
+        assert audit["pairs"][0]["review_required"] == (mode == "ambiguous")
+        assert not audit["pairs"][0]["comparison_allowed"]
     returned = [m for m in model.observed[-1] if isinstance(m, ToolMessage)]
     assert len(returned) == len(platforms)
     assert all(m.status == "success" for m in returned)

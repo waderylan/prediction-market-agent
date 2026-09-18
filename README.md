@@ -1,7 +1,7 @@
 # Prediction Market Research Agent
 
 This repository contains CSCI 599 Assignment 1: a tool-using agent with MCP integration,
-conversational memory, and a planned Google Cloud Run deployment. Through Milestone 5,
+conversational memory, and a planned Google Cloud Run deployment. Through Milestone 6,
 the working **Prediction Market Contract Reader** explains what a contract actually settles on,
 alongside its quoted price, source, and material caveats.
 
@@ -131,7 +131,34 @@ server does not prevent using the other. Results include platform identity to pr
 Try: “Compare Polymarket 561229 with Kalshi KXPRESPERSON-28-JVAN. What differs in the rules?”
 This retrieves both contracts; similar headlines alone do not establish equivalence.
 Follow up with “What was the Kalshi price?” to use the remembered snapshot.
-Formal deterministic matching follows in Milestone 6.
+The deterministic contract check runs before the model interprets a pair.
+
+## The Contract Check
+
+“Are these really the same bet?” is the central question. After retrieving both contracts,
+the application compares their supplied terms in Python and displays its verdict independently
+of the model's explanation:
+
+| Result | Meaning |
+|---|---|
+| Equivalent supplied terms | Strict agreement in the supplied rules and required metadata; unseen external terms remain unverified. |
+| Not equivalent | An explicit condition differs. Prices describe separate contracts. |
+| Equivalence unverified | Missing or unparsed terms require semantic review before an equivalent-price comparison. |
+
+The report checks event identity, binary outcomes, polarity, thresholds, units, inclusivity,
+event timestamps, timing conditions, settlement triggers, authority, cancellation, exclusions,
+full rules, trading close, and resolution schedule. It considers at most three candidates per
+platform and nine pairs. Related contracts remain labeled as context.
+
+For example, the 2028 Vance contracts have similar headlines, but Polymarket uses a three-news-source
+race call with an inauguration fallback while Kalshi settles on inauguration. The application
+surfaces this settlement difference before discussing their quotes.
+
+The parser deliberately supports a narrow explicit conditional form and recognizable settlement
+clauses. General prose, missing authorities, naive timestamps, and truncated rules remain unresolved.
+Trading close is tracked separately from the event cutoff. The main model explains ambiguous
+checks; it cannot change the deterministic verdict. Jev and forecasting are later milestones.
+See [matching design and limitations](docs/research/CONTRACT_MATCHING.md).
 
 ## Run the Vertical Slice
 
@@ -180,8 +207,8 @@ This is a local test backend, not a production API replacement or proof of GPT-5
 ### Container
 
 ```powershell
-docker build -t market-agent:m4 .
-docker run --rm -p 8080:8080 --env-file .env market-agent:m4
+docker build -t market-agent:local .
+docker run --rm -p 8080:8080 --env-file .env market-agent:local
 ```
 
 For local Codex testing from Docker Desktop, keep the host gateway running and use:
@@ -190,7 +217,7 @@ For local Codex testing from Docker Desktop, keep the host gateway running and u
 docker run --rm -p 8080:9090 -e PORT=9090 `
   -e OPENAI_API_KEY=local-codex-placeholder `
   -e OPENAI_BASE_URL=http://host.docker.internal:8091/v1 `
-  -e LLM_TIMEOUT_SECONDS=120 market-agent:m4
+  -e LLM_TIMEOUT_SECONDS=120 market-agent:local
 ```
 
 The multi-stage image installs locked runtime dependencies with uv and runs as UID 10001.
@@ -211,7 +238,7 @@ Cloud Run deployment remains a later milestone; there is no live deployment URL 
 - Four tool calls per turn; bounded model/HTTP/MCP timeouts. The model chooses tools semantically.
 - Memory uses LangGraph InMemorySaver and lasts for one process. Run one worker/instance for
   the assignment. Memory is not durable or currently evicted; long-running public use needs limits.
-- No trading, independent forecasting, news, deterministic matching, or saved forecasts yet.
+- No trading, independent forecasting, news, Jev evaluation, or saved forecasts yet.
 - GPT-5 cloud access was not verified without a key. Headless Sol tests do not establish GPT-5 quality.
 
 ## Current Architecture
@@ -222,6 +249,7 @@ flowchart LR
     F --> G[LangGraph reasoning loop]
     G <--> M[InMemorySaver by session_id]
     G <--> L[Cloud LLM / local Codex test gateway]
+    G --> MATCH[Deterministic contract check before pair interpretation]
     G --> A[langchain-mcp-adapters]
     A -->|stdio tools/list and tools/call| P[Polymarket MCP process]
     A -->|separate stdio session| K[Kalshi MCP process]
@@ -236,7 +264,8 @@ flowchart LR
     Q[Query plus session context] --> R[Model reasoning]
     R -->|tool selected| T[MCP tools/call]
     T --> V[Validate structured result or controlled error]
-    V --> R
+    V --> C[Bounded contract check when both details exist]
+    C --> R
     R -->|answer ready or budget exhausted| S[Final synthesis]
     S --> O[response string]
 ```

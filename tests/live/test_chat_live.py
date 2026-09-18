@@ -112,6 +112,8 @@ def test_live_cross_platform(client, caplog):
     assert {e["tool"] for e in activity} == {"polymarket_get_market", "kalshi_get_market"}
     assert all(e["status"] == "success" for e in activity)
     assert "inaugurat" in text.lower()
+    assert text.startswith("- Contract check")
+    assert "Not equivalent: settlement trigger" in text
 
 
 def test_live_kalshi_topic_search(client, caplog):

@@ -452,6 +452,31 @@ Multi-server MCP client
 
 - Narrow the supported event types if rule normalization becomes too broad for the assignment timeline.
 
+#### Execution Record
+
+- **Status:** Complete on 2026-09-18; all four exit criteria verified.
+- **Implemented:** Pure-Python bounded candidate matching, explicit dimension checks, conservative
+  equivalent/different/ambiguous verdicts, contextual-contract labels, and a semantic-review route
+  through the existing reasoning node. Reports reach the model before pair interpretation and a
+  code-generated eligibility notice appears independently in the HTTP response.
+- **Verification:** 112 deterministic tests passed, including 26 focused matcher cases and
+  graph tests showing rejected/ambiguous evidence before synthesis. Ruff lint/format, strict mypy,
+  and diff checks passed. Both provider smoke checks and each MCP server's public smoke passed.
+  Seven Sol-medium integration cases passed; targeted cross-platform verification followed the
+  observed-wording refinement. Docker built with both server manifests and verified UID 10001,
+  default PORT 8080, overridden PORT 9090, health 200, invalid-body 422, and a live pair readout.
+- **Learned:** Live authority wording differed from reduced fixtures; a safe ambiguous result
+  exposed the gap. Narrow recognition of Associated Press and next-person inauguration wording
+  made the settlement-trigger mismatch explicit. Trading close must remain distinct from event
+  cutoff, and matching a rule prefix cannot prove complete-rule equality.
+- **Deviations:** Deliberately limited deterministic parsing to explicit conditionals and known
+  settlement forms; unsupported semantics remain unresolved. Added an independent verdict notice
+  to prevent the model from silently omitting eligibility. No fixed decisions or later subsystems
+  changed. Headless Sol remains local verification only; cloud GPT-5 remains unverified without a key.
+- **Recommendation:** Proceed to the planned labeled semantic-equivalence evaluation only after
+  reviewing false negatives and unknown fields. Preserve deterministic vetoes and scoped claims.
+  Detailed boundaries: `../research/CONTRACT_MATCHING.md`.
+
 ### Milestone 7: Jev Equivalence Evaluation
 
 #### Work
