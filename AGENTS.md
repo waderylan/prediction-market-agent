@@ -2,14 +2,14 @@
 
 CSCI 599 Assignment 1 — Tool-Using Agent with MCP Integration
 
-This repository contains an individual course project to build and deploy an LLM-powered, tool-using agent with MCP integration and conversational memory. The completed project must satisfy the implementation, deployment, testing, documentation, and submission requirements in `Assignment_1_Description.md`.
+This repository contains an individual course project to build and deploy an LLM-powered, tool-using agent with MCP integration and conversational memory. The completed project must satisfy the implementation, deployment, testing, documentation, and submission requirements in `docs/assignment/Assignment_1_Description.md`.
 
 This file is the canonical coordination guide for coding agents in this repository. It intentionally does not repeat the assignment specification.
 
 ## 1. Assignment Ground Truth
 
-- Read `Assignment_1_Description.md` completely before making project decisions or changing code, configuration, documentation, tests, deployment, or submission artifacts.
-- Treat `Assignment_1_Description.md` as the ground truth for all project requirements, grading criteria, academic-integrity rules, technical contracts, and deliverables.
+- Read `docs/assignment/Assignment_1_Description.md` completely before making project decisions or changing code, configuration, documentation, tests, deployment, or submission artifacts.
+- Treat `docs/assignment/Assignment_1_Description.md` as the ground truth for all project requirements, grading criteria, academic-integrity rules, technical contracts, and deliverables.
 - Do not rely on summaries in chat or agent memory when the assignment document can answer the question directly.
 - If repository code, documentation, or a user request appears inconsistent with the assignment, identify the conflict before proceeding.
 - Follow higher-priority user and platform instructions when they conflict with this file.
@@ -19,7 +19,7 @@ This file is the canonical coordination guide for coding agents in this reposito
 At the start of every agent session:
 
 1. Read this file completely.
-2. Read `Assignment_1_Description.md` completely.
+2. Read `docs/assignment/Assignment_1_Description.md` completely.
 3. Append a `SESSION START` entry to `AI_TRANSCRIPT.md` using §4.1.
 4. Complete the user's request while preserving the assignment contract.
 5. If the turn qualifies under §3, append the user prompt and final response to `AI_TRANSCRIPT.md` using §4.2 before sending the response.
@@ -104,4 +104,4 @@ Before sending each final response for a qualifying turn:
 - Do not fabricate personal experiences, prompts, lessons, or reflections for `PROCESS_LOG.md`; ask Rylan Wade when personal input is required.
 - Preserve user-authored and unrelated changes.
 - Keep `CLAUDE.md` as the single-line import `@AGENTS.md`.
-- Keep project behavior and documentation aligned with `Assignment_1_Description.md`.
+- Keep project behavior and documentation aligned with `docs/assignment/Assignment_1_Description.md`.

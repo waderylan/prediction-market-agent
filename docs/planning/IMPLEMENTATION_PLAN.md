@@ -6,7 +6,7 @@
 - Address high-risk assumptions before adding optional features.
 - Maintain a working vertical slice throughout development.
 - Preserve room to change APIs, schemas, prompts, thresholds, and internal module boundaries when testing provides better evidence.
-- Keep the implementation aligned with `Assignment_1_Description.md` and the focused scope in `PROJECT_PROPOSAL.md`.
+- Keep the implementation aligned with `../assignment/Assignment_1_Description.md` and the focused scope in `PROJECT_PROPOSAL.md`.
 
 ## 2. Fixed Decisions
 
@@ -231,7 +231,7 @@ Multi-server MCP client
 - **Status:** Complete on 2026-09-18.
 - **Implemented:** Reviewed current official API documentation, ran bounded public GET checks across
   several categories and failure cases, documented endpoint behavior and canonical mappings in
-  `docs/MARKET_API_FEASIBILITY.md`, and added reduced fixtures for success, empty, incomplete, and
+  `../research/MARKET_API_FEASIBILITY.md`, and added reduced fixtures for success, empty, incomplete, and
   malformed responses.
 - **Verification:** Observed successful discovery/detail/rules/prices/status calls for both
   providers; distinct cursor pages; empty `200` results; Polymarket `422` and Kalshi `404` errors;

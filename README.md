@@ -84,10 +84,11 @@ Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
 The provider findings, endpoint choices, limitations, and fixture policy are documented in
-[Market API feasibility](docs/MARKET_API_FEASIBILITY.md).
+[Market API feasibility](docs/research/MARKET_API_FEASIBILITY.md).
 
 ## Documentation
 
-- [Focused project proposal](PROJECT_PROPOSAL.md)
-- [Implementation plan](IMPLEMENTATION_PLAN.md)
-- [Assignment requirements](Assignment_1_Description.md)
+- [Focused project proposal](docs/planning/PROJECT_PROPOSAL.md)
+- [Implementation plan](docs/planning/IMPLEMENTATION_PLAN.md)
+- [Assignment requirements](docs/assignment/Assignment_1_Description.md)
+- [Original assignment PDF](docs/assignment/Assignment_1_Description.pdf)
