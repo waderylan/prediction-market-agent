@@ -26,6 +26,10 @@ The proposed workflow is:
 
 The scope excludes trading, brokerage connections, continuous monitoring, automated settlement, dashboards, and custom price-prediction models.
 
+## Development Approach
+
+This course is designed to teach practical development with AI tools, so LLM-assisted coding, debugging, and refactoring are expected parts of the project workflow. The student remains responsible for understanding the system, verifying its behavior, and explaining the implementation and design decisions.
+
 ## Documentation
 
 - [Focused project proposal](PROJECT_PROPOSAL.md)

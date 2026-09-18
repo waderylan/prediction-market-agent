@@ -250,13 +250,13 @@ Include the loop-back arrow. When the LLM decides another tool call is needed, i
 Submit four items to Brightspace:
 
 - **Live Cloud Run URL.** Text field. Example format: `https://csci599-a1-xxxxxxxxxx-uw.a.run.app`. Your service must be running and answering queries at grading time. Scale-to-zero keeps idle cost near-zero, so leave it running until grades are posted.
-- **Source code ZIP.** Excludes `node_modules`, virtualenv directories, `.env`, and anything with API keys. Canonical unprefixed filenames — `README.md`, `main.py`, `deploy.sh`. No `A1_` prefixes. Includes the three required architecture diagrams inside `README.md` or in a linked `docs/` directory.
+- **Source code ZIP.** Includes the Python source code and MCP server configurations. Excludes `node_modules`, virtualenv directories, `.env`, and anything with API keys. Canonical unprefixed filenames — `README.md`, `main.py`, `deploy.sh`. No `A1_` prefixes. Includes the three required architecture diagrams inside `README.md` or in a linked `docs/` directory.
 - **PROCESS_LOG.md.** See §6 for content requirements.
 - **README.md** with setup, run, deploy instructions, and the three required architecture diagrams. Bundled inside the source ZIP.
 
-**Deadline:** per Brightspace.
+**Deadline:** per Brightspace. Submit by 11:59 p.m. on the due date.
 
-**Late policy:** syllabus canonical. Two grace days total across the semester.
+**Late policy:** syllabus canonical. Each student has two grace days total across the semester, usable in any combination on assignments. Any submission at 12:00 a.m. or later uses a full grace day. Grace days do not require advance approval. After both grace days have been used, a late assignment receives a zero unless the professor approves an exception; in exceptional circumstances, an accepted late submission carries a 30% penalty.
 
 ## 6. Academic Integrity
 
@@ -264,6 +264,7 @@ This assignment is subject to USC’s academic integrity policies. Specifically:
 
 - **Individual work.** Assignment 1 is an individual assignment. You may discuss general concepts and framework choices with classmates, but the source code, deployment, and written deliverables must be your own work.
 - **No sharing of source code between students.** This includes reference implementations (which are instructor-facing and not distributed during the assignment window) and prior semester deliverables.
+- **Current-term original work.** Submit work prepared specifically for this course and section during the current academic term. Reusing work created for another course requires written permission from the instructor.
 - **AI-assisted development is allowed and expected.** This is a course about building AI systems. Using LLMs (Claude, GPT, Gemini, Grok, local models) to help write, debug, and refactor code is expected. Using LLMs to substitute for your own understanding of the material is not.
 - **Attribution.** Any code copied or substantially adapted from external sources (tutorials, GitHub repositories, framework documentation examples, Stack Overflow) must be attributed in code comments **AND** in your process log. Attribution format: `# Adapted from <source URL> — <one-line rationale>`. LLM-generated code is a course expectation, not an attribution trigger.
 - **MCP servers as external projects.** MCP server implementations you use (filesystem, Tavily, weather, database) are external open-source projects. Attribute their use in the README, but you do not need to reimplement them.
@@ -272,7 +273,7 @@ This assignment is subject to USC’s academic integrity policies. Specifically:
 
 ### 6.1 Process Log
 
-You must submit a Process Log documenting your development process. The process log is worth explicit rubric weight (see §7 — “Code quality and documentation”) and is not optional.
+You must submit a Process Log documenting your development process. The syllabus assigns the process log 10% of the assignment score; a missing log receives 0/10 for that component. It is part of the broader §7 “Code quality and documentation” criterion and is not optional.
 
 **Format:** Markdown file named `PROCESS_LOG.md` in the root of your submission. Contents:
 
@@ -397,4 +398,4 @@ Durable persistence across Cloud Run instance recycling or scale-to-zero is not 
 
 ---
 
-**Regrade policy:** per syllabus canonical process. See syllabus for the Piazza form and 2-day window.
+**Regrade policy:** Once grades are posted, the regrade form will be provided through Piazza. Submit one complete request per assignment within two days after the form is posted; requests after that window are denied. The TA decides whether to grant the request. If granted, a grader reviews it and the resulting score is final. Questions after that process must be discussed with the professor in person.
