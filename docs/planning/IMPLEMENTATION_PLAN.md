@@ -310,6 +310,23 @@ Multi-server MCP client
 
 - Revise tool granularity before the agent depends on the interface.
 
+#### Execution Record
+
+- **Status:** Complete on 2026-09-18; all four exit criteria verified.
+- **Implemented:** Student-authored stdio FastMCP server wrapping the existing PolymarketClient;
+  search/detail tools, typed input/output schemas, canonical projections, bounded results,
+  explicit rule truncation, sanitized tool errors, lifespan-owned HTTP client, and usage docs.
+- **Verification:** 45 deterministic tests passed; real MCP discovery and both tool calls validated
+  against declared schemas. Invalid arguments, empty results, transport/HTTP/malformed/missing
+  data, and output bounds passed. Public stdio discovery/search/detail smoke passed separately
+  (1 test). Ruff lint/format, strict mypy, and git diff whitespace checks passed.
+- **Learned:** Current adapter dependencies require MCP v1 despite SDK v2 availability; supported
+  v1 FastMCP provides structured output and real protocol testing without another server framework.
+- **Deviations:** Selected stdio, 10-result search cap, and 12,000-character flagged rule cap.
+  These refine flexible boundaries; no fixed decision changed and no order-book tool was needed.
+- **Recommendation:** Preserve the two-tool interface and defer SDK v2 until adapter support.
+  Detailed evidence and official references: `../research/MCP_VERTICAL_SLICE.md`.
+
 ### Milestone 4: Early Vertical Slice
 
 #### Work

@@ -1,6 +1,6 @@
 # Prediction Market Research Agent
 
-This repository contains CSCI 599 Assignment 1: a tool-using agent with MCP integration, conversational memory, and a Google Cloud Run deployment. Implementation currently covers the repository foundation; market API and MCP work follows the gated implementation plan.
+This repository contains CSCI 599 Assignment 1: a tool-using agent with MCP integration, conversational memory, and a planned Google Cloud Run deployment. Milestone 3 adds a working Polymarket MCP server over the shared market-data layer.
 
 ## Proposed Project
 
@@ -87,6 +87,27 @@ The provider findings, endpoint choices, limitations, and fixture policy are doc
 [Market API feasibility](docs/research/MARKET_API_FEASIBILITY.md).
 
 ## Documentation
+
+## Polymarket MCP
+
+Start the student-authored server with `uv run python -m market_agent.mcp.polymarket`.
+It speaks MCP over stdio; it is intended to be launched by an MCP client, not called as an HTTP API.
+It needs no exchange or LLM credentials. Only public read-only Gamma endpoints are used.
+
+- `polymarket_search_markets(query, status="open", limit=5)`: at most 10 candidate summaries.
+- `polymarket_get_market(market_id)`: current prices and bounded resolution rules for a numeric ID.
+- Prices are decimal strings, missing fields are null, and truncated rules are explicitly labeled.
+- Search covers a bounded first page; empty results are not proof of market absence.
+
+Protocol tests: `uv run pytest tests/integration/test_polymarket_mcp.py`.
+Public subprocess check: set `RUN_LIVE_SMOKE=1`, then run
+`uv run pytest tests/live/test_polymarket_mcp_live.py`.
+
+The server uses the official [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+FastMCP implementation. See [implementation evidence](docs/research/MCP_VERTICAL_SLICE.md)
+for dependency compatibility, transport, lifecycle, bounds, and verification results.
+
+## Project Documents
 
 - [Focused project proposal](docs/planning/PROJECT_PROPOSAL.md)
 - [Implementation plan](docs/planning/IMPLEMENTATION_PLAN.md)
