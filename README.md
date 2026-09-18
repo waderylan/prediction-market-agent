@@ -33,4 +33,5 @@ This course is designed to teach practical development with AI tools, so LLM-ass
 ## Documentation
 
 - [Focused project proposal](PROJECT_PROPOSAL.md)
+- [Implementation plan](IMPLEMENTATION_PLAN.md)
 - [Assignment requirements](Assignment_1_Description.md)
