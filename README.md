@@ -1,6 +1,14 @@
 # Prediction Market Research Agent
 
-This repository contains CSCI 599 Assignment 1: a tool-using agent with MCP integration, conversational memory, and a planned Google Cloud Run deployment. Milestone 3 adds a working Polymarket MCP server over the shared market-data layer.
+This repository contains CSCI 599 Assignment 1: a tool-using agent with MCP integration,
+conversational memory, and a planned Google Cloud Run deployment. Through Milestone 4,
+the working **Polymarket Contract Reader** explains what a contract actually settles on,
+alongside its quoted price, source, and material caveats.
+
+Try: “Read Polymarket market 561229: what makes YES win, and what rule could surprise me?”
+Then: “Which organizations did those rules name?” using the same session ID.
+Search by topic when you do not know an ID. The agent can discover candidates, fetch their
+rules, and explain them through one conversational endpoint.
 
 ## Proposed Project
 
@@ -86,8 +94,6 @@ Remove-Item Env:RUN_LIVE_SMOKE
 The provider findings, endpoint choices, limitations, and fixture policy are documented in
 [Market API feasibility](docs/research/MARKET_API_FEASIBILITY.md).
 
-## Documentation
-
 ## Polymarket MCP
 
 Start the student-authored server with `uv run python -m market_agent.mcp.polymarket`.
@@ -106,6 +112,127 @@ Public subprocess check: set `RUN_LIVE_SMOKE=1`, then run
 The server uses the official [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 FastMCP implementation. See [implementation evidence](docs/research/MCP_VERTICAL_SLICE.md)
 for dependency compatibility, transport, lifecycle, bounds, and verification results.
+
+## Run the Vertical Slice
+
+With a real `OPENAI_API_KEY` in the ignored `.env`, run `uv run python main.py`.
+The default cloud backend is `gpt-5`; `OPENAI_MODEL` and `OPENAI_BASE_URL` are configurable.
+Tavily credentials are not required until its later milestone. The server binds to
+`0.0.0.0`, reads `PORT` (default 8080), and exposes interactive API documentation at `/docs`.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/chat `
+  -ContentType application/json `
+  -Body '{"query":"Find two Polymarket Bitcoin contracts","session_id":"research-1"}'
+```
+
+Responses have exactly `{"response":"..."}`. Invalid bodies return 422. Session IDs accept
+1–128 letters, digits, underscores, or hyphens; queries accept 1–4,000 characters.
+Use a new, unguessable session ID for each conversation. Session IDs are not authentication.
+
+### Local testing with headless Codex
+
+This opt-in development route uses saved Codex CLI authentication, **gpt-5.6-sol at medium
+effort only**, with no API billing credentials. The gateway runs outside the deployment image.
+It returns model decisions; LangGraph still discovers and calls the real MCP server.
+
+Terminal 1:
+
+```powershell
+uv run python scripts/codex_gateway.py
+```
+
+Terminal 2:
+
+```powershell
+$env:OPENAI_API_KEY = "local-codex-placeholder"
+$env:OPENAI_BASE_URL = "http://127.0.0.1:8091/v1"
+$env:LLM_TIMEOUT_SECONDS = "120"
+uv run python main.py
+```
+
+The gateway binds only to localhost. It launches ephemeral CLI calls in temporary directories,
+passes prompts through stdin, suppresses CLI diagnostics, and does not execute market tools itself.
+Set `CODEX_EXECUTABLE` if the CLI cannot be located. Stop both processes with Ctrl+C.
+Clear those environment overrides before testing the real cloud API. CLI usage limits still apply.
+This is a local test backend, not a production API replacement or proof of GPT-5 behavior.
+
+### Container
+
+```powershell
+docker build -t market-agent:m4 .
+docker run --rm -p 8080:8080 --env-file .env market-agent:m4
+```
+
+For local Codex testing from Docker Desktop, keep the host gateway running and use:
+
+```powershell
+docker run --rm -p 8080:9090 -e PORT=9090 `
+  -e OPENAI_API_KEY=local-codex-placeholder `
+  -e OPENAI_BASE_URL=http://host.docker.internal:8091/v1 `
+  -e LLM_TIMEOUT_SECONDS=120 market-agent:m4
+```
+
+The multi-stage image installs locked runtime dependencies with uv and runs as UID 10001.
+No Node, Codex, dev dependencies, source credentials, or host authentication files are included.
+Cloud Run deployment remains a later milestone; there is no live deployment URL yet.
+
+### Verification and operating limits
+
+- Offline suite: `uv run pytest -m "not live_smoke"`; Ruff lint/format and `uv run mypy src`.
+- Public API suite: `RUN_LIVE_SMOKE=1`, then `uv run pytest tests/live/test_market_clients_live.py`.
+- Public MCP subprocess: same flag, `uv run pytest tests/live/test_polymarket_mcp_live.py`.
+- Real model + MCP: configure the cloud backend or local gateway, set `RUN_LIVE_AGENT=1`,
+  then `uv run pytest tests/live/test_chat_live.py`. This makes real model and public API calls.
+- Deterministic graph tests use a scripted model and fixture HTTP; they do not measure semantic
+  selection. Live checks inspect actual tool names/statuses without recording prompts or payloads.
+- One stdio subprocess per turn shares a session across that turn's calls, then closes. A later
+  request retries connection naturally. Discovery failure returns a controlled response.
+- Four tool calls per turn; bounded model/HTTP/MCP timeouts. The model chooses tools semantically.
+- Memory uses LangGraph InMemorySaver and lasts for one process. Run one worker/instance for
+  the assignment. Memory is not durable or currently evicted; long-running public use needs limits.
+- No trading, independent forecasting, news, Kalshi MCP, contract matching, or saved forecasts yet.
+- GPT-5 cloud access was not verified without a key. Headless Sol tests do not establish GPT-5 quality.
+
+## Current Architecture
+
+```mermaid
+flowchart LR
+    U[Client] --> F[FastAPI POST /chat]
+    F --> G[LangGraph reasoning loop]
+    G <--> M[InMemorySaver by session_id]
+    G <--> L[Cloud LLM / local Codex test gateway]
+    G --> A[langchain-mcp-adapters]
+    A -->|stdio tools/list and tools/call| P[Polymarket MCP process]
+    P --> C[PolymarketClient]
+    C --> API[Public Gamma API]
+```
+
+```mermaid
+flowchart LR
+    Q[Query plus session context] --> R[Model reasoning]
+    R -->|tool selected| T[MCP tools/call]
+    T --> V[Validate structured result or controlled error]
+    V --> R
+    R -->|answer ready or budget exhausted| S[Final synthesis]
+    S --> O[response string]
+```
+
+```mermaid
+flowchart LR
+    E[Local ignored .env / shell variables] --> D[Local Docker container]
+    B[Multi-stage image build] --> D
+    D --> H[Host Codex gateway for local testing]
+    B -. future deployment .-> AR[Artifact Registry]
+    AR -.-> CR[Cloud Run: one instance]
+    ENV[Runtime environment secrets] -.-> CR
+    CR -.-> URL[Live URL: not deployed yet]
+```
+
+These diagrams describe the implemented slice; future servers will be added as they become real.
+The application uses [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview),
+[FastAPI](https://fastapi.tiangolo.com/), and
+[langchain-mcp-adapters](https://github.com/langchain-ai/langchain-mcp-adapters).
 
 ## Project Documents
 

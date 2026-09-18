@@ -1,0 +1,204 @@
+import json
+from contextlib import asynccontextmanager
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_mcp_adapters.tools import load_mcp_tools
+from mcp.server.fastmcp import FastMCP
+from mcp.shared.memory import create_connected_server_and_client_session
+from pydantic import Field
+
+from market_agent.agent import ChatAgent
+from market_agent.app import create_app
+from market_agent.mcp.polymarket import create_server
+from market_agent.providers import PolymarketClient
+
+pytestmark = pytest.mark.integration
+
+
+class ScriptedModel(BaseChatModel):
+    """Test-only model script; proves orchestration, not semantic model quality."""
+
+    replies: list = Field(default_factory=list)
+    observed: list = Field(default_factory=list)
+
+    @property
+    def _llm_type(self):
+        return "scripted-test"
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.observed.append(messages)
+        item = self.replies.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        reply = item(messages) if callable(item) else item
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+
+def tool_call(name="polymarket_get_market", args=None, call_id="call-1"):
+    return AIMessage(
+        "",
+        tool_calls=[
+            {
+                "name": name,
+                "args": args or {"market_id": "561229"},
+                "id": call_id,
+            }
+        ],
+    )
+
+
+@pytest.fixture
+def connections(load_fixture):
+    def make(mode="success"):
+        @asynccontextmanager
+        async def connect():
+            if mode == "unavailable":
+                raise ConnectionError("sensitive diagnostic")
+            if mode == "invalid_mcp":
+                server = FastMCP("invalid-response", log_level="CRITICAL")
+
+                @server.tool()
+                async def polymarket_get_market(market_id: str) -> dict:
+                    return {"unexpected": "sensitive diagnostic"}
+            else:
+
+                def handler(request):
+                    if mode == "error":
+                        return httpx.Response(503, text="sensitive diagnostic")
+                    name = (
+                        "search_success"
+                        if request.url.path == "/public-search"
+                        else "market_success"
+                    )
+                    return httpx.Response(200, json=load_fixture("polymarket", name))
+
+                http = httpx.AsyncClient(
+                    base_url="https://gamma-api.polymarket.com",
+                    transport=httpx.MockTransport(handler),
+                )
+                server = create_server(PolymarketClient(http_client=http, max_retries=0))
+            try:
+                async with create_connected_server_and_client_session(server) as session:
+                    yield await load_mcp_tools(session)
+            finally:
+                if mode != "invalid_mcp":
+                    await http.aclose()
+
+        return connect
+
+    return make
+
+
+def test_http_search_detail_and_observability(connections, caplog):
+    caplog.set_level("INFO", logger="market_agent.agent")
+    model = ScriptedModel(
+        replies=[
+            tool_call("polymarket_search_markets", {"query": "Vance", "limit": 2}),
+            tool_call(call_id="call-2"),
+            AIMessage("Contract readout"),
+        ]
+    )
+    with TestClient(create_app(ChatAgent(model, connections()))) as client:
+        response = client.post("/chat", json={"query": "Explain the contract", "session_id": "a"})
+    assert response.status_code == 200
+    assert response.json() == {"response": "Contract readout"}
+    messages = model.observed[-1]
+    tools = [m for m in messages if isinstance(m, ToolMessage)]
+    assert len(tools) == 2 and all(m.status == "success" for m in tools)
+    assert json.loads(tools[-1].content)["market_id"] == "561229"
+    events = [r.safe_fields for r in caplog.records if r.message == "mcp_tool_finished"]
+    assert [e["tool"] for e in events] == ["polymarket_search_markets", "polymarket_get_market"]
+    assert "Explain the contract" not in caplog.text
+
+
+def test_no_tool_memory_and_isolation(connections, caplog):
+    def recall(messages):
+        humans = [m.content for m in messages if isinstance(m, HumanMessage)]
+        return AIMessage(humans[0] if len(humans) > 1 else "No prior context")
+
+    model = ScriptedModel(replies=[AIMessage("Understood"), recall, recall])
+    with TestClient(create_app(ChatAgent(model, connections()))) as client:
+        assert (
+            client.post(
+                "/chat", json={"query": "Remember the election", "session_id": "a"}
+            ).status_code
+            == 200
+        )
+        same = client.post("/chat", json={"query": "Which topic?", "session_id": "a"})
+        other = client.post("/chat", json={"query": "Which topic?", "session_id": "b"})
+    assert same.json()["response"] == "Remember the election"
+    assert other.json()["response"] == "No prior context"
+    assert not any(isinstance(m, ToolMessage) for turn in model.observed for m in turn)
+
+
+@pytest.mark.parametrize("mode", ["error", "invalid_mcp"])
+def test_tool_failure_is_controlled(connections, mode):
+    def explain(messages):
+        assert messages[-1].status == "error"
+        assert "sensitive diagnostic" not in messages[-1].content
+        return AIMessage("Could not verify market data")
+
+    model = ScriptedModel(replies=[tool_call(), explain])
+    with TestClient(create_app(ChatAgent(model, connections(mode)))) as client:
+        result = client.post("/chat", json={"query": "Read this market", "session_id": "a"})
+    assert result.status_code == 200
+    assert result.json()["response"] == "Could not verify market data"
+
+
+def test_connection_failure(connections):
+    model = ScriptedModel()
+    with TestClient(create_app(ChatAgent(model, connections("unavailable")))) as client:
+        result = client.post("/chat", json={"query": "Read this market", "session_id": "a"})
+    assert result.status_code == 200
+    assert "could not be connected" in result.json()["response"]
+    assert not model.observed
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"query": "x"},
+        {"query": " ", "session_id": "a"},
+        {"query": "x", "session_id": ""},
+        {"query": 1, "session_id": "a"},
+        {"query": "x", "session_id": "a", "extra": True},
+        {"query": "x" * 4001, "session_id": "a"},
+        {"query": "x", "session_id": "a/b"},
+    ],
+)
+def test_invalid_http(connections, body):
+    model = ScriptedModel()
+    with TestClient(create_app(ChatAgent(model, connections()))) as client:
+        assert client.post("/chat", json=body).status_code == 422
+    assert not model.observed
+
+
+async def test_tool_budget_and_reset(connections):
+    model = ScriptedModel(
+        replies=[
+            *[tool_call(call_id=str(i)) for i in range(4)],
+            AIMessage("Limit reached"),
+            tool_call(),
+            AIMessage("Next turn"),
+        ]
+    )
+    agent = ChatAgent(model, connections())
+    assert await agent.chat("Research", "a") == "Limit reached"
+    assert await agent.chat("Refresh", "a") == "Next turn"
+    assert len([m for m in model.observed[4] if isinstance(m, ToolMessage)]) == 4
+
+
+async def test_model_failure_and_session_recovery(connections):
+    model = ScriptedModel(replies=[RuntimeError("sensitive diagnostic"), AIMessage("Recovered")])
+    agent = ChatAgent(model, connections())
+    assert "could not finish" in await agent.chat("Hello", "a")
+    assert await agent.chat("Retry", "a") == "Recovered"

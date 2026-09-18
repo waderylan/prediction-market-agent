@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import HttpUrl, SecretStr, ValidationError
+from pydantic import Field, HttpUrl, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,10 +21,12 @@ class Settings(BaseSettings):
     )
 
     openai_api_key: SecretStr
-    tavily_api_key: SecretStr
+    tavily_api_key: SecretStr | None = None
+    openai_model: str = "gpt-5"
+    llm_timeout_seconds: float = Field(default=60, ge=1, le=180)
     openai_base_url: HttpUrl = HttpUrl("https://api.openai.com/v1")
     log_level: str = "INFO"
-    port: int = 8080
+    port: int = Field(default=8080, ge=1, le=65535)
 
 
 def _format_validation_error(error: ValidationError) -> str:

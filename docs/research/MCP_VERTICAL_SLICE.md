@@ -30,3 +30,45 @@
   checks passed. Real MCP memory-stream sessions exercise tools/list and tools/call; fixture HTTP
   is the only mocked layer. Opt-in public stdio subprocess discovery/search/detail passed (1 test).
 - No order-book evidence or architecture pivot. SDK v2 migration should wait for adapter support.
+
+## Milestone 4 — 2026-09-18
+
+- Reviewed official [graph API](https://docs.langchain.com/oss/python/langgraph/graph-api),
+  [memory](https://docs.langchain.com/oss/python/langgraph/add-memory),
+  [adapter](https://github.com/langchain-ai/langchain-mcp-adapters),
+  [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/), and
+  [GPT-5](https://developers.openai.com/api/docs/models/gpt-5) documentation.
+  Inspected installed adapter session/load_mcp_tools/result-conversion APIs, ChatOpenAI fields,
+  and HTTP-client caching. Locked LangGraph 1.2.11, adapters 0.3.2, FastAPI 0.141.1,
+  langchain-openai 1.6.2, and OpenAI SDK 3.16.1.
+- Minimal graph: model reasoning → validated MCP tool execution → model; no keyword router.
+  Enforce four tool calls, then synthesize without bound tools. InMemorySaver stores messages
+  keyed by session_id. Fixed striped locks serialize same-session requests; a semaphore caps
+  concurrent turns at four. Locks contain no conversational data.
+- Each turn launches a Polymarket subprocess and shares one initialized session for discovery
+  and all calls. Cleanup occurs in the request task, avoiding cross-task AnyIO cancel-scope
+  ownership. This costs process startup per turn but provides simple recovery on the next turn.
+- Adapter structured artifacts are validated again before model use. Tool execution, transport,
+  schema errors, and model errors become controlled messages; log only tool names/statuses and
+  exception class names. No prompts, arguments, provider bodies, or secret values are logged.
+- User-facing focus: explain a contract's price, YES settlement condition, and consequential caveat,
+  with source and retrieval time. This is contract literacy, not an unsupported forecast.
+- First real-model run exposed SDK default HTTP pools reused across application event loops
+  (2 of 4 checks failed). Explicit lifespan-owned sync/async clients fixed it; all four passed
+  on rerun, including recall/isolation, detail with citation, and two search phrasings.
+- At the user's request, local LLM verification uses a development-only headless Codex gateway:
+  gpt-5.6-sol, medium effort, stdin input, ephemeral execution, schema-constrained decisions.
+  Reviewed the user's LectureBriefLawEdition conventions and official
+  [noninteractive documentation](https://developers.openai.com/es-419/docs/non-interactive-mode).
+  No source dependency or copied project code. The gateway is excluded from Docker and deployment;
+  it does not execute MCP calls or own conversational memory. No cloud API key was available.
+- Verification: 62 offline tests passed; 2 public provider smoke checks and 1 public MCP stdio
+  smoke passed separately; 4 real Sol + public MCP checks passed. Docker built, ran as UID 10001,
+  honored PORT=9090, returned health 200 and invalid-body 422, and produced a live sourced contract
+  readout through its own Polymarket MCP process using the host Codex gateway.
+- Observed readout correctly distinguished the three-news-source agreement condition from the
+  inauguration fallback. This demonstrates useful interpretation beyond repeating a headline.
+- Limitations: production GPT-5 access/quality still needs a real-key check; memory has no eviction,
+  restart durability, or authenticated sessions. SDK v1 remains an adapter compatibility constraint.
+  A third-party Starlette/AnyIO deprecation warning remains; all checks pass despite it.
+- No architecture pivot; Tavily key validation was deferred until that subsystem exists.

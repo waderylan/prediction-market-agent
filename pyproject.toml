@@ -9,10 +9,15 @@ description = "Read-only cross-market prediction research agent"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
+  "langchain-mcp-adapters>=0.2,<1",
+  "langchain-openai>=1,<2",
+  "langgraph>=1,<2",
   "mcp>=1.26,<2",
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",
+  "uvicorn>=0.35,<1",
 ]
 
 [project.optional-dependencies]

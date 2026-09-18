@@ -351,6 +351,28 @@ Multi-server MCP client
 
 - Resolve MCP lifecycle, LangGraph state, and container-process issues before adding more servers.
 
+#### Execution Record
+
+- **Status:** Complete on 2026-09-18; all six exit criteria verified with real local-model
+  integration. Production GPT-5 API verification remains explicitly unavailable without a key.
+- **Implemented:** FastAPI chat contract, minimal LangGraph semantic tool loop, adapter-backed
+  stdio MCP session, native InMemorySaver, session synchronization, four-call budget, controlled
+  dependency errors, safe tool observability, and a non-root multi-stage Docker runtime.
+  Contract readouts emphasize settlement conditions and caveats alongside sourced prices.
+- **Verification:** 62 offline tests passed, including fixture protocol and real subprocess tests.
+  Two public provider checks and one public MCP check passed separately. Four real-model checks
+  passed using headless Sol at medium effort: no-tool recall/isolation, contract readout, and two
+  search phrasings. Docker built and ran as UID 10001, bound to 0.0.0.0:9090 via PORT, returned
+  health 200 / invalid-body 422, and executed a real MCP detail call for a sourced readout.
+- **Learned:** SDK HTTP pool caching crossed test application event loops; explicit lifespan-owned
+  clients resolved observed failures. Request-owned MCP sessions provide straightforward cleanup
+  and next-request recovery without a process supervisor.
+- **Deviations:** User requested headless Codex for local tests; added a development-only gateway
+  excluded from the deployment image. Retained the cloud-accessible GPT-5 configuration.
+  Tavily credentials became optional until the Tavily milestone. No fixed architecture changed.
+- **Recommendation:** Preserve the contract-literacy focus and two-tool pattern for Kalshi;
+  verify production GPT-5 separately before deployment. See `../research/MCP_VERTICAL_SLICE.md`.
+
 ### Milestone 5: Kalshi MCP and Platform Routing
 
 #### Work

@@ -20,9 +20,7 @@ def test_missing_required_configuration_has_clear_error(
     with pytest.raises(ConfigurationError) as caught:
         load_settings()
 
-    assert str(caught.value) == (
-        "Missing required environment variables: OPENAI_API_KEY, TAVILY_API_KEY"
-    )
+    assert str(caught.value) == "Missing required environment variables: OPENAI_API_KEY"
 
 
 @pytest.mark.unit
