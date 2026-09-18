@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cross-market-agent"
+version = "0.1.0"
+description = "Read-only cross-market prediction research agent"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.28,<1",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.10,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.17,<2",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "respx>=0.22,<1",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/market_agent"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "unit: isolated tests with no external services",
+  "integration: tests spanning local components",
+  "live_smoke: opt-in tests that call bounded public endpoints",
+]
+
+[tool.pytest-asyncio]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["market_agent"]

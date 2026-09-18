@@ -1,1 +1,40 @@
+# Local agent evidence (not part of the submitted source archive)
 AI_TRANSCRIPT.md
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Packaging and coverage output
+*.egg-info/
+build/
+dist/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Local data and generated artifacts
+*.db
+*.sqlite
+*.sqlite3
+artifacts/
+reports/
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -176,6 +176,23 @@ Multi-server MCP client
 
 - Adjust package layout or dependency tooling before application code depends on it.
 
+#### Execution Record
+
+- **Status:** Complete on 2026-09-18.
+- **Implemented:** Added a Python 3.12 `src/` package, `uv` dependency workflow and lockfile,
+  environment template, validated settings, safe JSON logging, pytest marker layout, initial
+  smoke/configuration/logging tests, comprehensive generated-file ignores, and local commands.
+- **Verification:** Recreated `.venv` with `uv`, ran `uv sync --all-extras`, then observed 4 tests
+  pass, Ruff pass, strict mypy pass, `git diff --check` pass, and ignore rules match secrets,
+  environments, caches, databases, coverage, and generated artifacts.
+- **Learned:** `uv` resolves and installs the complete development environment directly from
+  `pyproject.toml`; Pydantic settings provide clear missing-variable validation without reading or
+  logging secret values.
+- **Deviations:** Adopted `uv` and `uv.lock` for local development instead of pip requirements files
+  at Rylan Wade's request. Container dependency installation remains a later deployment decision.
+- **Recommendation:** Keep the `src/` layout and `uv` workflow; no project pivot is supported by the
+  Milestone 0 evidence.
+
 ### Milestone 1: Market API Feasibility Spike
 
 #### Work

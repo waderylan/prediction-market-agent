@@ -1,6 +1,6 @@
 # Prediction Market Research Agent
 
-This repository contains CSCI 599 Assignment 1: a tool-using agent with MCP integration, conversational memory, and a Google Cloud Run deployment. The current repository contains the assignment reference and the focused proposal; implementation is the next phase.
+This repository contains CSCI 599 Assignment 1: a tool-using agent with MCP integration, conversational memory, and a Google Cloud Run deployment. Implementation currently covers the repository foundation; market API and MCP work follows the gated implementation plan.
 
 ## Proposed Project
 
@@ -29,6 +29,35 @@ The scope excludes trading, brokerage connections, continuous monitoring, automa
 ## Development Approach
 
 This course is designed to teach practical development with AI tools, so LLM-assisted coding, debugging, and refactoring are expected parts of the project workflow. The student remains responsible for understanding the system, verifying its behavior, and explaining the implementation and design decisions.
+
+## Development Setup
+
+Python 3.12 or newer and [uv](https://docs.astral.sh/uv/) are required for local development. From the repository root:
+
+```powershell
+uv sync --all-extras
+Copy-Item .env.example .env
+```
+
+Replace only the placeholder values in the ignored `.env` file. Configuration validation reports missing required variables without printing their values.
+
+Run the local quality suite:
+
+```powershell
+uv run pytest -m "not live_smoke"
+uv run ruff check .
+uv run mypy src
+```
+
+Test markers separate isolated unit tests, local integration tests, and opt-in live checks:
+
+```powershell
+uv run pytest -m unit
+uv run pytest -m integration
+uv run pytest -m live_smoke
+```
+
+Live-smoke tests are never part of the default deterministic suite.
 
 ## Documentation
 
