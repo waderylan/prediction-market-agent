@@ -38,3 +38,29 @@ async def test_graph_with_real_stdio_process(missing):
     else:
         assert result == "Verified subprocess"
         assert model.observed[-1][-1].status == "success"
+
+
+async def test_one_server_unavailable_preserves_other(tmp_path, monkeypatch):
+    import json
+
+    from market_agent.agent import market_tools
+
+    script = Path(__file__).parents[1] / "support" / "polymarket_server.py"
+    (tmp_path / "servers.json").write_text(
+        json.dumps(
+            {
+                "polymarket": {"transport": "stdio", "command": "python", "args": [str(script)]},
+                "kalshi": {
+                    "transport": "stdio",
+                    "command": "python",
+                    "args": ["-m", "missing_mcp_test_module"],
+                },
+            }
+        )
+    )
+    monkeypatch.setattr("market_agent.agent.files", lambda _: tmp_path)
+    model = ScriptedModel(replies=[tool_call(), AIMessage("Available platform works")])
+    assert (
+        await ChatAgent(model, market_tools).chat("Read Polymarket", "a")
+        == "Available platform works"
+    )

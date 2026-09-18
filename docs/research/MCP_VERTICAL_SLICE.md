@@ -72,3 +72,25 @@
   restart durability, or authenticated sessions. SDK v1 remains an adapter compatibility constraint.
   A third-party Starlette/AnyIO deprecation warning remains; all checks pass despite it.
 - No architecture pivot; Tavily key validation was deferred until that subsystem exists.
+
+## Milestone 5 — 2026-09-18
+
+- Rechecked official Kalshi [market-data quickstart](https://docs.kalshi.com/getting_started/quick_start_market_data),
+  [events](https://docs.kalshi.com/api-reference/events/get-events), and
+  [market detail](https://docs.kalshi.com/api-reference/market/get-market) documentation.
+  Public GET access, fixed-point dollar fields, event pagination, and market tickers remain supported.
+- Added an independent Kalshi FastMCP process around KalshiClient. Shared only canonical projection
+  schemas and safe error translation with Polymarket. Each server owns its provider client's lifecycle.
+  No order book, account access, authentication subsystem, or provider-logic duplication.
+- Kalshi inputs use 1–100 character uppercase tickers, bounded query/limit, and only documented
+  event-filter states (canonical resolved maps to settled). Discovery describes its three-page
+  coverage. The ordinary client retains all pagination and local ranking logic.
+- Added a packaged two-server manifest and request-owned sessions via AsyncExitStack. Separate
+  discovery operations yield unique tool names. Partial server failure leaves the other usable.
+  Model instructions select platforms semantically and forbid silent substitution.
+- Shared results now include platform identity. The graph rejects a result whose platform or
+  detail identifier differs from the selected tool/request. This prevents accidental cross-provider
+  contamination before later matching.
+- Offline checks: 82 passed, including both servers' real protocol paths, scripted zero/one/both
+  platform paths, input/output schemas, errors, and actual subprocess partial availability.
+  Kalshi public stdio discovery/search/detail passed separately (1 test).

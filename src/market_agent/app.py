@@ -54,7 +54,7 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
                 await http_async_client.aclose()
                 http_client.close()
 
-    app = FastAPI(title="Polymarket Contract Reader", lifespan=lifespan)
+    app = FastAPI(title="Prediction Market Contract Reader", lifespan=lifespan)
 
     @app.post("/chat", response_model=ChatResponse)
     async def chat(body: ChatRequest) -> ChatResponse:

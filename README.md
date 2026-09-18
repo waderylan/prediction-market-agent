@@ -1,8 +1,8 @@
 # Prediction Market Research Agent
 
 This repository contains CSCI 599 Assignment 1: a tool-using agent with MCP integration,
-conversational memory, and a planned Google Cloud Run deployment. Through Milestone 4,
-the working **Polymarket Contract Reader** explains what a contract actually settles on,
+conversational memory, and a planned Google Cloud Run deployment. Through Milestone 5,
+the working **Prediction Market Contract Reader** explains what a contract actually settles on,
 alongside its quoted price, source, and material caveats.
 
 Try: “Read Polymarket market 561229: what makes YES win, and what rule could surprise me?”
@@ -113,6 +113,26 @@ The server uses the official [MCP Python SDK](https://github.com/modelcontextpro
 FastMCP implementation. See [implementation evidence](docs/research/MCP_VERTICAL_SLICE.md)
 for dependency compatibility, transport, lifecycle, bounds, and verification results.
 
+## Kalshi MCP and Platform Selection
+
+Start the independent server with `uv run python -m market_agent.mcp.kalshi`.
+It exposes `kalshi_search_markets(query, status="open", limit=5)` and
+`kalshi_get_market(market_id)` using a full uppercase market ticker such as
+`KXPRESPERSON-28-JVAN`. Search accepts open, closed, resolved, or null status.
+It scans at most three event pages and retrieves at most ten candidate events. Discovery is
+incomplete; a known ticker supports a direct detail lookup. No account credentials are needed.
+
+The packaged [server manifest](src/market_agent/mcp/servers.json) declares two separate stdio
+processes; runtime uses the current Python interpreter. Each turn discovers both servers,
+while the model selects which tools to invoke. A Polymarket-only request calls only Polymarket;
+a Kalshi-only request calls only Kalshi. General explanations need neither tool. One unavailable
+server does not prevent using the other. Results include platform identity to prevent mix-ups.
+
+Try: “Compare Polymarket 561229 with Kalshi KXPRESPERSON-28-JVAN. What differs in the rules?”
+This retrieves both contracts; similar headlines alone do not establish equivalence.
+Follow up with “What was the Kalshi price?” to use the remembered snapshot.
+Formal deterministic matching follows in Milestone 6.
+
 ## Run the Vertical Slice
 
 With a real `OPENAI_API_KEY` in the ignored `.env`, run `uv run python main.py`.
@@ -186,12 +206,12 @@ Cloud Run deployment remains a later milestone; there is no live deployment URL 
   then `uv run pytest tests/live/test_chat_live.py`. This makes real model and public API calls.
 - Deterministic graph tests use a scripted model and fixture HTTP; they do not measure semantic
   selection. Live checks inspect actual tool names/statuses without recording prompts or payloads.
-- One stdio subprocess per turn shares a session across that turn's calls, then closes. A later
-  request retries connection naturally. Discovery failure returns a controlled response.
+- Each available market server gets its own stdio subprocess and session per turn, then closes.
+  A later request retries connection naturally. Total discovery failure returns a controlled response.
 - Four tool calls per turn; bounded model/HTTP/MCP timeouts. The model chooses tools semantically.
 - Memory uses LangGraph InMemorySaver and lasts for one process. Run one worker/instance for
   the assignment. Memory is not durable or currently evicted; long-running public use needs limits.
-- No trading, independent forecasting, news, Kalshi MCP, contract matching, or saved forecasts yet.
+- No trading, independent forecasting, news, deterministic matching, or saved forecasts yet.
 - GPT-5 cloud access was not verified without a key. Headless Sol tests do not establish GPT-5 quality.
 
 ## Current Architecture
@@ -204,8 +224,11 @@ flowchart LR
     G <--> L[Cloud LLM / local Codex test gateway]
     G --> A[langchain-mcp-adapters]
     A -->|stdio tools/list and tools/call| P[Polymarket MCP process]
+    A -->|separate stdio session| K[Kalshi MCP process]
     P --> C[PolymarketClient]
     C --> API[Public Gamma API]
+    K --> KC[KalshiClient]
+    KC --> KA[Public Kalshi API]
 ```
 
 ```mermaid

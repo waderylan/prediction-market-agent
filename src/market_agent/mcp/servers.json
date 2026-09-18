@@ -1,0 +1,12 @@
+{
+  "polymarket": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["-m", "market_agent.mcp.polymarket"]
+  },
+  "kalshi": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["-m", "market_agent.mcp.kalshi"]
+  }
+}

@@ -59,6 +59,7 @@ def test_live_contract_readout(client, caplog):
         e["tool"] == "polymarket_get_market" and e["status"] == "success" for e in events(caplog)
     )
     assert "https://" in text
+    assert all(e["tool"].startswith("polymarket_") for e in events(caplog))
 
 
 @pytest.mark.parametrize(
@@ -76,3 +77,46 @@ def test_live_search_phrasings(client, caplog, query):
         for e in events(caplog)
     )
     assert len(events(caplog)) <= 4
+    assert all(e["tool"].startswith("polymarket_") for e in events(caplog))
+
+
+def test_live_kalshi_and_followup(client, caplog):
+    caplog.set_level("INFO", logger="market_agent.agent")
+    session = uuid4().hex
+    text = ask(
+        client, "On Kalshi, read KXPRESPERSON-28-JVAN: quote and settlement condition.", session
+    )
+    assert "https://" in text
+    activity = events(caplog)
+    assert activity and all(e["tool"].startswith("kalshi_") for e in activity)
+    assert all(e["status"] == "success" for e in activity)
+    before = len(activity)
+    text = ask(
+        client, "What was the price you just quoted? Use that snapshot, no refresh.", session
+    )
+    assert text
+    assert len(events(caplog)) == before
+
+
+def test_live_cross_platform(client, caplog):
+    caplog.set_level("INFO", logger="market_agent.agent")
+    text = ask(
+        client,
+        (
+            "Compare Polymarket 561229 with Kalshi KXPRESPERSON-28-JVAN. "
+            "Fetch both rules and prices; explain any reason their headlines may be misleading."
+        ),
+        uuid4().hex,
+    )
+    activity = events(caplog)
+    assert {e["tool"] for e in activity} == {"polymarket_get_market", "kalshi_get_market"}
+    assert all(e["status"] == "success" for e in activity)
+    assert "inaugurat" in text.lower()
+
+
+def test_live_kalshi_topic_search(client, caplog):
+    caplog.set_level("INFO", logger="market_agent.agent")
+    ask(client, "Find a couple of Kalshi contracts about presidential elections.", uuid4().hex)
+    assert events(caplog)
+    assert all(e["tool"].startswith("kalshi_") for e in events(caplog))
+    assert any(e["tool"] == "kalshi_search_markets" for e in events(caplog))

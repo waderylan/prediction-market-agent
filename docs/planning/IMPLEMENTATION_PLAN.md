@@ -404,6 +404,25 @@ Multi-server MCP client
 - Improve tool descriptions, system instructions, or graph routing if the LLM repeatedly selects the wrong platform.
 - Do not replace semantic selection with hard-coded keyword routing solely to make tests pass.
 
+#### Execution Record
+
+- **Status:** Complete on 2026-09-18; independent discovery, both servers, single-platform,
+  cross-platform, and no-tool paths verified.
+- **Implemented:** Separate Kalshi stdio MCP with search/detail tools over KalshiClient; shared
+  bounded canonical output and safe errors; packaged server manifest; partial server availability;
+  model-driven platform selection; platform/identifier validation of returned data.
+- **Verification:** 82 deterministic tests passed. Kalshi and Polymarket public MCP checks each
+  passed separately. Real Sol medium integration exercised seven cases spanning no-tool memory,
+  Polymarket-only searches/detail, Kalshi-only search/detail and snapshot follow-up, and both-server
+  rule comparison. Ruff lint/format, strict mypy, and diff checks passed.
+- **Learned:** Kalshi's bounded catalog search must expose incomplete coverage; direct market
+  tickers are reliable for follow-up retrieval. Separate discovery and unique tool names support
+  semantic selection without keyword routing, and one missing process need not disable the other.
+- **Deviations:** Extracted shared projection/error code rather than duplicating the first server.
+  Added explicit platform identity to results and a packaged manifest. No fixed decisions changed.
+- **Recommendation:** Keep both independently owned processes and require a deterministic
+  comparison report before treating similar headlines as equivalent in Milestone 6.
+
 ### Milestone 6: Deterministic Contract Matching
 
 #### Work
