@@ -204,6 +204,36 @@ Set `CODEX_EXECUTABLE` if the CLI cannot be located. Stop both processes with Ct
 Clear those environment overrides before testing the real cloud API. CLI usage limits still apply.
 This is a local test backend, not a production API replacement or proof of GPT-5 behavior.
 
+### Local chat interface
+
+Run the browser interface with one command:
+
+```powershell
+uv run python scripts/run_chat_ui.py
+```
+
+This opens **Market Lens** at `http://127.0.0.1:3000`. The local runner starts the existing
+headless Codex gateway with `gpt-5.6-sol` at medium effort, starts the FastAPI backend, and serves
+a same-origin HTML client. The application still owns LangGraph memory and real MCP
+discovery/invocation. Ctrl+C stops all three local processes.
+
+The interface generates a private local session ID, keeps it for the browser tab, supports
+context-dependent follow-ups, and can start a fresh conversation without restarting the API.
+The right-side run trace reports each actual MCP tool call with its safe arguments, outcome,
+duration, and a bounded result summary. It explicitly reports when the model answers without a
+tool. Raw provider payloads, full prompts, and secrets are not returned. The ordinary assignment
+endpoint remains `POST /chat`; the local inspection UI uses `POST /chat/inspect` with the same
+request body and an additional `activity` array in its response.
+
+Example prompts use natural market questions while covering a cross-platform contract check, a
+search-and-detail chain, and a reasonable no-tool request. Use `--no-browser` to suppress automatic
+browser launch or `--port 3001` to move the interface when port 3000 is occupied.
+
+The model controls apply to the next message and can be changed without losing the conversation.
+Available local models are Sol, Terra, and Luna (`gpt-5.6-sol`, `gpt-5.6-terra`, and
+`gpt-5.6-luna`), with low, medium, high, or extra-high reasoning effort. The API validates both
+fields before any model or MCP call; clients that omit them retain the configured backend defaults.
+
 ### Container
 
 ```powershell

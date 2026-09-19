@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Inspect prediction-market research and its MCP tool calls." />
+    <title>Market Lens</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Market Lens home">
+          <span class="brand-mark" aria-hidden="true">ML</span>
+          <span>Market Lens</span>
+        </a>
+        <div class="topbar-actions">
+          <div class="connection" id="connection" role="status" aria-live="polite">
+            <span class="connection-dot" aria-hidden="true"></span>
+            <span id="connection-label">Connecting</span>
+          </div>
+          <button class="secondary-button" id="new-session" type="button">New conversation</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="control-rail" aria-label="Research controls">
+          <section class="control-section session-section">
+            <h2>Session</h2>
+            <code id="session-id"></code>
+            <p>Memory stays with this session until you start a new conversation.</p>
+          </section>
+
+          <section class="control-section">
+            <h2>Runtime</h2>
+            <div class="field-grid">
+              <label for="model">Model</label>
+              <select id="model" name="model">
+                <option value="sol">Sol</option>
+                <option value="terra">Terra</option>
+                <option value="luna">Luna</option>
+              </select>
+              <label for="reasoning-effort">Reasoning</label>
+              <select id="reasoning-effort" name="reasoning_effort">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra high</option>
+              </select>
+            </div>
+          </section>
+
+          <section class="control-section example-section">
+            <h2>Questions to try</h2>
+            <button class="example-prompt" type="button" data-prompt="Polymarket 561229 and Kalshi KXPRESPERSON-28-JVAN both look like bets on JD Vance winning in 2028. Are they actually the same bet, or could they settle differently?">
+              Could these settle differently?
+            </button>
+            <button class="example-prompt" type="button" data-prompt="I'm thinking about the open Polymarket Bitcoin markets. Find the most relevant ones and tell me which contract has the easiest settlement rule to misunderstand.">
+              Which Bitcoin contract is misleading?
+            </button>
+            <button class="example-prompt" type="button" data-prompt="If a market is priced at 21 cents, does that mean there is exactly a 21% chance the event happens?">
+              What does a 21 cent price mean?
+            </button>
+          </section>
+
+          <p class="data-note">Public market data only. No trading or account access.</p>
+        </aside>
+
+        <section class="chat-panel" aria-labelledby="chat-title">
+          <header class="panel-header">
+            <div>
+              <h1 id="chat-title">Market research</h1>
+              <p>Ask about prices, settlement rules, or whether two contracts match.</p>
+            </div>
+          </header>
+
+          <div class="messages" id="messages" aria-live="polite" aria-label="Conversation">
+            <div class="empty-state" id="empty-state">
+              <h2>Start with a market ID, ticker, or topic.</h2>
+              <p>The trace panel will show each MCP call and what came back.</p>
+            </div>
+          </div>
+
+          <form class="composer" id="composer">
+            <label for="query">Research question</label>
+            <textarea
+              id="query"
+              name="query"
+              maxlength="4000"
+              rows="3"
+              placeholder="What exactly makes YES win?"
+              required
+            ></textarea>
+            <div class="composer-footer">
+              <span><output id="character-count">0</output> / 4000</span>
+              <span class="key-hint">Enter to send, Shift + Enter for a new line</span>
+              <button class="primary-button" id="send" type="submit">Send</button>
+            </div>
+          </form>
+        </section>
+
+        <aside class="trace-panel" aria-labelledby="trace-title">
+          <header class="panel-header trace-header">
+            <div>
+              <h2 id="trace-title">Run trace</h2>
+              <p id="trace-subtitle">No request yet</p>
+            </div>
+            <span class="trace-state" id="trace-state">Idle</span>
+          </header>
+          <div class="trace-content" id="trace-content" aria-live="polite">
+            <div class="trace-empty">
+              <h3>No tool activity</h3>
+              <p>Send a question to inspect model choice and MCP calls.</p>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+  </body>
+</html>
