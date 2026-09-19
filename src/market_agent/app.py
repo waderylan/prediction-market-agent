@@ -2,13 +2,14 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI
 from langchain_openai import ChatOpenAI
 from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 from pydantic import BaseModel, ConfigDict, Field
 
-from market_agent.agent import ChatAgent
+from market_agent.agent import ChatAgent, ToolActivity
 from market_agent.config import load_settings
 from market_agent.logging import configure_logging
 
@@ -17,10 +18,16 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=True)
     query: str = Field(min_length=1, max_length=4000)
     session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    model: Literal["sol", "terra", "luna"] | None = None
+    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
 
 
 class ChatResponse(BaseModel):
     response: str
+
+
+class ChatInspectionResponse(ChatResponse):
+    activity: list[ToolActivity]
 
 
 def create_app(agent: ChatAgent | None = None) -> FastAPI:
@@ -58,8 +65,25 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
 
     @app.post("/chat", response_model=ChatResponse)
     async def chat(body: ChatRequest) -> ChatResponse:
-        response = await app.state.agent.chat(body.query, body.session_id)
+        model_name = f"gpt-5.6-{body.model}" if body.model else None
+        response = await app.state.agent.chat(
+            body.query,
+            body.session_id,
+            model_name=model_name,
+            reasoning_effort=body.reasoning_effort,
+        )
         return ChatResponse(response=response)
+
+    @app.post("/chat/inspect", response_model=ChatInspectionResponse)
+    async def chat_inspect(body: ChatRequest) -> ChatInspectionResponse:
+        model_name = f"gpt-5.6-{body.model}" if body.model else None
+        turn = await app.state.agent.chat_detailed(
+            body.query,
+            body.session_id,
+            model_name=model_name,
+            reasoning_effort=body.reasoning_effort,
+        )
+        return ChatInspectionResponse(response=turn.response, activity=turn.activity)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

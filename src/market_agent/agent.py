@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import sys
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from datetime import timedelta
@@ -18,6 +19,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
+from pydantic import BaseModel, ConfigDict, Field
 
 from market_agent.domain import CanonicalMarket, Platform
 from market_agent.domain.matching import MatchingReport, comparison_notice, match_candidates
@@ -86,6 +88,47 @@ class AgentState(MessagesState):
     calls: int
     details: list[dict[str, Any]]
     matching_report: dict[str, Any] | None
+    activity: list[dict[str, Any]]
+
+
+class ToolActivity(BaseModel):
+    """Safe, bounded observation of one attempted MCP tool call."""
+
+    model_config = ConfigDict(extra="forbid")
+    tool: str = Field(min_length=1, max_length=100)
+    server: str = Field(min_length=1, max_length=30)
+    status: str = Field(pattern=r"^(success|error|skipped)$")
+    arguments: dict[str, str | int | None]
+    summary: str = Field(min_length=1, max_length=500)
+    duration_ms: int = Field(ge=0)
+
+
+class ChatTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    response: str
+    activity: list[ToolActivity] = Field(max_length=MAX_TOOL_CALLS)
+
+
+def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | None]:
+    allowed = {"market_id", "query", "status", "limit"}
+    return {
+        key: value
+        for key, value in arguments.items()
+        if key in allowed and (isinstance(value, (str, int)) or value is None)
+    }
+
+
+def _tool_summary(validated: SearchResults | MarketDetail) -> str:
+    if isinstance(validated, SearchResults):
+        count = len(validated.markets)
+        if not validated.markets:
+            return "No candidates returned in the bounded search page."
+        identifiers = ", ".join(market.market_id for market in validated.markets[:3])
+        suffix = "" if count <= 3 else f" and {count - 3} more"
+        return f"Returned {count} candidate(s): {identifiers}{suffix}."
+    price = str(validated.yes_price) if validated.yes_price is not None else "unavailable"
+    rules = "truncated rules" if validated.rules_truncated else "rules included"
+    return f"Retrieved {validated.platform.value} {validated.market_id}; YES {price}; {rules}."
 
 
 class ChatAgent:
@@ -104,11 +147,27 @@ class ChatAgent:
         self._locks = [asyncio.Lock() for _ in range(32)]
         self._capacity = asyncio.Semaphore(4)
 
-    def _graph(self, tools: list[BaseTool]) -> Any:
+    def _graph(
+        self,
+        tools: list[BaseTool],
+        *,
+        model_name: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> Any:
         by_name = {tool.name: tool for tool in tools}
         bound_model = (
             self.model.bind_tools(tools, parallel_tool_calls=False) if tools else self.model
         )
+        model_options = {
+            key: value
+            for key, value in {
+                "model": model_name,
+                "reasoning_effort": reasoning_effort,
+            }.items()
+            if value is not None
+        }
+        bound_model = bound_model.bind(**model_options)
+        final_model = self.model.bind(**model_options)
 
         async def reason(state: AgentState) -> dict[str, Any]:
             try:
@@ -140,12 +199,18 @@ class ChatAgent:
             used = state["calls"]
             details = list(state["details"])
             matching_report = state["matching_report"]
+            activity = list(state["activity"])
             for call in message.tool_calls:
                 name = call["name"]
+                started = time.perf_counter()
                 content = "Tool budget reached. Answer with available evidence."
                 status = "error"
+                activity_status = "skipped"
+                summary = "Tool budget reached before this call could run."
                 if used < MAX_TOOL_CALLS:
                     used += 1
+                    activity_status = "error"
+                    summary = "The market tool failed or returned invalid data."
                     try:
                         tool = by_name[name]
                         log_event(logger, "mcp_tool_started", tool=name)
@@ -176,6 +241,7 @@ class ChatAgent:
                             ].get("market_id"):
                                 raise ValueError("Market identifier mismatch")
                             content = validated.model_dump_json()
+                            summary = _tool_summary(validated)
                             if isinstance(validated, MarketDetail):
                                 snapshot = validated.model_dump(mode="json")
                                 details = [
@@ -209,7 +275,12 @@ class ChatAgent:
                                         "matching_completed",
                                         verdicts=[p.verdict for p in report.pairs],
                                     )
+                                    verdicts = ", ".join(
+                                        sorted({pair.verdict for pair in report.pairs})
+                                    )
+                                    summary += f" Contract check: {verdicts}."
                             status = "success"
+                            activity_status = "success"
                     except Exception:
                         content = (
                             "Market connection or response failed validation. "
@@ -221,19 +292,31 @@ class ChatAgent:
                         tool=name if name in by_name else "unknown",
                         status=status,
                     )
+                server = name.split("_", 1)[0] if "_" in name else "unknown"
+                activity.append(
+                    ToolActivity(
+                        tool=name[:100] or "unknown",
+                        server=server[:30],
+                        status=activity_status,
+                        arguments=_safe_tool_arguments(call.get("args", {})),
+                        summary=summary,
+                        duration_ms=max(0, round((time.perf_counter() - started) * 1000)),
+                    ).model_dump()
+                )
                 results.append(ToolMessage(content, tool_call_id=call["id"], status=status))
             return {
                 "messages": results,
                 "calls": used,
                 "details": details,
                 "matching_report": matching_report,
+                "activity": activity,
             }
 
         async def finish(state: AgentState) -> dict[str, Any]:
             # A final synthesis without bound tools prevents an endless model/tool cycle.
             try:
                 async with asyncio.timeout(self.model_timeout):
-                    result = await self.model.ainvoke(
+                    result = await final_model.ainvoke(
                         [
                             SystemMessage(
                                 SYSTEM_PROMPT
@@ -272,18 +355,30 @@ class ChatAgent:
         graph.add_edge("finish", END)
         return graph.compile(checkpointer=self.memory)
 
-    async def chat(self, query: str, session_id: str) -> str:
+    async def chat_detailed(
+        self,
+        query: str,
+        session_id: str,
+        *,
+        model_name: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> ChatTurn:
         stripe = int.from_bytes(hashlib.sha256(session_id.encode()).digest()[:2]) % len(self._locks)
         async with self._locks[stripe], self._capacity:
             try:
                 async with self.connect() as tools:
-                    graph = self._graph(tools)
+                    graph = self._graph(
+                        tools,
+                        model_name=model_name,
+                        reasoning_effort=reasoning_effort,
+                    )
                     result = await graph.ainvoke(
                         {
                             "messages": [HumanMessage(query)],
                             "calls": 0,
                             "details": [],
                             "matching_report": None,
+                            "activity": [],
                         },
                         {"configurable": {"thread_id": session_id}, "recursion_limit": 12},
                     )
@@ -293,10 +388,29 @@ class ChatAgent:
                             MatchingReport.model_validate(result["matching_report"])
                         )
                         answer = notice + "\n\n" + answer
-                    return answer
+                    return ChatTurn(response=answer, activity=result["activity"])
             except Exception:
                 log_event(logger, "chat_dependency_unavailable")
-                return (
-                    "Market servers could not be connected. Please retry; "
-                    "no fresh market data was verified."
+                return ChatTurn(
+                    response=(
+                        "Market servers could not be connected. Please retry; "
+                        "no fresh market data was verified."
+                    ),
+                    activity=[],
                 )
+
+    async def chat(
+        self,
+        query: str,
+        session_id: str,
+        *,
+        model_name: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        turn = await self.chat_detailed(
+            query,
+            session_id,
+            model_name=model_name,
+            reasoning_effort=reasoning_effort,
+        )
+        return turn.response

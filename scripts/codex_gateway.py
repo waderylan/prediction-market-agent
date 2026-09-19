@@ -18,8 +18,10 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
-MODEL = "gpt-5.6-sol"
-EFFORT = "medium"
+MODELS = {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+EFFORTS = {"low", "medium", "high", "xhigh"}
+DEFAULT_MODEL = "gpt-5.6-sol"
+DEFAULT_EFFORT = "medium"
 app = FastAPI(title="Local Codex test gateway")
 capacity = asyncio.Semaphore(1)
 
@@ -46,7 +48,7 @@ def executable() -> str:
     return found
 
 
-async def decide(messages: list, tools: list) -> Decision:
+async def decide(messages: list, tools: list, model: str, effort: str) -> Decision:
     # New implementation; the user's LectureBriefLawEdition was inspected for operational
     # conventions (stdin, ephemeral calls), not copied or used as a source dependency.
     with tempfile.TemporaryDirectory(prefix="market-codex-") as directory:
@@ -72,9 +74,9 @@ async def decide(messages: list, tools: list) -> Decision:
             "--sandbox",
             "read-only",
             "--model",
-            MODEL,
+            model,
             "--config",
-            f'model_reasoning_effort="{EFFORT}"',
+            f'model_reasoning_effort="{effort}"',
             "--config",
             "features.shell_tool=false",
             "--color",
@@ -114,9 +116,21 @@ async def completion(request: Request) -> dict:
     body = await request.json()
     if body.get("stream"):
         raise HTTPException(400, "Streaming is not supported by this local test gateway")
+    requested_model = body.get("model", DEFAULT_MODEL)
+    if requested_model == "gpt-5":
+        # The unchanged application default historically maps to the fixed local Sol/medium route.
+        model = DEFAULT_MODEL
+        effort = DEFAULT_EFFORT
+    else:
+        model = requested_model
+        effort = body.get("reasoning_effort", DEFAULT_EFFORT)
+    if model not in MODELS:
+        raise HTTPException(400, "Unsupported local Codex model")
+    if effort not in EFFORTS:
+        raise HTTPException(400, "Unsupported local reasoning effort")
     async with capacity:
         try:
-            decision = await decide(body["messages"], body.get("tools", []))
+            decision = await decide(body["messages"], body.get("tools", []), model, effort)
         except Exception:
             raise HTTPException(502, "Headless Codex test backend failed") from None
     message = {"role": "assistant", "content": decision.content}
@@ -134,7 +148,7 @@ async def completion(request: Request) -> dict:
         "id": "chatcmpl-" + uuid4().hex,
         "object": "chat.completion",
         "created": int(time.time()),
-        "model": MODEL,
+        "model": model,
         "choices": [{"index": 0, "message": message, "finish_reason": reason}],
     }
 

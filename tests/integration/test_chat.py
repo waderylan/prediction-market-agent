@@ -25,6 +25,7 @@ class ScriptedModel(BaseChatModel):
 
     replies: list = Field(default_factory=list)
     observed: list = Field(default_factory=list)
+    observed_options: list = Field(default_factory=list)
 
     @property
     def _llm_type(self):
@@ -35,6 +36,7 @@ class ScriptedModel(BaseChatModel):
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         self.observed.append(messages)
+        self.observed_options.append(kwargs)
         item = self.replies.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -139,6 +141,63 @@ def test_no_tool_memory_and_isolation(connections, caplog):
     assert not any(isinstance(m, ToolMessage) for turn in model.observed for m in turn)
 
 
+def test_http_selects_allowlisted_model_and_effort(connections):
+    model = ScriptedModel(replies=[AIMessage("Selected")])
+    body = {
+        "query": "Explain this",
+        "session_id": "model-choice",
+        "model": "terra",
+        "reasoning_effort": "high",
+    }
+    with TestClient(create_app(ChatAgent(model, connections()))) as client:
+        response = client.post("/chat", json=body)
+    assert response.status_code == 200
+    assert model.observed_options == [{"model": "gpt-5.6-terra", "reasoning_effort": "high"}]
+
+
+def test_inspection_endpoint_returns_bounded_tool_activity(connections):
+    model = ScriptedModel(replies=[tool_call(), AIMessage("Contract readout")])
+    with TestClient(create_app(ChatAgent(model, connections()))) as client:
+        response = client.post(
+            "/chat/inspect",
+            json={"query": "Read market 561229", "session_id": "trace"},
+        )
+    assert response.status_code == 200
+    assert response.json()["response"] == "Contract readout"
+    assert response.json()["activity"] == [
+        {
+            "tool": "polymarket_get_market",
+            "server": "polymarket",
+            "status": "success",
+            "arguments": {"market_id": "561229"},
+            "summary": "Retrieved polymarket 561229; YES 0.2105; rules included.",
+            "duration_ms": response.json()["activity"][0]["duration_ms"],
+        }
+    ]
+    assert response.json()["activity"][0]["duration_ms"] >= 0
+
+
+def test_inspection_endpoint_distinguishes_no_tool_and_failure(connections):
+    no_tool = ScriptedModel(replies=[AIMessage("General answer")])
+    with TestClient(create_app(ChatAgent(no_tool, connections()))) as client:
+        response = client.post(
+            "/chat/inspect",
+            json={"query": "Explain probability", "session_id": "no-tool"},
+        )
+    assert response.json() == {"response": "General answer", "activity": []}
+
+    failed = ScriptedModel(replies=[tool_call(), AIMessage("Could not verify")])
+    with TestClient(create_app(ChatAgent(failed, connections("error")))) as client:
+        response = client.post(
+            "/chat/inspect",
+            json={"query": "Read market", "session_id": "failed-tool"},
+        )
+    activity = response.json()["activity"]
+    assert activity[0]["status"] == "error"
+    assert activity[0]["summary"] == "The market tool failed or returned invalid data."
+    assert "sensitive diagnostic" not in response.text
+
+
 @pytest.mark.parametrize("mode", ["error", "invalid_mcp"])
 def test_tool_failure_is_controlled(connections, mode):
     def explain(messages):
@@ -173,6 +232,8 @@ def test_connection_failure(connections):
         {"query": "x", "session_id": "a", "extra": True},
         {"query": "x" * 4001, "session_id": "a"},
         {"query": "x", "session_id": "a/b"},
+        {"query": "x", "session_id": "a", "model": "astra"},
+        {"query": "x", "session_id": "a", "reasoning_effort": "ultra"},
     ],
 )
 def test_invalid_http(connections, body):
