@@ -26,7 +26,7 @@
 | 8. Jev sports-contract equivalence | Planned |
 | 9. Bounded sports evidence research | Planned |
 | 10. Complete sports agent and forecast output | Planned |
-| 11. Unified multi-MCP sports intelligence brief | Planned |
+| 11. Unified multi-MCP sports intelligence brief | Tentative idea; optional and not required |
 | 12. Optional sports-research ledger | Optional |
 | 13. Failure handling and verification | In progress across implemented layers |
 | 14. Cloud Run and submission | Required |
@@ -896,7 +896,12 @@ Multi-server MCP client
 - Simplify output sections or graph branching if latency becomes excessive.
 - Preserve tool selection, memory, and MCP correctness before optional forecast detail.
 
-### Milestone 11: Unified Multi-MCP Sports Intelligence Brief
+### Milestone 11: Tentative Unified Multi-MCP Sports Intelligence Brief
+
+This milestone is an optional product idea, not committed assignment scope, a release requirement,
+or part of the completion definition. Do not prioritize it ahead of required implementation,
+verification, deployment, documentation, or submission work. Begin it only after an explicit
+decision to adopt the idea.
 
 #### Work
 
