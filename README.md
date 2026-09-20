@@ -1,344 +1,249 @@
-# Prediction Market Research Agent
+# Sports Prediction-Market Research
 
-This repository contains CSCI 599 Assignment 1: a tool-using agent with MCP integration,
-conversational memory, and a planned Google Cloud Run deployment. Through Milestone 6,
-the working **Prediction Market Contract Reader** explains what a contract actually settles on,
-alongside its quoted price, source, and material caveats.
+A read-only CSCI 599 course project for sports prediction-market research on Kalshi and
+Polymarket. Initial support covers MLB, NFL, and NCAA Division I football game winners.
+The two MCP servers turn team names into
+provider-backed candidates with explicit event identity, labeled prices, schedules, rules,
+and discovery coverage. They never place orders or access accounts.
 
-Try: “Read Polymarket market 561229: what makes YES win, and what rule could surprise me?”
-Then: “Which organizations did those rules name?” using the same session ID.
-Search by topic when you do not know an ID. The agent can discover candidates, fetch their
-rules, and explain them through one conversational endpoint.
+Start with `kalshi_search_markets(query="Yankees")` or
+`polymarket_search_markets(query="Chiefs vs Bills")`. No exchange taxonomy or constructed
+ticker is required. For college football, use a school name and `league="ncaa_football"`.
+Shared cities and ambiguous abbreviations produce clarification choices.
 
-## Proposed Project
+## What is implemented
 
-The project is a read-only research agent for binary events listed on both Polymarket and Kalshi. It will find comparable contracts, verify that their resolution rules describe the same outcome, inspect a bounded set of related contracts and current news, and return a concise probability assessment that the user may save for later evaluation.
+| Capability | Current behavior |
+|---|---|
+| Two independent MCP servers | Kalshi and Polymarket, public GET requests, real stdio discovery and calls |
+| Sports discovery | MLB, NFL, NCAA Division I FBS/FCS; full-game winners only |
+| Team identity | Exact aliases from a reviewed provider catalog; same-city teams stay distinct |
+| Candidate selection | Both requested opponents must match; separate event IDs preserve doubleheaders |
+| Prices | Outcome labels and decimal prices; snapshots, last trades, and derived complements stay distinct |
+| Coverage | Actual pages/events/contracts scanned, truncation, continuation evidence, and scoped totals |
+| Contract detail | Rules, separate timing fields, API provenance, available human-facing links |
+| Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
+| Comparison boundary | Deterministic contract checks run before synthesis; sports equivalence is not implemented |
 
-The proposed workflow is:
+Sports-specific matching, agent prompt refinement, external evidence research, forecasting,
+a saved-forecast ledger, and Cloud Run deployment are **future work**. The current agent accepts
+the sports MCP result schemas, but its comparison engine does not establish equivalence
+between named-team sports contracts.
 
-1. Search Polymarket and Kalshi for a primary contract pair and up to three related contracts per platform.
-2. Normalize dates, thresholds, and outcome direction in code.
-3. Use Jev for the narrow decision of whether the primary contracts are equivalent.
-4. Gather current evidence with a fixed Tavily search budget.
-5. Use GPT-5 to synthesize the evidence and return `YES`, `NO`, or `NO POSITION`.
-6. Save a forecast through the SQLite ledger only when requested.
+The product can expand to additional sports and contract types, including spreads, totals,
+props, and futures. These require verified provider mappings, typed models, settlement
+checks, and tests; they are not enabled by adding team aliases. See the
+[implementation plan](docs/planning/IMPLEMENTATION_PLAN.md) for acceptance criteria.
 
-## Proposed Architecture
+Read [Sports MCP design](docs/research/SPORTS_MCP.md) for the complete server contract,
+catalog maintenance procedure, algorithms, and request budgets.
 
-- LangGraph agent with a FastAPI `POST /chat` endpoint.
-- LangGraph checkpointer keyed by `session_id` for conversational memory.
-- Polymarket, Kalshi, Tavily, and SQLite MCP servers.
-- OpenAI GPT-5 for tool selection and evidence synthesis.
-- Jev through Vercel AI Gateway for contract-equivalence classification.
-- Docker deployment to Google Cloud Run.
+## Setup and run
 
-The scope excludes trading, brokerage connections, continuous monitoring, automated settlement, dashboards, and custom price-prediction models.
-
-## Development Approach
-
-This course is designed to teach practical development with AI tools, so LLM-assisted coding, debugging, and refactoring are expected parts of the project workflow. The student remains responsible for understanding the system, verifying its behavior, and explaining the implementation and design decisions.
-
-## Development Setup
-
-Python 3.12 or newer and [uv](https://docs.astral.sh/uv/) are required for local development. From the repository root:
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```powershell
 uv sync --all-extras
 Copy-Item .env.example .env
 ```
 
-Replace only the placeholder values in the ignored `.env` file. Configuration validation reports missing required variables without printing their values.
-
-Run the local quality suite:
+Keep credentials in the ignored `.env`. The MCP servers need no exchange or LLM credentials:
 
 ```powershell
-uv run pytest -m "not live_smoke"
-uv run ruff check .
-uv run mypy src
+uv run python -m market_agent.mcp.kalshi
+uv run python -m market_agent.mcp.polymarket
 ```
 
-Test markers separate isolated unit tests, local integration tests, and opt-in live checks:
+These commands speak MCP on stdin/stdout; use an MCP client rather than an HTTP browser.
+The packaged [server manifest](src/market_agent/mcp/servers.json) configures both processes
+for the agent.
+
+For the conversational application, configure `OPENAI_API_KEY` and run:
 
 ```powershell
-uv run pytest -m unit
-uv run pytest -m integration
-uv run pytest -m live_smoke
+uv run python main.py
 ```
 
-Live-smoke tests are never part of the default deterministic suite.
+The application binds to `0.0.0.0:$PORT` (default 8080). Its assignment endpoint is:
 
-## Market Data Layer
+```text
+POST /chat
+{"query": "Find Kalshi Yankees game-winner markets", "session_id": "sports-1"}
 
-Milestone 2 provides typed, asynchronous, read-only clients without MCP wrappers:
-
-```python
-from market_agent.providers import KalshiClient, PolymarketClient
-
-async with PolymarketClient() as polymarket:
-    candidates = await polymarket.search_markets("2028 presidential election", limit=5)
-
-async with KalshiClient() as kalshi:
-    market = await kalshi.get_market("KXPRESPERSON-28-JVAN")
+Response:
+{"response": "..."}
 ```
 
-Both clients return the shared `CanonicalMarket` type and raise typed errors for transport, HTTP,
-validation, and missing-data failures. Normal tests use saved fixtures. Run the bounded public API
-checks only when intended:
+Reuse a session ID for follow-ups; use a new, unguessable ID for a new conversation.
+IDs are not authentication. LangGraph memory lasts for the process lifetime.
+Interactive HTTP documentation is at `/docs`.
 
-```powershell
-$env:RUN_LIVE_SMOKE = "1"
-uv run pytest -m live_smoke
-Remove-Item Env:RUN_LIVE_SMOKE
-```
+## Tool reference
 
-The provider findings, endpoint choices, limitations, and fixture policy are documented in
-[Market API feasibility](docs/research/MARKET_API_FEASIBILITY.md).
-
-## Polymarket MCP
-
-Start the student-authored server with `uv run python -m market_agent.mcp.polymarket`.
-It speaks MCP over stdio; it is intended to be launched by an MCP client, not called as an HTTP API.
-It needs no exchange or LLM credentials. Only public read-only Gamma endpoints are used.
-
-- `polymarket_search_markets(query, status="open", limit=5)`: at most 10 candidate summaries.
-- `polymarket_get_market(market_id)`: current prices and bounded resolution rules for a numeric ID.
-- Prices are decimal strings, missing fields are null, and truncated rules are explicitly labeled.
-- Search covers at most three pages, stops at the requested unique-result limit, and ranks
-  matching contract questions ahead of sibling markets within each page. Open searches filter
-  events upstream; duplicate contracts/pages do not consume the result budget.
-- Empty results are not proof of market absence. Historical searches request all event states.
-- Resolved status requires explicit Gamma resolution metadata; zero/one prices are insufficient.
-  YES bid/ask remain null for team-named or reversed outcomes to avoid mislabeling quotes.
-
-The [Gamma search API](https://docs.polymarket.com/api-reference/search/search-markets-events-and-profiles)
-supports pagination and filters. The reduced `optimized` response is deliberately disabled:
-live inspection found it omits numeric Gamma IDs and `acceptingOrders`, which this contract needs.
-
-Protocol tests: `uv run pytest tests/integration/test_polymarket_mcp.py`.
-Public subprocess check: set `RUN_LIVE_SMOKE=1`, then run
-`uv run pytest tests/live/test_polymarket_mcp_live.py`.
-
-The server uses the official [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
-FastMCP implementation. See [implementation evidence](docs/research/MCP_VERTICAL_SLICE.md)
-for dependency compatibility, transport, lifecycle, bounds, and verification results.
-
-## Kalshi MCP and Platform Selection
-
-Start the independent server with `uv run python -m market_agent.mcp.kalshi`.
-First call `kalshi_search_series(query, category=None, tags=None, limit=5)` with an event type
-such as `professional baseball game`. Pass a returned ticker into
-`kalshi_search_markets(query, status="open", limit=5, series_ticker=None)` with a short matchup
-such as `Miami Padres`. Series category filters are exact and case-sensitive (e.g. `Sports`).
-The server normalizes Padres/Marlins to San Diego/Miami, retains the original query in results,
-and requires multi-token coverage to reject unrelated matches such as Miami Vice.
-Use `kalshi_get_market(market_id)` with an exact market ticker returned by discovery or supplied
-by the user. Never construct tickers: game IDs can contain required time segments.
-
-Search accepts open, closed, resolved, or null status. It scans at most three event pages and
-expands at most ten candidate events. Series filtering happens upstream, and nested markets
-avoid separate event-detail requests on filtered searches. Pagination cycles and duplicate
-events/markets are bounded. Discovery remains incomplete; empty results do not prove absence,
-and older historical markets may be omitted. No account credentials are needed.
-API contracts: [Get Series List](https://docs.kalshi.com/api-reference/market/get-series-list)
-and [Get Events](https://docs.kalshi.com/api-reference/events/get-events).
-
-The packaged [server manifest](src/market_agent/mcp/servers.json) declares two separate stdio
-processes; runtime uses the current Python interpreter. Each turn discovers both servers,
-while the model selects which tools to invoke. A Polymarket-only request calls only Polymarket;
-a Kalshi-only request calls only Kalshi. General explanations need neither tool. One unavailable
-server does not prevent using the other. Results include platform identity to prevent mix-ups.
-
-Try: “Compare Polymarket 561229 with Kalshi KXPRESPERSON-28-JVAN. What differs in the rules?”
-This retrieves both contracts; similar headlines alone do not establish equivalence.
-Follow up with “What was the Kalshi price?” to use the remembered snapshot.
-The deterministic contract check runs before the model interprets a pair.
-
-## The Contract Check
-
-“Are these really the same bet?” is the central question. After retrieving both contracts,
-the application compares their supplied terms in Python and displays its verdict independently
-of the model's explanation:
-
-| Result | Meaning |
+| Tool | Inputs |
 |---|---|
-| Equivalent supplied terms | Strict agreement in the supplied rules and required metadata; unseen external terms remain unverified. |
-| Not equivalent | An explicit condition differs. Prices describe separate contracts. |
-| Equivalence unverified | Missing or unparsed terms require semantic review before an equivalent-price comparison. |
+| `kalshi_search_markets` | `query`, `status="open"`, `limit=5`, optional `league`, `event_date`, `series_ticker` |
+| `kalshi_search_series` | `query`, optional exact `category` and `tags`, `limit=5` |
+| `kalshi_get_market` | Exact returned uppercase `market_id` |
+| `polymarket_search_markets` | `query`, `status="open"`, `limit=5`, optional `league`, `event_date` |
+| `polymarket_get_market` | Exact returned numeric Gamma `market_id` |
 
-The report checks event identity, binary outcomes, polarity, thresholds, units, inclusivity,
-event timestamps, timing conditions, settlement triggers, authority, cancellation, exclusions,
-full rules, trading close, and resolution schedule. It considers at most three candidates per
-platform and nine pairs. Related contracts remain labeled as context.
+- Limits are strict integers from 1 through 10 in the client-visible MCP schema.
+- League values are `mlb`, `nfl`, and `ncaa_football`.
+- `event_date` is an ISO scheduled **UTC** date, independent of trading close.
+- Sports discovery accepts full-game winners; it does not substitute a spread, total,
+  partial-game winner, player prop, season series, or future.
+- Clarification results include `clarification` and `choices`; they do not trigger upstream requests.
+- Multiple matching event IDs appear in `discovery.matching_events`. Select the intended
+  game before interpreting one price; two games on the same day remain separate.
+- Explicit series discovery is an optional precision control, not a prerequisite for an
+  ordinary sports query.
+- Fetch details before interpreting settlement rules. A displayed price is not a forecast.
+- Empty bounded discovery is not proof of absence. Polymarket automatically checks its league
+  catalog when exhausted text search yields no qualifying game and page budget remains.
 
-For example, the 2028 Vance contracts have similar headlines, but Polymarket uses a three-news-source
-race call with an inauguration fallback while Kalshi settles on inauguration. The application
-surfaces this settlement difference before discussing their quotes.
-
-The parser deliberately supports a narrow explicit conditional form and recognizable settlement
-clauses. General prose, missing authorities, naive timestamps, and truncated rules remain unresolved.
-Trading close is tracked separately from the event cutoff. The main model explains ambiguous
-checks; it cannot change the deterministic verdict. Jev and forecasting are later milestones.
-See [matching design and limitations](docs/research/CONTRACT_MATCHING.md).
-
-## Run the Vertical Slice
-
-With a real `OPENAI_API_KEY` in the ignored `.env`, run `uv run python main.py`.
-The default cloud backend is `gpt-5`; `OPENAI_MODEL` and `OPENAI_BASE_URL` are configurable.
-Tavily credentials are not required until its later milestone. The server binds to
-`0.0.0.0`, reads `PORT` (default 8080), and exposes interactive API documentation at `/docs`.
+## Local inspection UI
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8080/chat `
-  -ContentType application/json `
-  -Body '{"query":"Find two Polymarket Bitcoin contracts","session_id":"research-1"}'
+uv run python scripts/run_chat_ui.py
 ```
 
-Responses have exactly `{"response":"..."}`. Invalid bodies return 422. Session IDs accept
-1–128 letters, digits, underscores, or hyphens; queries accept 1–4,000 characters.
-Use a new, unguessable session ID for each conversation. Session IDs are not authentication.
+This starts Market Lens at `http://127.0.0.1:3000`, the FastAPI backend, and the local
+Codex test gateway. The gateway supplies model decisions; the application still owns
+LangGraph memory and performs real MCP calls. The UI shows actual tool activity and
+supports session follow-ups. Ctrl+C stops the local processes.
 
-### Local testing with headless Codex
+The default local test model is `gpt-5.6-sol` with medium effort. UI controls also support
+the configured Terra/Luna options and reasoning levels. This development gateway uses local
+CLI authentication and stays outside the deployment image. It is not a production API backend.
+Use `--no-browser` or `--port 3001` on the runner as needed.
 
-This opt-in development route uses saved Codex CLI authentication, **gpt-5.6-sol at medium
-effort only**, with no API billing credentials. The gateway runs outside the deployment image.
-It returns model decisions; LangGraph still discovers and calls the real MCP server.
-
-Terminal 1:
+For separate gateway/backend terminals:
 
 ```powershell
 uv run python scripts/codex_gateway.py
-```
-
-Terminal 2:
-
-```powershell
+# In another terminal:
 $env:OPENAI_API_KEY = "local-codex-placeholder"
 $env:OPENAI_BASE_URL = "http://127.0.0.1:8091/v1"
 $env:LLM_TIMEOUT_SECONDS = "120"
 uv run python main.py
 ```
 
-The gateway binds only to localhost. It launches ephemeral CLI calls in temporary directories,
-passes prompts through stdin, suppresses CLI diagnostics, and does not execute market tools itself.
-Set `CODEX_EXECUTABLE` if the CLI cannot be located. Stop both processes with Ctrl+C.
-Clear those environment overrides before testing the real cloud API. CLI usage limits still apply.
-This is a local test backend, not a production API replacement or proof of GPT-5 behavior.
+Clear these overrides before using the configured cloud model.
 
-### Local chat interface
-
-Run the browser interface with one command:
+## Verification
 
 ```powershell
-uv run python scripts/run_chat_ui.py
+uv run pytest -m "not live_smoke"
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
 ```
 
-This opens **Market Lens** at `http://127.0.0.1:3000`. The local runner starts the existing
-headless Codex gateway with `gpt-5.6-sol` at medium effort, starts the FastAPI backend, and serves
-a same-origin HTML client. The application still owns LangGraph memory and real MCP
-discovery/invocation. Ctrl+C stops all three local processes.
+The deterministic suite uses fixture HTTP and scripted model replies while exercising real
+MCP sessions and the agent. It does not require a currently open game.
 
-The interface generates a private local session ID, keeps it for the browser tab, supports
-context-dependent follow-ups, and can start a fresh conversation without restarting the API.
-The right-side run trace reports each actual MCP tool call with its safe arguments, outcome,
-duration, and a bounded result summary. It explicitly reports when the model answers without a
-tool. Raw provider payloads, full prompts, and secrets are not returned. The ordinary assignment
-endpoint remains `POST /chat`; the local inspection UI uses `POST /chat/inspect` with the same
-request body and an additional `activity` array in its response.
+Bounded public checks:
 
-Example prompts use natural market questions while covering a cross-platform contract check, a
-search-and-detail chain, and a reasonable no-tool request. Use `--no-browser` to suppress automatic
-browser launch or `--port 3001` to move the interface when port 3000 is occupied.
+```powershell
+$env:RUN_LIVE_SMOKE = "1"
+uv run pytest tests/live/test_sports_mcp_live.py tests/live/test_market_clients_live.py tests/live/test_kalshi_mcp_live.py tests/live/test_polymarket_mcp_live.py
+Remove-Item Env:RUN_LIVE_SMOKE
+```
 
-The model controls apply to the next message and can be changed without losing the conversation.
-Available local models are Sol, Terra, and Luna (`gpt-5.6-sol`, `gpt-5.6-terra`, and
-`gpt-5.6-luna`), with low, medium, high, or extra-high reasoning effort. The API validates both
-fields before any model or MCP call; clients that omit them retain the configured backend defaults.
+The sports live checks discover schemas, reject `limit=20`, search all three supported
+leagues, and retrieve a returned contract when available. They do not fabricate an expected
+open game. See [Testing](docs/research/TESTING.md) for test boundaries
+and [Provider contracts](docs/research/MARKET_API_FEASIBILITY.md) for primary sources.
 
-### Container
+Real-model checks are separate: configure a backend, set `RUN_LIVE_AGENT=1`, and run
+`tests/live/test_chat_live.py`. Scripted-model tests establish schema consumption and control
+flow, not model selection quality.
+
+## Container and deployment
 
 ```powershell
 docker build -t market-agent:local .
 docker run --rm -p 8080:8080 --env-file .env market-agent:local
 ```
 
-For local Codex testing from Docker Desktop, keep the host gateway running and use:
+The multi-stage image installs locked runtime dependencies and runs as UID 10001.
+It includes both Python MCP servers and requires no Node runtime. For Docker Desktop with
+the host test gateway, override `OPENAI_BASE_URL=http://host.docker.internal:8091/v1`
+and use a local placeholder API key.
 
-```powershell
-docker run --rm -p 8080:9090 -e PORT=9090 `
-  -e OPENAI_API_KEY=local-codex-placeholder `
-  -e OPENAI_BASE_URL=http://host.docker.internal:8091/v1 `
-  -e LLM_TIMEOUT_SECONDS=120 market-agent:local
-```
+Cloud Run is not deployed. Deployment remains an assignment deliverable:
+build the image, publish it to Artifact Registry, deploy with runtime environment variables,
+one worker and `--max-instances 1`, then verify the live `POST /chat` URL and memory.
+The [assignment](docs/assignment/Assignment_1_Description.md) supplies the deployment commands
+and required submission contract. Never deploy the local CLI gateway or copy local credentials
+into an image.
 
-The multi-stage image installs locked runtime dependencies with uv and runs as UID 10001.
-No Node, Codex, dev dependencies, source credentials, or host authentication files are included.
-Cloud Run deployment remains a later milestone; there is no live deployment URL yet.
+Public provider calls use no account credentials in this implementation. LLM usage, Cloud Run,
+builds, image storage, and future external research can incur provider charges. There is no
+continuous polling or background research. No latency or bandwidth improvement is claimed
+without measurement.
 
-### Verification and operating limits
-
-- Offline suite: `uv run pytest -m "not live_smoke"`; Ruff lint/format and `uv run mypy src`.
-- Public API suite: `RUN_LIVE_SMOKE=1`, then `uv run pytest tests/live/test_market_clients_live.py`.
-- Public MCP subprocess: same flag, `uv run pytest tests/live/test_polymarket_mcp_live.py`.
-- Real model + MCP: configure the cloud backend or local gateway, set `RUN_LIVE_AGENT=1`,
-  then `uv run pytest tests/live/test_chat_live.py`. This makes real model and public API calls.
-- Deterministic graph tests use a scripted model and fixture HTTP; they do not measure semantic
-  selection. Live checks inspect actual tool names/statuses without recording prompts or payloads.
-- Each available market server gets its own stdio subprocess and session per turn, then closes.
-  A later request retries connection naturally. Total discovery failure returns a controlled response.
-- Four tool calls per turn; bounded model/HTTP/MCP timeouts. The model chooses tools semantically.
-- Memory uses LangGraph InMemorySaver and lasts for one process. Run one worker/instance for
-  the assignment. Memory is not durable or currently evicted; long-running public use needs limits.
-- No trading, independent forecasting, news, Jev evaluation, or saved forecasts yet.
-- GPT-5 cloud access was not verified without a key. Headless Sol tests do not establish GPT-5 quality.
-
-## Current Architecture
+## Architecture
 
 ```mermaid
 flowchart LR
-    U[Client] --> F[FastAPI POST /chat]
-    F --> G[LangGraph reasoning loop]
+    U[User] -->|query and session_id| F[FastAPI POST /chat]
+    F -->|response| U
+    F -->|invoke| G[LangGraph reasoning loop]
+    G -->|final message| F
+    G <--> L[Configured cloud LLM or local test gateway]
     G <--> M[InMemorySaver by session_id]
-    G <--> L[Cloud LLM / local Codex test gateway]
-    G --> MATCH[Deterministic contract check before pair interpretation]
-    G --> A[langchain-mcp-adapters]
-    A -->|stdio tools/list and tools/call| P[Polymarket MCP process]
-    A -->|separate stdio session| K[Kalshi MCP process]
-    P --> C[PolymarketClient]
-    C --> API[Public Gamma API]
-    K --> KC[KalshiClient]
-    KC --> KA[Public Kalshi API]
+    G --> C[Deterministic contract check]
+    G --> A[MCP client adapter]
+    A <-->|stdio tools/list, tools/call, results| K[Kalshi MCP]
+    A <-->|separate stdio session and results| P[Polymarket MCP]
+    K --> S[Exact sports identity and projections]
+    P --> S
+    K <-->|bounded GET and response| KA[Public Kalshi API]
+    P <-->|bounded GET and response| PA[Public Gamma API]
 ```
 
 ```mermaid
 flowchart LR
-    Q[Query plus session context] --> R[Model reasoning]
-    R -->|tool selected| T[MCP tools/call]
-    T --> V[Validate structured result or controlled error]
-    V --> C[Bounded contract check when both details exist]
-    C --> R
-    R -->|answer ready or budget exhausted| S[Final synthesis]
-    S --> O[response string]
+    Q[Query and session context] --> R[LLM reasoning]
+    R --> T[Tool selection]
+    T --> C[MCP tools/call]
+    C --> S[Server validation and bounded provider requests]
+    S --> V[Structured result or controlled error]
+    V --> H[Host schema validation and matching report]
+    H --> R
+    R -->|Answer ready or tool budget exhausted| O[LLM synthesis and response]
 ```
 
 ```mermaid
 flowchart LR
-    E[Local ignored .env / shell variables] --> D[Local Docker container]
-    B[Multi-stage image build] --> D
-    D --> H[Host Codex gateway for local testing]
-    B -. future deployment .-> AR[Artifact Registry]
-    AR -.-> CR[Cloud Run: one instance]
-    ENV[Runtime environment secrets] -.-> CR
-    CR -.-> URL[Live URL: not deployed yet]
+    ENV[Ignored local .env / shell variables] --> LOCAL[Local Docker or Python]
+    IMG[Multi-stage Docker image] --> LOCAL
+    LOCAL --> DEV[Optional host test gateway]
+    IMG -. Planned .-> AR[Artifact Registry]
+    AR -. Planned .-> CR[Cloud Run: one instance]
+    DOTENV[Ignored local .env] -. source into shell .-> SEC[Shell variables]
+    SEC -. Planned --set-env-vars .-> CR
+    CR -. Planned .-> URL[Live URL: deployment required]
 ```
 
-These diagrams describe the implemented slice; future servers will be added as they become real.
+The servers are student-authored using the official
+[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk).
 The application uses [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview),
 [FastAPI](https://fastapi.tiangolo.com/), and
 [langchain-mcp-adapters](https://github.com/langchain-ai/langchain-mcp-adapters).
 
-## Project Documents
+## Documentation map
 
-- [Focused project proposal](docs/planning/PROJECT_PROPOSAL.md)
-- [Implementation plan](docs/planning/IMPLEMENTATION_PLAN.md)
-- [Assignment requirements](docs/assignment/Assignment_1_Description.md)
-- [Original assignment PDF](docs/assignment/Assignment_1_Description.pdf)
+- [Sports MCP design and catalog maintenance](docs/research/SPORTS_MCP.md)
+- [Runtime architecture](docs/research/MCP_VERTICAL_SLICE.md)
+- [Provider contracts and field mapping](docs/research/MARKET_API_FEASIBILITY.md)
+- [Current matching and future sports comparison](docs/research/CONTRACT_MATCHING.md)
+- [Testing](docs/research/TESTING.md)
+- [Product scope](docs/planning/PROJECT_PROPOSAL.md)
+- [Remaining implementation plan](docs/planning/IMPLEMENTATION_PLAN.md)
+
+`PROCESS_LOG.md` is Rylan Wade's personal reflection and remains a required submission
+artifact. `AI_TRANSCRIPT.md` is separate automatic development evidence, governed by
+`AGENTS.md`; it does not replace personal authorship.

@@ -114,7 +114,18 @@ class PolymarketClient(AsyncMarketClient):
         market = _as_dict(payload, self.provider, "market response")
         if _required_str(market, "id") != market_id:
             raise MarketValidationError(self.provider, "market identifier does not match request")
-        return _parse_market(market, event_id=_event_id(market), retrieved_at=datetime.now(UTC))
+        parsed = _parse_market(market, event_id=_event_id(market), retrieved_at=datetime.now(UTC))
+        from market_agent.providers.sports_search import objects, poly_event
+
+        events = objects(
+            market["events"] if market.get("events") is not None else [], "polymarket", "events"
+        )
+        if len(events) == 1:
+            sports = poly_event(events[0], market)
+            if sports:
+                parsed.provider_data["sports"] = sports.model_dump(mode="json")
+            parsed.provider_data["event_slug"] = events[0].get("slug")
+        return parsed
 
 
 def _parse_market(
@@ -181,6 +192,25 @@ def _parse_market(
             source_url=HttpUrl(source_url),
             retrieved_at=retrieved_at,
             provider_data={
+                "raw_title": title,
+                "outcome_quotes": [
+                    {
+                        "label": label,
+                        "side": label.casefold() if standard_binary else None,
+                        "price": str(_array_decimal(prices, i, "outcomePrices"))
+                        if _array_decimal(prices, i, "outcomePrices") is not None
+                        else None,
+                        "price_kind": "provider_snapshot",
+                        "bid": None,
+                        "ask": None,
+                    }
+                    for i, label in enumerate(outcomes)
+                ],
+                "provider_updated_at": market.get("updatedAt"),
+                "provider_last_trade_price": market.get("lastTradePrice"),
+                "provider_last_trade_outcome": "Yes" if standard_binary else None,
+                "price_observed_at": None,
+                "last_trade_at": None,
                 "slug": slug,
                 "active": market.get("active"),
                 "closed": market.get("closed"),

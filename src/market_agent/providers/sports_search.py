@@ -1,0 +1,492 @@
+"""Bounded sports discovery inside the existing read-only provider servers."""
+
+import json
+from datetime import UTC, date, datetime
+from typing import Any
+from urllib.parse import quote
+
+from market_agent.domain import CanonicalMarket, MarketStatus
+from market_agent.providers.exceptions import MarketValidationError
+from market_agent.providers.kalshi import KalshiClient, _resolution_source, _status_filter
+from market_agent.providers.kalshi import _parse_market as parse_kalshi
+from market_agent.providers.polymarket import PolymarketClient
+from market_agent.providers.polymarket import _parse_market as parse_poly
+from market_agent.providers.polymarket import _status as poly_status
+from market_agent.providers.sports import (
+    DiscoveryCoverage,
+    League,
+    SportsEvent,
+    SportsQuery,
+    event_matches,
+    participant,
+    resolve_query,
+    sports_payload,
+    words,
+)
+
+# Observed provider series, not identifier templates. Revalidate titles before use.
+KALSHI_SERIES: dict[str, tuple[League, str]] = {
+    "KXMLBGAME": ("mlb", "Professional Baseball Game"),
+    "KXNFLGAME": ("nfl", "Professional Football Game"),
+    "KXNCAAFGAME": ("ncaa_football", "College Football Game"),
+    "KXNCAAFCSGAME": ("ncaa_football", "College Football FCS Game"),
+}
+POLY_TAGS: dict[str, League] = {"mlb": "mlb", "nfl": "nfl", "cfb": "ncaa_football"}
+
+
+def winner_market(market: dict[str, Any], event_title: str) -> bool:
+    """Reject a sibling with different contract semantics even inside a winner series."""
+    label = market.get("yes_sub_title")
+    return (
+        isinstance(label, str)
+        and market.get("market_type", "binary") == "binary"
+        and market.get("floor_strike") is None
+        and market.get("cap_strike") is None
+        and words(str(market.get("title", ""))) in {words(label + " wins"), words(event_title)}
+    )
+
+
+def objects(value: Any, provider: str, field: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or any(not isinstance(x, dict) for x in value):
+        raise MarketValidationError(provider, f"{field} must be an array of objects")
+    return value
+
+
+def root_object(value: Any, provider: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise MarketValidationError(provider, "response must be an object")
+    return value
+
+
+def retain(results: dict[str, CanonicalMarket], market: CanonicalMarket) -> None:
+    existing = results.get(market.market_id)
+    if existing and existing.event_id != market.event_id:
+        raise MarketValidationError(market.platform.value, "market belongs to conflicting events")
+    results.setdefault(market.market_id, market)
+
+
+def timestamp(value: Any, provider: str) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if result.tzinfo is None:
+            raise ValueError("timezone missing")
+        return result.astimezone(UTC)
+    except (ValueError, TypeError, AttributeError) as error:
+        raise MarketValidationError(provider, "invalid scheduled timestamp") from error
+
+
+def check_event_title(title: Any, league: League, names: set[str], provider: str) -> None:
+    if not isinstance(title, str):
+        raise MarketValidationError(provider, "event title must be a string")
+    parsed = resolve_query(title, league)
+    if (
+        not parsed.clarification
+        and len(parsed.teams) == 2
+        and {team.name for team in parsed.teams} != names
+    ):
+        raise MarketValidationError(provider, "event title and participants conflict")
+
+
+def kalshi_event(event: dict[str, Any], milestones: list[dict[str, Any]]) -> SportsEvent | None:
+    series = event.get("series_ticker")
+    if not isinstance(series, str):
+        raise MarketValidationError("kalshi", "event series must be a string")
+    if series not in KALSHI_SERIES:
+        return None
+    league = KALSHI_SERIES[series][0]
+    event_id = event.get("event_ticker")
+    if not isinstance(event_id, str) or not event_id:
+        raise MarketValidationError("kalshi", "event identity missing")
+    participants: dict[str, str] = {}
+    divisions = set()
+    for market in objects(event.get("markets", []), "kalshi", "markets"):
+        if market.get("event_ticker") != event_id:
+            raise MarketValidationError("kalshi", "nested market event identity mismatch")
+        if not winner_market(market, str(event.get("title", ""))):
+            continue
+        label = market.get("yes_sub_title")
+        if not isinstance(label, str):
+            continue
+        strike = market.get("custom_strike") or {}
+        if not isinstance(strike, dict):
+            raise MarketValidationError("kalshi", "custom_strike must be an object")
+        team_id = strike.get("baseball_team") or strike.get("football_team")
+        team = participant(label, league, kalshi_id=team_id)
+        if team:
+            # An ID must not quietly override a contradictory provider label.
+            label_team = participant(label, league)
+            if label_team and label_team.kalshi_id != team.kalshi_id:
+                raise MarketValidationError("kalshi", "participant ID and label conflict")
+            participants[team.name] = label
+            if team.division:
+                divisions.add(team.division)
+    if len(participants) != 2:
+        return None
+    check_event_title(event.get("title"), league, set(participants), "kalshi")
+    starts = set()
+    for milestone in milestones:
+        related = []
+        for field in ("related_event_tickers", "primary_event_tickers"):
+            values = milestone.get(field, [])
+            if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+                raise MarketValidationError("kalshi", "invalid milestone event references")
+            related.extend(values)
+        if event_id in related:
+            start = timestamp(milestone.get("start_date"), "kalshi")
+            if start is not None:
+                starts.add(start)
+    if len(starts) > 1:
+        raise MarketValidationError("kalshi", "conflicting milestone start times")
+    return SportsEvent(
+        league=league,
+        provider_event_id=event_id,
+        raw_title=event.get("title", ""),
+        participants=list(participants),
+        raw_participants=list(participants.values()),
+        divisions=sorted(divisions),
+        scheduled_start=next(iter(starts), None),
+        schedule_source="milestone.start_date" if starts else None,
+    )
+
+
+async def search_kalshi(
+    client: KalshiClient,
+    query: SportsQuery,
+    *,
+    status: MarketStatus | None,
+    limit: int,
+    series_ticker: str | None,
+    event_date: date | None,
+) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
+    scope = [k for k, (league, _) in KALSHI_SERIES.items() if league == query.league]
+    if series_ticker:
+        if series_ticker not in scope:
+            raise ValueError("series_ticker conflicts with sports league/game-winner scope")
+        scope = [series_ticker]
+    elif query.league == "ncaa_football" and all(t.division == "FBS" for t in query.teams):
+        scope = ["KXNCAAFGAME"]
+    for ticker in scope:
+        payload = root_object(
+            await client._request_json(f"/series/{quote(ticker, safe='')}"), "kalshi"
+        )
+        series = root_object(payload.get("series"), "kalshi")
+        if series.get("ticker") != ticker or series.get("title") != KALSHI_SERIES[ticker][1]:
+            raise MarketValidationError("kalshi", "sports series metadata changed")
+    coverage = DiscoveryCoverage(
+        scope="Full-game winners; historical nested markets may be omitted."
+    )
+    cursors: dict[str, str | None] = dict.fromkeys(scope)
+    exhausted: set[str] = set()
+    seen_cursors: set[tuple[str, str]] = set()
+    seen_events: set[str] = set()
+    results: dict[str, CanonicalMarket] = {}
+    # One shared page budget across NCAA scopes; round-robin avoids starving FCS.
+    for page in range(client.max_search_pages):
+        available = [s for s in scope if s not in exhausted]
+        if not available:
+            break
+        ticker = available[page % len(available)]
+        params: dict[str, str | int] = {
+            "series_ticker": ticker,
+            "limit": 200,
+            "with_nested_markets": "true",
+            "with_milestones": "true",
+        }
+        # Closed/settled event status can exclude a settled sibling of a mixed event.
+        # Only the open scope is safe to narrow here; filter each contract below.
+        if status == MarketStatus.OPEN:
+            params["status"] = _status_filter(status) or "open"
+        if cursors[ticker]:
+            params["cursor"] = cursors[ticker] or ""
+        root = root_object(await client._request_json("/events", params=params), "kalshi")
+        events = objects(root.get("events"), "kalshi", "events")
+        milestones = objects(root.get("milestones", []), "kalshi", "milestones")
+        coverage.pages_scanned += 1
+        coverage.events_scanned += len(events)
+        for event in events:
+            event_id = event.get("event_ticker")
+            if not isinstance(event_id, str) or event.get("series_ticker") != ticker:
+                raise MarketValidationError("kalshi", "event scope mismatch")
+            if event_id in seen_events:
+                continue
+            seen_events.add(event_id)
+            raw_markets = objects(event.get("markets"), "kalshi", "markets")
+            coverage.markets_scanned += len(raw_markets)
+            sports = kalshi_event(event, milestones)
+            if sports is None or not event_matches(sports, query, event_date):
+                continue
+            for market in raw_markets:
+                if (
+                    not winner_market(market, sports.raw_title)
+                    or market.get("yes_sub_title") not in sports.raw_participants
+                ):
+                    continue
+                parsed = parse_kalshi(
+                    market,
+                    retrieved_at=datetime.now(UTC),
+                    resolution_source=_resolution_source(event),
+                )
+                if status is not None and parsed.status != status:
+                    continue
+                parsed = parsed.model_copy(
+                    update={
+                        "provider_data": {
+                            **parsed.provider_data,
+                            **sports_payload(sports, market),
+                            "requested_outcome": any(
+                                t.kalshi_name == market.get("yes_sub_title") for t in query.teams
+                            ),
+                        }
+                    }
+                )
+                retain(results, parsed)
+        cursor = root.get("cursor")
+        if cursor is not None and not isinstance(cursor, str):
+            raise MarketValidationError("kalshi", "cursor must be a string")
+        cursors[ticker] = cursor or None
+        if not cursor:
+            exhausted.add(ticker)
+        elif (ticker, cursor) in seen_cursors:
+            coverage.stop_reason = "repeated_cursor"
+            break
+        else:
+            seen_cursors.add((ticker, cursor))
+    coverage.has_more = len(exhausted) < len(scope)
+    coverage.continuation = [
+        {"series_ticker": s, **({"cursor": c} if c else {})}
+        for s, c in cursors.items()
+        if s not in exhausted
+    ]
+    if coverage.stop_reason == "not_started":
+        coverage.stop_reason = "page_budget" if coverage.has_more else "provider_exhausted"
+    return finish(results, coverage, limit)
+
+
+def poly_event(
+    event: dict[str, Any], market: dict[str, Any], league: League | None = None
+) -> SportsEvent | None:
+    if market.get("sportsMarketType") != "moneyline":
+        return None
+    tag_values = objects(event.get("tags", []), "polymarket", "tags")
+    if any(not isinstance(tag.get("slug"), str) for tag in tag_values):
+        raise MarketValidationError("polymarket", "tag slug must be a string")
+    tags = {tag["slug"] for tag in tag_values}
+    leagues = {v for k, v in POLY_TAGS.items() if k in tags}
+    if len(leagues) != 1 or (league and league not in leagues):
+        return None
+    resolved_league = next(iter(leagues))
+    try:
+        labels = json.loads(market.get("outcomes", "null"))
+    except (ValueError, TypeError) as error:
+        raise MarketValidationError("polymarket", "invalid outcomes") from error
+    if (
+        not isinstance(labels, list)
+        or len(labels) != 2
+        or not all(isinstance(label, str) for label in labels)
+    ):
+        raise MarketValidationError("polymarket", "moneyline requires two labeled outcomes")
+    found = [participant(label, resolved_league) for label in labels]
+    if any(t is None for t in found):
+        return None
+    resolved = [t for t in found if t is not None]
+    if resolved[0].kalshi_id == resolved[1].kalshi_id:
+        raise MarketValidationError("polymarket", "duplicate participant")
+    check_event_title(event.get("title"), resolved_league, {t.name for t in resolved}, "polymarket")
+    start = timestamp(market.get("gameStartTime"), "polymarket")
+    event_start = timestamp(event.get("startTime"), "polymarket")
+    if start and event_start and start != event_start:
+        raise MarketValidationError("polymarket", "game and event start times conflict")
+    event_id = event.get("id")
+    if not isinstance(event_id, str) or not event_id:
+        raise MarketValidationError("polymarket", "event identity missing")
+    return SportsEvent(
+        league=resolved_league,
+        provider_event_id=event_id,
+        raw_title=event.get("title", ""),
+        participants=[t.name for t in resolved],
+        raw_participants=labels,
+        divisions=sorted({t.division for t in resolved if t.division}),
+        scheduled_start=start or event_start,
+        schedule_source="gameStartTime" if start else "event.startTime" if event_start else None,
+    )
+
+
+async def search_polymarket(
+    client: PolymarketClient,
+    query: SportsQuery,
+    *,
+    status: MarketStatus | None,
+    limit: int,
+    event_date: date | None,
+) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
+    coverage = DiscoveryCoverage(
+        scope="Full-game moneyline; exact participants within provider-ranked event search.",
+        total_meaning="Provider public-search totalResults before local contract/team filters.",
+    )
+    results: dict[str, CanonicalMarket] = {}
+    seen: set[str] = set()
+    # College game titles use school names, while full mascot names mostly find futures.
+    # Scope by the verified league tag slug before requiring ALL participants locally.
+    search_team = query.teams[0]
+    if query.league == "ncaa_football":
+        search_query = search_team.kalshi_name.replace(" St.", " State")
+    else:
+        # Provider titles often use just the professional nickname. Choose only an
+        # exact, uniquely mapped suffix alias, never a guessed abbreviation.
+        nicknames = [
+            a
+            for a in search_team.aliases
+            if len(words(a)) > 3
+            and a not in {search_team.name, search_team.kalshi_name}
+            and words(search_team.name).endswith(" " + words(a))
+            and participant(a, search_team.league) == search_team
+        ]
+        search_query = min(nicknames, key=len) if nicknames else search_team.name
+    tag = next(k for k, league in POLY_TAGS.items() if league == query.league)
+    catalog_series: str | None = None
+    catalog_offset = 0
+    for page in range(1, client.max_search_pages + 1):
+        if catalog_series is not None:
+            params: dict[str, str | int] = {
+                "series_id": catalog_series,
+                "limit": 100,
+                "offset": catalog_offset,
+                "order": "startTime",
+                "ascending": "true",
+            }
+            if status == MarketStatus.OPEN:
+                params["closed"] = "false"
+            events = objects(
+                await client._request_json("/events", params=params), "polymarket", "events"
+            )
+            catalog_offset += len(events)
+            more = len(events) == 100
+            # Offset feeds supply no hasMore flag or total; fullness is only a hint.
+            coverage.has_more = None if more else False
+        else:
+            root = root_object(
+                await client._request_json(
+                    "/public-search",
+                    params={
+                        "q": search_query,
+                        "events_tag": tag,
+                        "page": page,
+                        "limit_per_type": 20,
+                        "events_status": "active" if status == MarketStatus.OPEN else "all",
+                        "search_tags": "false",
+                        "search_profiles": "false",
+                        "optimized": "false",
+                    },
+                ),
+                "polymarket",
+            )
+            events = objects(
+                root["events"] if root.get("events") is not None else [], "polymarket", "events"
+            )
+            pagination = root_object(root.get("pagination", {}), "polymarket")
+            more = pagination.get("hasMore", False)
+            total = pagination.get("totalResults")
+            if not isinstance(more, bool) or (
+                total is not None and (type(total) is not int or total < 0)
+            ):
+                raise MarketValidationError("polymarket", "invalid pagination")
+            coverage.provider_total = total
+            coverage.has_more = more
+        coverage.pages_scanned += 1
+        coverage.events_scanned += len(events)
+        new_events = 0
+        for event in events:
+            event_id = event.get("id")
+            if not isinstance(event_id, str):
+                raise MarketValidationError("polymarket", "event identity missing")
+            if event_id in seen:
+                continue
+            seen.add(event_id)
+            new_events += 1
+            markets = objects(
+                event["markets"] if event.get("markets") is not None else [],
+                "polymarket",
+                "markets",
+            )
+            coverage.markets_scanned += len(markets)
+            for market in markets:
+                if status is not None and poly_status(market) != status:
+                    continue
+                sports = poly_event(event, market, query.league)
+                if sports is None or not event_matches(sports, query, event_date):
+                    continue
+                parsed = parse_poly(market, event_id=event_id, retrieved_at=datetime.now(UTC))
+                parsed = parsed.model_copy(
+                    update={
+                        "provider_data": {
+                            **parsed.provider_data,
+                            **sports_payload(sports, market),
+                            "event_slug": event.get("slug"),
+                        }
+                    }
+                )
+                retain(results, parsed)
+        coverage.continuation = (
+            [{"series_id": catalog_series, "offset": catalog_offset}]
+            if more and catalog_series
+            else [{"query": search_query, "events_tag": tag, "page": page + 1}]
+            if more
+            else []
+        )
+        if not more:
+            if not results and catalog_series is None and page < client.max_search_pages:
+                metadata = objects(
+                    await client._request_json("/sports"), "polymarket", "sports metadata"
+                )
+                matches = [s for s in metadata if s.get("sport") == tag]
+                if len(matches) != 1 or not isinstance(matches[0].get("series"), str):
+                    raise MarketValidationError("polymarket", "league series metadata missing")
+                catalog_series = matches[0]["series"]
+                if not catalog_series.isdigit():
+                    raise MarketValidationError("polymarket", "invalid league series identity")
+                coverage.scope += " League-series fallback shares the same page budget."
+                continue
+            coverage.stop_reason = "provider_exhausted"
+            break
+        if not new_events:
+            coverage.stop_reason = "repeated_or_empty_page"
+            break
+        # Rank all qualifying contracts on this page before early completion.
+        if len(results) >= limit:
+            coverage.stop_reason = "result_limit"
+            break
+    if coverage.stop_reason == "not_started":
+        coverage.stop_reason = "page_budget"
+    return finish(results, coverage, limit)
+
+
+def finish(
+    results: dict[str, CanonicalMarket], coverage: DiscoveryCoverage, limit: int
+) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
+    coverage.candidates_matched = len(results)
+    events = {m.event_id: m.provider_data["sports"] for m in results.values()}
+    coverage.candidate_event_count = len(events)
+    coverage.selection_required = len(events) > 1
+    coverage.matching_events = [
+        {"event_id": key, "title": value["raw_title"], "scheduled_start": value["scheduled_start"]}
+        for key, value in sorted(
+            events.items(), key=lambda item: (item[1]["scheduled_start"] or "9999", item[0] or "")
+        )[:10]
+    ]
+    coverage.truncated = (
+        bool(coverage.has_more) or bool(coverage.continuation) or len(results) > limit
+    )
+    # All candidates already satisfy exact identity/type. Stable chronological
+    # order retains doubleheaders as separate event IDs, never merges them.
+    ranked = sorted(
+        results.values(),
+        key=lambda m: (
+            m.provider_data["sports"]["scheduled_start"] or "9999",
+            m.event_id or "",
+            not m.provider_data.get("requested_outcome", False),
+            m.market_id,
+        ),
+    )
+    return ranked[:limit], coverage

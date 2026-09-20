@@ -33,7 +33,7 @@ class KalshiClient(AsyncMarketClient):
     provider = "kalshi"
 
     def __init__(self, *, max_search_pages: int = 3, **kwargs: Any) -> None:
-        if not 1 <= max_search_pages <= 10:
+        if type(max_search_pages) is not int or not 1 <= max_search_pages <= 10:
             raise ValueError("max_search_pages must be between 1 and 10")
         self.max_search_pages = max_search_pages
         super().__init__(base_url="https://external-api.kalshi.com/trade-api/v2", **kwargs)
@@ -183,6 +183,43 @@ class KalshiClient(AsyncMarketClient):
         payload = await self._request_json(f"/markets/{quote(market_id, safe='')}")
         root = _as_dict(payload, "market response")
         market = _as_dict(root.get("market"), "market response market")
+        if _required_str(market, "ticker") != market_id:
+            raise MarketValidationError(self.provider, "market identifier does not match request")
+        from market_agent.providers.sports_search import (
+            KALSHI_SERIES,
+            kalshi_event,
+            objects,
+            winner_market,
+        )
+
+        event_id = _required_str(market, "event_ticker")
+        if event_id.split("-", 1)[0] in KALSHI_SERIES:
+            event_root = _as_dict(
+                await self._request_json(
+                    "/events",
+                    params={
+                        "tickers": event_id,
+                        "with_nested_markets": "true",
+                        "with_milestones": "true",
+                    },
+                ),
+                "event response",
+            )
+            event_values = objects(event_root.get("events"), "kalshi", "events")
+            if len(event_values) != 1:
+                raise MarketValidationError(self.provider, "expected one event")
+            event = event_values[0]
+            if event.get("event_ticker") != event_id:
+                raise MarketValidationError(self.provider, "event identifier mismatch")
+            sports = kalshi_event(
+                event, objects(event_root.get("milestones", []), "kalshi", "milestones")
+            )
+            parsed = _parse_market(
+                market, retrieved_at=datetime.now(UTC), resolution_source=_resolution_source(event)
+            )
+            if sports and winner_market(market, sports.raw_title):
+                parsed.provider_data["sports"] = sports.model_dump(mode="json")
+            return parsed
         resolution_source: str | None = None
         series_ticker = _optional_str(market.get("series_ticker"))
         if series_ticker is not None:
@@ -244,7 +281,8 @@ def _parse_market(
             open_time=_optional_datetime(market.get("open_time"), "open_time"),
             close_time=_optional_datetime(market.get("close_time"), "close_time"),
             resolution_deadline=_optional_datetime(
-                market.get("expected_expiration_time"), "expected_expiration_time"
+                market.get("latest_expiration_time") or market.get("expiration_time"),
+                "latest_expiration_time",
             ),
             resolution_source=resolution_source,
             rules=rules,
@@ -254,6 +292,32 @@ def _parse_market(
             source_url=HttpUrl(source_url),
             retrieved_at=retrieved_at,
             provider_data={
+                "raw_title": base_title,
+                "outcome_quotes": [
+                    {
+                        "label": outcome_title or "Yes",
+                        "side": "yes",
+                        "price": str(yes_price) if yes_price is not None else None,
+                        "price_kind": "last_trade",
+                        "bid": market.get("yes_bid_dollars"),
+                        "ask": market.get("yes_ask_dollars"),
+                    },
+                    {
+                        "label": f"Not {outcome_title}" if outcome_title else "No",
+                        "side": "no",
+                        "price": str(no_price) if no_price is not None else None,
+                        "price_kind": "derived_complement",
+                        "bid": market.get("no_bid_dollars"),
+                        "ask": market.get("no_ask_dollars"),
+                    },
+                ],
+                "provider_updated_at": market.get("updated_time"),
+                "provider_last_trade_price": str(yes_price) if yes_price is not None else None,
+                "provider_last_trade_outcome": outcome_title or "Yes",
+                "price_observed_at": None,
+                "last_trade_at": None,
+                "expected_resolution_time": market.get("expected_expiration_time"),
+                "latest_expiration_time": market.get("latest_expiration_time"),
                 "series_ticker": _optional_str(market.get("series_ticker")),
                 "provider_status": provider_status,
                 "result": _optional_str(market.get("result")),
@@ -362,7 +426,10 @@ def _optional_decimal(value: Any, name: str) -> Decimal | None:
     if isinstance(value, bool):
         raise MarketValidationError("kalshi", f"{name} must be numeric")
     try:
-        return Decimal(str(value))
+        parsed = Decimal(str(value))
+        if not parsed.is_finite():
+            raise MarketValidationError("kalshi", f"{name} must be finite")
+        return parsed
     except InvalidOperation as error:
         raise MarketValidationError("kalshi", f"{name} must be numeric") from error
 

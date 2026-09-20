@@ -1,83 +1,70 @@
-# Deterministic contract matching — Milestone 6
+# Contract comparison
 
-## Decision
+## Implemented pipeline
 
-Use conservative rejection and explicit uncertainty. A semantic model may explain unresolved
-terms, but it does not override the deterministic comparison gate in this milestone. No Jev,
-news search, order-book tools, or forecasting subsystem is introduced.
+The application uses one deterministic matching pipeline:
 
-## Interface and lifecycle
+- `assess_pair` compares supplied canonical contract terms.
+- `match_candidates` deduplicates IDs, considers at most three candidates per platform,
+  and evaluates at most nine pairs without network or model calls.
+- The graph collects validated detail snapshots within the current turn and supplies
+  `matching_report` to the model before cross-platform interpretation.
+- A code-generated eligibility notice accompanies the final response independently of
+  the model's explanation.
 
-- `assess_pair(Polymarket CanonicalMarket, Kalshi CanonicalMarket, truncation flags)` returns
-  a typed verdict, relationship label, per-dimension evidence, and comparison eligibility.
-- `match_candidates` deduplicates IDs, takes at most three candidates per platform, and evaluates
-  at most nine pairs. No network or model calls occur in this layer.
-- The graph collects validated detail snapshots within the current turn. After both platforms
-  are represented, matching runs in the tool node before the next model call. It supplies the
-  report to the reasoning loop and adds an independent, code-generated notice to `/chat` output.
-- Per-turn candidate state resets; previous snapshots and reports remain in native message memory.
-  Cross-platform requests are instructed to fetch both contracts. Search summaries alone cannot
-  establish equivalence because they omit rules.
+The current verdicts are equivalent supplied terms, different, and ambiguous. Related
+contracts remain contextual evidence. The model cannot upgrade a deterministic rejection.
 
-## Supported deterministic evidence
+## Current evidence model
 
-| Dimension | Treatment |
+The parser recognizes explicit conditional subjects, YES/NO outcomes, polarity, numeric
+thresholds, units, inclusive/exclusive comparisons, explicit timezone-aware event timestamps,
+timing operators, selected settlement triggers, authority, cancellation clauses, exclusions,
+and full-rule text.
+
+Its numeric conditional parser is not a sports settlement parser. Unsupported wording, absent authority,
+truncated rules, and unknown timing semantics remain unresolved. Equality of a short title
+or a rule prefix is insufficient. Positive equivalence is scoped to the supplied terms;
+unseen external documents are not certified.
+
+The generic matcher tracks trading close separately from an event cutoff, but it can still
+report differing close/resolution metadata as unresolved. That generic behavior is not a
+sports-specific interpretation of normal settlement timing.
+
+## Sports boundary
+
+Sports MCP results provide league, canonical and raw participants, provider event identity,
+scheduled start, full-game market type, and explicit outcome prices. They always declare
+sports comparison eligibility unverified.
+
+The current matching engine does not yet use all those fields. It requires YES/NO outcomes,
+so a named-team Polymarket contract cannot be promoted to equivalence with a Kalshi contract.
+An apparent price difference is not an established arbitrage or comparable probability gap.
+
+## Planned sports extension
+
+Extend the matcher and report rather than implementing a separate MCP comparison tool.
+
+| Dimension | Required treatment |
 |---|---|
-| Identity | Explicit conditional subjects; otherwise normalized titles, with differing titles unresolved |
-| Binary outcomes | Require exactly YES and NO; array order is immaterial |
-| Polarity | Explicit predicate negation and YES/NO payout; simple title negation |
-| Threshold / unit / inclusivity | Decimal parsing and explicit comparison operators; USD/dollars and percent/% aliases |
-| Event time | Explicit ISO timestamps with offsets normalized to UTC; naive timestamps unresolved |
-| Timing | `on`, `by`, and `at` remain distinct |
-| Settlement trigger | Recognized news-consensus condition versus inauguration; retain fallback distinction |
-| Authority | Identical supplied authority agrees; missing/different labels require review rather than guessed aliases |
-| Cancellation | Explicit cancellation payout conflicts reject; other clause differences require review |
-| Exclusions / edge cases | Preserve excerpts and flag unresolved differences |
-| Full rules | Compare the entire normalized text, never just a bounded preview |
-| Close / resolution schedule | Report differences as unresolved; these fields are not event cutoffs |
+| Event identity | Both participants, league, scheduled date/time, game number when known, provider evidence |
+| Contract type | Match the same explicitly supported type and period; begin with full-game winners and add type-specific checks for later spreads, totals, props, and futures |
+| Outcome mapping | Exact named-team mapping; do not equate Kalshi NO with the opponent without rules evidence |
+| Postponement | Compare allowed rescheduling windows and original-versus-current game identity |
+| Cancellation | Compare void, fair-value, 50/50, or other payout terms explicitly |
+| Overtime/ties | Compare inclusion and tie settlement under the relevant league |
+| Shortened games | Compare official-result and minimum-completion conditions |
+| Authority | Compare governing-body result requirements and fallback sources |
+| Clocks | Separate scheduled start, trading close, expected resolution, and final deadline |
+| Final relationship | Equivalent, related, incompatible, or insufficient evidence |
 
-The explicit threshold parser recognizes a leading conditional such as:
-`If Bitcoin is above 100000 USD on 2028-01-01T00:00:00Z, the market resolves Yes.`
-It is not a general natural-language contract parser. Unsupported phrasings require review.
-Lexical normalization changes Unicode compatibility, case, and whitespace only; it retains
-negation and numeric boundaries. Positive equivalence requires matching checks, identical full
-supplied rules, known agreeing authority, and agreeing schedule metadata. The claim is scoped
-to supplied terms; terms in external documents remain unverified.
+A later trading close is not itself a conflict with an earlier game start. Genuine identity
+or rule conflicts should remain decisive. A semantic helper may explain unresolved terms,
+but deterministic conflicts and missing evidence must remain visible.
 
-## Observed iteration
+Additional contract types require their own outcome, line, subject, and settlement checks.
+A shared game does not make a winner, spread, total, or player prop equivalent. Futures
+require competition and season identity rather than assuming a single-game schedule.
 
-- Reduced election fixtures established a dangerous near-match: news agreement with fallback
-  versus direct inauguration. Deterministic rejection occurs before synthesis.
-- The first Docker comparison safely returned ambiguous because live wording used “Associated
-  Press” and “the next person inaugurated,” unlike the reduced fixture. Added these narrow observed
-  forms and a regression case. This improves a specific parser boundary without guessing arbitrary
-  paraphrases or calling all election contracts equivalent.
-- A code-generated notice keeps comparison eligibility visible even if the model's explanation
-  omits it. Model prose remains probabilistic and is not a formal semantic verifier.
-
-## Verification and limits
-
-- Fixture tests include threshold, unit, boundary, day, timezone, polarity, cancellation, authority,
-  exclusions, late rule-text differences, truncated rules, nonbinary markets, deduplication, and
-  candidate bounds. Positive tests cover identical supplied terms.
-- Integration tests verify both rejected and ambiguous reports reach the model before synthesis,
-  and that single-platform/no-tool paths retain their behavior.
-- Scope is intentionally conservative: many valid equivalents will require review. No general
-  sports, monetary-unit conversion, date-language parser, or logical theorem prover is claimed.
-- Structured state lives in LangGraph's checkpointer; no custom conversation-memory map exists.
-- Recommended next gate: evaluate semantic equivalence on a labeled fixture set as planned in
-  Milestone 7, retaining deterministic vetoes and visible unknowns.
-
-## Execution results — 2026-09-18
-
-- 112 offline tests passed, including 26 matcher cases; Ruff lint/format, strict mypy, and diff
-  whitespace checks passed.
-- Public checks run separately: provider detail 2 passed, Polymarket MCP 1 passed, Kalshi MCP 1 passed.
-- Real headless Sol-medium suite: 7 passed. After refining observed settlement wording, the targeted
-  cross-platform case passed again and requires the explicit settlement-trigger rejection notice.
-- Docker runtime includes both independently discoverable MCP processes, runs as UID 10001, and
-  answered health checks on default 8080 and overridden 9090. Invalid chat input returned 422.
-  The host Codex gateway provided real model decisions while the container executed public MCP calls.
-- A request sent before container startup completed initially failed at the HTTP transport. Waiting
-  for `/health` before the acceptance request resolved the startup race; no application failure was
-  hidden. No deployment or real-key GPT-5 verification is claimed.
+See [Remaining work](../planning/IMPLEMENTATION_PLAN.md) for acceptance criteria and
+[Sports MCP design](SPORTS_MCP.md) for the data already available to that extension.
