@@ -20,8 +20,8 @@ Shared cities and ambiguous abbreviations produce clarification choices.
 | Team identity | Exact aliases from a reviewed provider catalog; same-city teams stay distinct |
 | Candidate selection | Results group both outcome contracts by game; separate event IDs preserve doubleheaders |
 | Dates | Exact local dates, ranges, next/most-recent selection, and IANA timezones |
-| Prices | One `quote_as_of` clock, stale flags, and distinct snapshots, trades, bids, and complements |
-| Coverage | Actual pages/events/contracts scanned, truncation, continuation evidence, and scoped totals |
+| Prices | Honest nullable quote clocks, explicit observation identity/cache reuse, stale flags, snapshots, trades, bids, and complements |
+| Coverage | Actual pages/events/contracts scanned, partial-result warnings, truncation, continuation evidence, and scoped totals |
 | Contract detail | Rules, game/close/resolution clocks, consumer links, and explicit settlement results |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
 | Comparison boundary | Deterministic contract checks run before synthesis; sports equivalence is not implemented |
@@ -101,10 +101,20 @@ Interactive HTTP documentation is at `/docs`.
 - Every game has a localized kickoff label and `pregame`, `live`, `awaiting_resolution`, or
   `settled` state. Two games on the same day remain separate.
 - Pass `discovery.next_cursor` back as `continuation` to read the next bounded page.
+- Continuations are opaque and request-bound. Provider, query, league, status, calendar filters,
+  and selectors are validated before any upstream request; do not edit or cross-use cursors.
+- Caller-correctable failures are MCP tool errors containing JSON with stable `error.code`,
+  `message`, and `fields`. Correct the named fields before retrying the call.
+- `discovery.discarded_record_count` and `warnings` report malformed/oversized individual provider
+  records. Valid candidates from the same structurally valid page are still returned.
 - Explicit series discovery is an optional precision control, not a prerequisite for an
   ordinary sports query.
-- `quote_as_of` is the observation time for returned quotes. `provider_updated_at` remains
-  provider record metadata; `quote_is_stale` and its reason surface stale/non-trading data.
+- `quote_as_of` is an authoritative provider quote clock or null; it never aliases `retrieved_at`.
+  `provider_updated_at` remains provider record metadata. `observation_id`, `cache_hit`, and
+  `cache_age_ms` identify explicit 30-second normalized-observation reuse across search/detail.
+  Missing quote timing is stale with a reason instead of being assigned the retrieval time.
+- Sports contracts retain `timezone`, `local_date`, and `scheduled_start_local` in their normalized
+  `sports` object, including an immediate detail call after search.
 - Fetch details before interpreting settlement rules. Resolved details expose
   `settlement_value`, `winning_outcome`, and `resolved_at`; prices are not settlement evidence.
 - Empty bounded discovery is not proof of absence. Polymarket automatically checks its league

@@ -1,5 +1,7 @@
 """Typed failures exposed by provider clients."""
 
+from typing import Any
+
 
 class MarketDataError(RuntimeError):
     """Base class for inspectable provider failures."""
@@ -40,3 +42,19 @@ class MarketValidationError(MarketDataError):
 
 class MarketMissingDataError(MarketDataError):
     """Required identity data is absent from a provider response."""
+
+
+class MarketRequestError(ValueError):
+    """Safe, stable diagnostic for a caller-correctable market request."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        fields: dict[str, Any] | None = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.fields = fields or {}
+        super().__init__(message)

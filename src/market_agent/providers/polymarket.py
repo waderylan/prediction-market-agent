@@ -130,7 +130,7 @@ class PolymarketClient(AsyncMarketClient):
             for _, market, event_id in candidates:
                 parsed = _parse_market(market, event_id=event_id, retrieved_at=retrieved_at)
                 if status is None or parsed.status == status:
-                    results.append(parsed)
+                    results.append(self.record_observation(parsed))
                 if len(results) == limit:
                     return tuple(results)
             if not has_more or not events or not new_ids:
@@ -156,12 +156,14 @@ class PolymarketClient(AsyncMarketClient):
             if sports:
                 parsed.provider_data["sports"] = sports.model_dump(mode="json")
             parsed.provider_data["event_slug"] = events[0].get("slug")
-        elif context := self._recent_sports_context(market_id):
+        if context := self._recent_sports_context(market_id):
             event_id, cached_sports, event_slug = context
+            if parsed.event_id is not None and parsed.event_id != event_id:
+                raise MarketValidationError(self.provider, "cached event identity conflict")
             parsed = parsed.model_copy(update={"event_id": event_id})
             parsed.provider_data["sports"] = cached_sports
             parsed.provider_data["event_slug"] = event_slug
-        return parsed
+        return self.reuse_observation(parsed)
 
 
 def _parse_market(

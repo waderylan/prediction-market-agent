@@ -2,6 +2,7 @@
 
 import json
 from contextlib import asynccontextmanager
+from copy import deepcopy
 
 import httpx
 import pytest
@@ -78,6 +79,18 @@ def fixture(provider):
 async def connection(provider, mode="success"):
     calls = []
     payload = fixture(provider)
+    if mode == "dirty":
+        if provider == "kalshi":
+            dirty = deepcopy(payload["events"][0]["markets"][0])
+            dirty["ticker"] = "KXMLBGAME-OPAQUE-DIRTY"
+            dirty["last_price_dollars"] = "not-a-price"
+            payload["events"][0]["markets"].insert(0, dirty)
+        else:
+            dirty_event = deepcopy(payload["events"][0])
+            dirty_event["id"] = "dirty-event"
+            dirty_event["markets"][0]["id"] = "dirty-market"
+            dirty_event["markets"][0]["outcomes"] = "not-json"
+            payload["events"].insert(0, dirty_event)
 
     def handler(request):
         calls.append(request)
@@ -85,8 +98,12 @@ async def connection(provider, mode="success"):
             raise httpx.ReadTimeout("sensitive diagnostic")
         if mode == "503":
             return httpx.Response(503, text="sensitive diagnostic")
+        if mode == "429":
+            return httpx.Response(429, text="sensitive diagnostic")
         if mode == "malformed":
             return httpx.Response(200, json={"events": False})
+        if mode == "pagination" and provider == "polymarket":
+            payload["pagination"]["hasMore"] = True
         if "/series/" in request.url.path:
             return httpx.Response(
                 200, json={"series": {"ticker": "KXMLBGAME", "title": "Professional Baseball Game"}}
@@ -135,27 +152,119 @@ async def test_sports_schema_and_call(provider):
         unclear = await session.call_tool(name, {"query": "Giants"})
         assert unclear.structuredContent["clarification"]
         assert not calls
-        result = await session.call_tool(name, {"query": "Yankees vs Padres", "limit": 2})
+        result = await session.call_tool(
+            name,
+            {
+                "query": "Yankees vs Padres",
+                "limit": 2,
+                "timezone": "America/Los_Angeles",
+            },
+        )
         assert not result.isError
         validate(result.structuredContent, tools[name].outputSchema)
         assert result.structuredContent["markets"] == []
         game = result.structuredContent["games"][0]
         market = game["contracts"][0]
-        assert game["local_date"] == "2026-09-20"
-        assert game["label"].endswith("UTC")
+        assert game["local_date"] == "2026-09-19"
+        assert game["timezone"] == "America/Los_Angeles"
+        assert game["label"].endswith("PDT")
         assert market["sports"]["league"] == "mlb"
+        assert market["sports"]["local_date"] == "2026-09-19"
+        assert market["sports"]["scheduled_start_local"].endswith("-07:00")
         assert market["outcome_quotes"][0]["price"] == "0.42"
-        assert market["quote_as_of"] == market["retrieved_at"]
+        assert market["quote_as_of"] is None
+        assert market["quote_is_stale"] is True
+        assert market["observation_id"].startswith(provider + ":")
+        assert market["cache_hit"] is False
         assert market["market_url"].startswith(f"https://{provider}.com/")
         detail_name = provider + "_get_market"
         detail = await session.call_tool(detail_name, {"market_id": market["market_id"]})
         assert not detail.isError
         validate(detail.structuredContent, tools[detail_name].outputSchema)
         assert detail.structuredContent["sports"]["scheduled_start"] == "2026-09-20T00:10:00Z"
+        assert detail.structuredContent["sports"] == market["sports"]
+        assert detail.structuredContent["observation_id"] == market["observation_id"]
+        assert detail.structuredContent["retrieved_at"] == market["retrieved_at"]
+        assert detail.structuredContent["cache_hit"] is True
+        assert detail.structuredContent["cache_age_ms"] >= 0
 
 
 @pytest.mark.parametrize("provider", ["kalshi", "polymarket"])
-@pytest.mark.parametrize("mode", ["timeout", "503", "malformed"])
+@pytest.mark.parametrize(
+    "arguments,code,field,value",
+    [
+        (
+            {"query": "Padres", "timezone": "Pacific/Nowhere"},
+            "invalid_timezone",
+            "timezone",
+            "Pacific/Nowhere",
+        ),
+        (
+            {"query": "Padres", "local_date": "2026-09-19", "date_from": "2026-09-18"},
+            "conflicting_date_filters",
+            "local_date",
+            "2026-09-19",
+        ),
+        (
+            {"query": "Padres", "date_from": "2026-09-21", "date_to": "2026-09-19"},
+            "reversed_date_range",
+            "date_from",
+            "2026-09-21",
+        ),
+        (
+            {"query": "Padres", "next_game_only": True, "most_recent_game_only": True},
+            "conflicting_selectors",
+            "next_game_only",
+            "true",
+        ),
+    ],
+)
+async def test_semantic_validation_is_specific_and_makes_no_provider_call(
+    provider, arguments, code, field, value
+):
+    async with connection(provider) as (session, calls):
+        result = await session.call_tool(provider + "_search_markets", arguments)
+        text = str(result)
+        assert result.isError
+        assert code in text and field in text and value.lower() in text.lower()
+        assert calls == []
+
+
+async def test_cursor_mismatches_are_specific_and_local():
+    async with connection("polymarket", "pagination") as (session, calls):
+        first = await session.call_tool(
+            "polymarket_search_markets", {"query": "Yankees", "limit": 1}
+        )
+        cursor = first.structuredContent["discovery"]["next_cursor"]
+        call_count = len(calls)
+        mismatch = await session.call_tool(
+            "polymarket_search_markets",
+            {"query": "Padres", "limit": 1, "continuation": cursor},
+        )
+        assert mismatch.isError and "cursor_query_mismatch" in str(mismatch)
+        assert len(calls) == call_count
+
+    async with connection("kalshi") as (session, calls):
+        mismatch = await session.call_tool(
+            "kalshi_search_markets", {"query": "Yankees", "continuation": cursor}
+        )
+        assert mismatch.isError and "cursor_provider_mismatch" in str(mismatch)
+        assert calls == []
+
+
+@pytest.mark.parametrize("provider", ["kalshi", "polymarket"])
+async def test_dirty_record_returns_partial_mcp_result_with_warning(provider):
+    async with connection(provider, "dirty") as (session, _):
+        result = await session.call_tool(provider + "_search_markets", {"query": "Yankees"})
+        assert not result.isError
+        assert result.structuredContent["games"]
+        discovery = result.structuredContent["discovery"]
+        assert discovery["discarded_record_count"] == 1
+        assert discovery["warnings"][0]["code"] == "discarded_provider_record"
+
+
+@pytest.mark.parametrize("provider", ["kalshi", "polymarket"])
+@pytest.mark.parametrize("mode", ["timeout", "429", "503", "malformed"])
 async def test_sports_errors_are_controlled(provider, mode):
     async with connection(provider, mode) as (session, _):
         result = await session.call_tool(provider + "_search_markets", {"query": "Yankees"})

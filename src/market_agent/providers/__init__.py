@@ -4,6 +4,7 @@ from market_agent.providers.exceptions import (
     MarketDataError,
     MarketHTTPError,
     MarketMissingDataError,
+    MarketRequestError,
     MarketTransportError,
     MarketValidationError,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "MarketDataError",
     "MarketHTTPError",
     "MarketMissingDataError",
+    "MarketRequestError",
     "MarketTransportError",
     "MarketValidationError",
     "PolymarketClient",

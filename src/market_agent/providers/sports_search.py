@@ -1,13 +1,18 @@
 """Bounded sports discovery inside the existing read-only provider servers."""
 
 import json
-from base64 import urlsafe_b64decode, urlsafe_b64encode
+from base64 import b64decode, urlsafe_b64encode
+from binascii import Error as Base64Error
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from market_agent.domain import CanonicalMarket, MarketStatus
-from market_agent.providers.exceptions import MarketValidationError
+from market_agent.providers.exceptions import (
+    MarketDataError,
+    MarketRequestError,
+    MarketValidationError,
+)
 from market_agent.providers.kalshi import KalshiClient, _resolution_source, _status_filter
 from market_agent.providers.kalshi import _parse_market as parse_kalshi
 from market_agent.providers.polymarket import PolymarketClient
@@ -15,6 +20,8 @@ from market_agent.providers.polymarket import _parse_market as parse_poly
 from market_agent.providers.polymarket import _status as poly_status
 from market_agent.providers.sports import (
     DiscoveryCoverage,
+    DiscoveryGameChoice,
+    DiscoveryWarning,
     League,
     SportsEvent,
     SportsQuery,
@@ -24,6 +31,9 @@ from market_agent.providers.sports import (
     sports_payload,
     words,
 )
+
+MAX_EVENT_RECORD_BYTES = 5_000_000
+MAX_MARKET_RECORD_BYTES = 250_000
 
 # Observed provider series, not identifier templates. Revalidate titles before use.
 KALSHI_SERIES: dict[str, tuple[League, str]] = {
@@ -45,11 +55,23 @@ def continuation_state(token: str | None, provider: str) -> dict[str, Any]:
         return {}
     try:
         padding = "=" * (-len(token) % 4)
-        value = json.loads(urlsafe_b64decode(token + padding))
-    except (ValueError, TypeError) as error:
-        raise ValueError("invalid continuation cursor") from error
-    if not isinstance(value, dict) or value.pop("provider", None) != provider:
-        raise ValueError("continuation cursor belongs to a different provider")
+        decoded = b64decode(token + padding, altchars=b"-_", validate=True)
+        value = json.loads(decoded.decode("utf-8"))
+    except (Base64Error, UnicodeDecodeError, ValueError, TypeError) as error:
+        raise MarketRequestError(
+            "invalid_cursor", "continuation is not a valid server-issued cursor"
+        ) from error
+    if not isinstance(value, dict):
+        raise MarketRequestError(
+            "invalid_cursor", "continuation is not a valid server-issued cursor"
+        )
+    cursor_provider = value.pop("provider", None)
+    if cursor_provider != provider:
+        raise MarketRequestError(
+            "cursor_provider_mismatch",
+            "continuation belongs to a different provider",
+            fields={"expected_provider": provider, "cursor_provider": cursor_provider},
+        )
     return value
 
 
@@ -75,6 +97,42 @@ def root_object(value: Any, provider: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise MarketValidationError(provider, "response must be an object")
     return value
+
+
+def record_size(
+    value: dict[str, Any], provider: str, record_type: Literal["event", "market"]
+) -> None:
+    """Reject one pathological record without rejecting an otherwise usable page."""
+    try:
+        size = len(json.dumps(value, separators=(",", ":")).encode())
+    except (TypeError, ValueError) as error:
+        raise MarketValidationError(provider, f"{record_type} is not JSON serializable") from error
+    limit = MAX_EVENT_RECORD_BYTES if record_type == "event" else MAX_MARKET_RECORD_BYTES
+    if size > limit:
+        raise MarketValidationError(provider, f"{record_type} exceeds {limit} byte safety limit")
+
+
+def discard_record(
+    coverage: DiscoveryCoverage,
+    record_type: Literal["event", "market"],
+    record: dict[str, Any],
+    error: MarketDataError,
+) -> None:
+    coverage.discarded_record_count += 1
+    if len(coverage.warnings) >= 20:
+        return
+    identifier = (
+        record.get("ticker") or record.get("id")
+        if record_type == "market"
+        else record.get("event_ticker") or record.get("id")
+    )
+    coverage.warnings.append(
+        DiscoveryWarning(
+            record_type=record_type,
+            record_id=str(identifier)[:100] if identifier is not None else None,
+            message=error.message[:300],
+        )
+    )
 
 
 def retain(results: dict[str, CanonicalMarket], market: CanonicalMarket) -> None:
@@ -182,7 +240,14 @@ async def search_kalshi(
     continuation: str | None = None,
     next_game_only: bool = False,
     most_recent_game_only: bool = False,
+    timezone: str = "UTC",
 ) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
+    if next_game_only and most_recent_game_only:
+        raise MarketRequestError(
+            "conflicting_selectors",
+            "next_game_only and most_recent_game_only are mutually exclusive",
+            fields={"next_game_only": True, "most_recent_game_only": True},
+        )
     if date_range is None:
         date_range = (
             datetime.combine(event_date, time.min, UTC) if event_date else None,
@@ -191,10 +256,48 @@ async def search_kalshi(
     scope = [k for k, (league, _) in KALSHI_SERIES.items() if league == query.league]
     if series_ticker:
         if series_ticker not in scope:
-            raise ValueError("series_ticker conflicts with sports league/game-winner scope")
+            raise MarketRequestError(
+                "conflicting_series_filter",
+                "series_ticker conflicts with the requested league and game-winner scope",
+                fields={"series_ticker": series_ticker, "league": query.league},
+            )
         scope = [series_ticker]
     elif query.league == "ncaa_football" and all(t.division == "FBS" for t in query.teams):
         scope = ["KXNCAAFGAME"]
+    state = continuation_state(continuation, "kalshi")
+    normalized_query = " vs ".join(team.name for team in query.teams)
+    expected_scope = {
+        "version": 2,
+        "normalized_query": normalized_query,
+        "league": query.league,
+        "teams": sorted(team.kalshi_id for team in query.teams),
+        "status": status.value if status else None,
+        "date_range": [value.isoformat() if value else None for value in date_range],
+        "next_game_only": next_game_only,
+        "most_recent_game_only": most_recent_game_only,
+    }
+    if state and state.get("normalized_query") != normalized_query:
+        raise MarketRequestError(
+            "cursor_query_mismatch",
+            "continuation does not match the requested sports query",
+            fields={"query": normalized_query, "cursor_query": state.get("normalized_query")},
+        )
+    if state and any(state.get(key) != value for key, value in expected_scope.items()):
+        raise MarketRequestError(
+            "cursor_filter_mismatch",
+            "continuation does not match the requested league, status, date, or selectors",
+            fields={"query": normalized_query, "league": query.league},
+        )
+    saved_cursors = state.get("cursors", {})
+    if not isinstance(saved_cursors, dict) or any(
+        key not in scope or not isinstance(value, str) for key, value in saved_cursors.items()
+    ):
+        raise MarketRequestError(
+            "cursor_filter_mismatch",
+            "continuation does not match the requested sports series scope",
+            fields={"series_scope": scope},
+        )
+    # All request-owned cursor state is validated before contacting Kalshi.
     for ticker in scope:
         payload = root_object(
             await client._request_json(f"/series/{quote(ticker, safe='')}"), "kalshi"
@@ -205,19 +308,6 @@ async def search_kalshi(
     coverage = DiscoveryCoverage(
         scope="Full-game winners; historical nested markets may be omitted."
     )
-    state = continuation_state(continuation, "kalshi")
-    expected_scope = {
-        "teams": sorted(team.kalshi_id for team in query.teams),
-        "status": status.value if status else None,
-        "date_range": [value.isoformat() if value else None for value in date_range],
-    }
-    if state and any(state.get(key) != value for key, value in expected_scope.items()):
-        raise ValueError("continuation cursor does not match this sports query")
-    saved_cursors = state.get("cursors", {})
-    if not isinstance(saved_cursors, dict) or any(
-        key not in scope or not isinstance(value, str) for key, value in saved_cursors.items()
-    ):
-        raise ValueError("continuation cursor does not match this sports scope")
     cursors: dict[str, str | None] = {key: saved_cursors.get(key) for key in scope}
     exhausted: set[str] = set()
     seen_cursors: set[tuple[str, str]] = set()
@@ -248,28 +338,39 @@ async def search_kalshi(
         coverage.pages_scanned += 1
         coverage.events_scanned += len(events)
         for event in events:
-            event_id = event.get("event_ticker")
-            if not isinstance(event_id, str) or event.get("series_ticker") != ticker:
-                raise MarketValidationError("kalshi", "event scope mismatch")
+            try:
+                record_size(event, "kalshi", "event")
+                event_id = event.get("event_ticker")
+                if not isinstance(event_id, str) or event.get("series_ticker") != ticker:
+                    raise MarketValidationError("kalshi", "event scope mismatch")
+                raw_markets = objects(event.get("markets"), "kalshi", "markets")
+                sports = kalshi_event(event, milestones)
+            except MarketDataError as error:
+                discard_record(coverage, "event", event, error)
+                continue
             if event_id in seen_events:
                 continue
             seen_events.add(event_id)
-            raw_markets = objects(event.get("markets"), "kalshi", "markets")
             coverage.markets_scanned += len(raw_markets)
-            sports = kalshi_event(event, milestones)
             if sports is None or not event_matches(sports, query, date_range):
                 continue
+            sports = sports.localized(timezone)
             for market in raw_markets:
-                if (
-                    not winner_market(market, sports.raw_title)
-                    or market.get("yes_sub_title") not in sports.raw_participants
-                ):
+                try:
+                    record_size(market, "kalshi", "market")
+                    if (
+                        not winner_market(market, sports.raw_title)
+                        or market.get("yes_sub_title") not in sports.raw_participants
+                    ):
+                        continue
+                    parsed = parse_kalshi(
+                        market,
+                        retrieved_at=retrieved_at,
+                        resolution_source=_resolution_source(event),
+                    )
+                except MarketDataError as error:
+                    discard_record(coverage, "market", market, error)
                     continue
-                parsed = parse_kalshi(
-                    market,
-                    retrieved_at=retrieved_at,
-                    resolution_source=_resolution_source(event),
-                )
                 if status is not None and parsed.status != status:
                     continue
                 parsed = parsed.model_copy(
@@ -284,6 +385,7 @@ async def search_kalshi(
                         }
                     }
                 )
+                parsed = client.record_observation(parsed)
                 retain(results, parsed)
         cursor = root.get("cursor")
         if cursor is not None and not isinstance(cursor, str):
@@ -381,7 +483,14 @@ async def search_polymarket(
     continuation: str | None = None,
     next_game_only: bool = False,
     most_recent_game_only: bool = False,
+    timezone: str = "UTC",
 ) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
+    if next_game_only and most_recent_game_only:
+        raise MarketRequestError(
+            "conflicting_selectors",
+            "next_game_only and most_recent_game_only are mutually exclusive",
+            fields={"next_game_only": True, "most_recent_game_only": True},
+        )
     if date_range is None:
         date_range = (
             datetime.combine(event_date, time.min, UTC) if event_date else None,
@@ -413,11 +522,30 @@ async def search_polymarket(
         search_query = min(nicknames, key=len) if nicknames else search_team.name
     tag = next(k for k, league in POLY_TAGS.items() if league == query.league)
     state = continuation_state(continuation, "polymarket")
-    if state and (state.get("tag") != tag or state.get("query") != search_query):
-        raise ValueError("continuation cursor does not match this sports query")
+    if state and state.get("query") != search_query:
+        raise MarketRequestError(
+            "cursor_query_mismatch",
+            "continuation does not match the requested sports query",
+            fields={"query": search_query, "cursor_query": state.get("query")},
+        )
+    expected_filters = {
+        "version": 2,
+        "league": query.league,
+        "tag": tag,
+        "status": status.value if status else None,
+        "date_range": [value.isoformat() if value else None for value in date_range],
+        "next_game_only": next_game_only,
+        "most_recent_game_only": most_recent_game_only,
+    }
+    if state and any(state.get(key) != value for key, value in expected_filters.items()):
+        raise MarketRequestError(
+            "cursor_filter_mismatch",
+            "continuation does not match the requested league, status, date, or selectors",
+            fields={"query": search_query, "league": query.league},
+        )
     mode = state.get("mode", "search")
     if mode not in {"search", "catalog"}:
-        raise ValueError("invalid continuation cursor")
+        raise MarketRequestError("invalid_cursor", "continuation contains an invalid mode")
     page_start = state.get("page", 1)
     catalog_series = state.get("series") if mode == "catalog" else None
     catalog_offset = state.get("offset", 0)
@@ -431,7 +559,7 @@ async def search_polymarket(
         or type(catalog_offset) is not int
         or catalog_offset < 0
     ):
-        raise ValueError("invalid continuation cursor")
+        raise MarketRequestError("invalid_cursor", "continuation contains invalid page state")
     for request_index in range(client.max_search_pages):
         page = page_start + request_index
         if catalog_series is not None:
@@ -484,26 +612,37 @@ async def search_polymarket(
         coverage.events_scanned += len(events)
         new_events = 0
         for event in events:
-            event_id = event.get("id")
-            if not isinstance(event_id, str):
-                raise MarketValidationError("polymarket", "event identity missing")
+            try:
+                record_size(event, "polymarket", "event")
+                event_id = event.get("id")
+                if not isinstance(event_id, str):
+                    raise MarketValidationError("polymarket", "event identity missing")
+                markets = objects(
+                    event["markets"] if event.get("markets") is not None else [],
+                    "polymarket",
+                    "markets",
+                )
+            except MarketDataError as error:
+                discard_record(coverage, "event", event, error)
+                continue
             if event_id in seen:
                 continue
             seen.add(event_id)
             new_events += 1
-            markets = objects(
-                event["markets"] if event.get("markets") is not None else [],
-                "polymarket",
-                "markets",
-            )
             coverage.markets_scanned += len(markets)
             for market in markets:
-                if status is not None and poly_status(market) != status:
+                try:
+                    record_size(market, "polymarket", "market")
+                    if status is not None and poly_status(market) != status:
+                        continue
+                    sports = poly_event(event, market, query.league)
+                    if sports is None or not event_matches(sports, query, date_range):
+                        continue
+                    sports = sports.localized(timezone)
+                    parsed = parse_poly(market, event_id=event_id, retrieved_at=retrieved_at)
+                except MarketDataError as error:
+                    discard_record(coverage, "market", market, error)
                     continue
-                sports = poly_event(event, market, query.league)
-                if sports is None or not event_matches(sports, query, date_range):
-                    continue
-                parsed = parse_poly(market, event_id=event_id, retrieved_at=retrieved_at)
                 parsed = parsed.model_copy(
                     update={
                         "provider_data": {
@@ -519,6 +658,7 @@ async def search_polymarket(
                     sports=sports.model_dump(mode="json"),
                     event_slug=event.get("slug") if isinstance(event.get("slug"), str) else None,
                 )
+                parsed = client.record_observation(parsed)
                 retain(results, parsed)
         coverage.continuation = (
             [{"series_id": catalog_series, "offset": catalog_offset}]
@@ -534,14 +674,19 @@ async def search_polymarket(
                     "mode": "catalog",
                     "series": catalog_series,
                     "offset": catalog_offset,
-                    "tag": tag,
                     "query": search_query,
+                    **expected_filters,
                 },
             )
             if more and catalog_series
             else continuation_token(
                 "polymarket",
-                {"mode": "search", "page": page + 1, "tag": tag, "query": search_query},
+                {
+                    "mode": "search",
+                    "page": page + 1,
+                    "query": search_query,
+                    **expected_filters,
+                },
             )
             if more
             else None
@@ -592,17 +737,37 @@ def finish(
     most_recent_game_only: bool = False,
 ) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
     if next_game_only and most_recent_game_only:
-        raise ValueError("next_game_only and most_recent_game_only are mutually exclusive")
+        raise MarketRequestError(
+            "conflicting_selectors",
+            "next_game_only and most_recent_game_only are mutually exclusive",
+            fields={"next_game_only": True, "most_recent_game_only": True},
+        )
     coverage.candidates_matched = len(results)
     events = {m.event_id: m.provider_data["sports"] for m in results.values()}
+    providers = {m.event_id: m.platform.value for m in results.values()}
     coverage.candidate_event_count = len(events)
     coverage.selection_required = len(events) > 1
-    coverage.matching_events = [
-        {"event_id": key, "title": value["raw_title"], "scheduled_start": value["scheduled_start"]}
-        for key, value in sorted(
-            events.items(), key=lambda item: (item[1]["scheduled_start"] or "9999", item[0] or "")
-        )[:10]
-    ]
+    coverage.matching_events = []
+    for key, value in sorted(
+        events.items(), key=lambda item: (item[1]["scheduled_start"] or "9999", item[0] or "")
+    )[:10]:
+        local = value.get("scheduled_start_local")
+        label = value["raw_title"]
+        if local:
+            local_at = datetime.fromisoformat(local.replace("Z", "+00:00"))
+            label = f"{label} — {local_at.strftime('%Y-%m-%d %I:%M %p %Z')}"
+        coverage.matching_events.append(
+            DiscoveryGameChoice(
+                provider="kalshi" if providers[key] == "kalshi" else "polymarket",
+                event_id=key or "",
+                participants=value["participants"],
+                scheduled_start=value["scheduled_start"],
+                timezone=value.get("timezone") or "UTC",
+                local_date=value.get("local_date"),
+                scheduled_start_local=value.get("scheduled_start_local"),
+                label=label,
+            )
+        )
     coverage.truncated = (
         bool(coverage.has_more) or bool(coverage.continuation) or len(events) > limit
     )

@@ -130,3 +130,15 @@ async def test_timeout_retries_are_bounded() -> None:
 
     assert attempts == 2
     assert caught.value.attempts == 2
+
+
+@pytest.mark.unit
+async def test_response_byte_limit_is_enforced_before_json_parsing() -> None:
+    http = _http_client(
+        lambda request: httpx.Response(200, json={"padding": "x" * 100}, request=request)
+    )
+    client = PolymarketClient(http_client=http, max_response_bytes=32)
+
+    with pytest.raises(MarketValidationError, match="32 byte safety limit"):
+        await client.get_market("1")
+    await http.aclose()

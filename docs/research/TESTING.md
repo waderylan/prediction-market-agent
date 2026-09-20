@@ -40,6 +40,9 @@ The sports suite specifically verifies:
 - A sports limit counts games, each game groups its returned outcome contracts, and next/recent
   selectors choose by scheduled start.
 - Opaque continuation cursors resume Kalshi cursor and Polymarket page traversal directly.
+- Cursor provider/query/filter mismatches return distinct stable codes before provider I/O.
+- Invalid timezones, conflicting dates, reversed ranges, and conflicting selectors return their
+  offending fields and values before provider I/O.
 - Kalshi NCAA scopes share one page budget; pagination cycles stop.
 - Polymarket can recover a game through league metadata/catalog fallback after empty text search.
 - Gamma search totals retain their actual meaning even when fallback finds a contract.
@@ -47,10 +50,15 @@ The sports suite specifically verifies:
 - Scheduled start remains separate from later trading close and resolution timing.
 - Lifecycle moves through pregame, live, awaiting resolution, and settled without treating an
   exchange's open flag as proof that a completed game is live.
-- Search contracts share one `quote_as_of`; stale flags, consumer links, explicit settlement,
-  and invalid expected-resolution timing are verified independently from displayed prices.
+- Search/detail reuse one explicit `observation_id` inside the 30-second cache window and expose
+  cache hits/age. A missing provider quote clock leaves `quote_as_of` null and stale with a reason.
+- Malformed individual provider records are discarded with bounded warnings while valid siblings
+  remain available; malformed page roots still fail safely.
+- Local timezone/date/start metadata survives search-to-detail projection.
 - Conflicting identities, timestamps, duplicate event ownership, and nonfinite prices fail.
 - External cancellation propagates; provider failures remain controlled tool errors.
+- Injected timeout, 429, 503, and malformed-response transports exercise outage behavior without a
+  production failure switch; a platform-specific failure never substitutes the other provider.
 - The agent receives the sports schema through real MCP and validates it.
 
 ## Public checks

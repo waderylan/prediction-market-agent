@@ -51,6 +51,12 @@ The dates above illustrate input syntax, not an assertion that a game or market 
 which must be an IANA name. `event_date` is an exact-date alias. Exact dates and ranges cannot be
 combined. `next_game_only` and `most_recent_game_only` are mutually exclusive.
 
+Semantic request failures are MCP tool errors whose text is compact JSON with stable `error.code`,
+`message`, and `fields`. Current codes distinguish invalid timezones, conflicting date filters,
+reversed ranges, conflicting selectors, invalid cursors, provider-mismatched cursors,
+query-mismatched cursors, and filter-mismatched cursors. Request-owned validation completes before
+provider I/O. The caller should change the named field rather than retrying unchanged arguments.
+
 Resolution follows these rules:
 
 1. Normalize case, whitespace, and punctuation into token boundaries.
@@ -237,6 +243,9 @@ prevents an exchange's still-open flag from claiming that a completed game is li
 `candidate_event_count` reports the full count within that scan, and `selection_required`
 signals that a singular request needs game selection. Each `games[]` entry supplies the local
 label needed to make that selection.
+Every matching-event choice includes provider, event ID, participants, UTC start, requested
+timezone, local date, localized start, and a display label; `selection_required` is never the only
+disambiguation evidence.
 
 ## Prices, clocks, and links
 
@@ -256,12 +265,18 @@ A Kalshi NO label is `Not <participant>`, not the opponent's name: cancellation 
 settlement can prevent that logical substitution. Named Polymarket outcomes do not acquire
 fabricated YES/NO prices or bid/ask assignments. No additional order-book requests are made.
 
-`quote_as_of` is the authoritative observation time for every quote in one search response;
-all contracts in that response share it. `retrieved_at` remains the underlying retrieval time.
-`provider_updated_at` is retained as provider record metadata, not relabeled as a trade clock.
-`quote_is_stale` is true for non-trading contracts and when open-provider record metadata is
-more than 24 hours old; `quote_stale_reason` explains the flag. `price_observed_at` and
-`last_trade_at` remain null when the provider supplies no such clock.
+`quote_as_of` is reserved for an authoritative provider quote timestamp. The mapped endpoints do
+not currently supply one, so it is null rather than copied from `retrieved_at` or generic record
+metadata. `retrieved_at` remains the response-observation time. `provider_updated_at` is retained
+as provider record metadata, not relabeled as a quote or trade clock. Missing authoritative timing,
+non-trading contracts, and old metadata produce an explicit stale flag/reason.
+
+Every normalized provider response receives an `observation_id`. A bounded 256-entry, 30-second
+cache reuses quote-bearing fields for an immediate detail call and exposes `cache_hit` plus
+`cache_age_ms`; it does not pretend a second fetch is the same quote by coincidence. The detail
+projection also retains the search's timezone, local date, and localized scheduled start in the
+same `sports` object. Polymarket's separate 15-minute sports-context cache continues to preserve
+event identity when Gamma omits the event array.
 
 | Time field | Source and interpretation |
 |---|---|
@@ -276,8 +291,10 @@ conflicting identities fail validation; normal settlement timing does not create
 than presented as valid.
 Detail retrieval uses the exact event ID to recover Kalshi milestone metadata.
 Polymarket detail reuses verified search event metadata from a bounded 15-minute, 256-entry
-in-process cache when Gamma omits the event array. The detail quote still comes from a fresh
-market request; expired or absent context remains null instead of reconstructing an event ID.
+in-process cache when Gamma omits the event array. Inside the separate 30-second observation
+window, a detail response deliberately reuses the search quote fields and observation ID while
+fresh detail metadata supplies rules and settlement. Expired or absent context remains null instead
+of reconstructing an event ID.
 
 `source_url` retains its compatible API provenance meaning; `api_url` makes that meaning
 explicit. Polymarket `market_url` uses the documented human-facing `/market/{slug}` route
@@ -305,6 +322,8 @@ unambiguous. The public fields are `settlement_value`, `winning_outcome`, and `r
 | `provider_total` | Gamma public-search total before local contract filters; null if unavailable |
 | `total_meaning` | Explains that total's scope |
 | `stop_reason` | Exhaustion, result limit, page budget, or repeated/empty-page guard |
+| `discarded_record_count` | Malformed or oversized individual provider records skipped safely |
+| `warnings` | Bounded record type/ID/reason diagnostics for those discards |
 
 A Gamma search total is not the number of matching moneylines. It can be zero while the
 league-catalog fallback finds a game. An offset page containing 100 entries only suggests
@@ -321,7 +340,10 @@ not prove universal market absence.
 Each logical HTTP request allows at most two retries. HTTP attempts have a ten-second
 timeout and bounded backoff. The MCP tool has a thirty-second wall-clock budget, including
 retries and metadata. Cancellation propagates; it is not converted into an empty result.
-Malformed data and provider failures return sanitized MCP errors.
+Each response is capped at 10 MB; individual events and markets have smaller explicit safety
+limits. Once the page root and pagination structure are usable, event/market records parse
+independently. Malformed records produce partial results and bounded warnings. Structurally unsafe
+page roots and provider failures still return sanitized MCP errors.
 
 The generic Kalshi search retains its own bounded three-page/ten-event expansion path.
 Generic Polymarket search retains its three-page early-completion path. The richer

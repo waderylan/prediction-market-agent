@@ -113,6 +113,13 @@ def create_server(client: KalshiClient | None = None) -> FastMCP[Any]:
         Generic non-sports topics retain bounded catalog search and optional series discovery.
         Pass discovery.next_cursor as continuation for the next bounded page. Empty results do
         not prove absence. Defaults open; resolved means settled; null includes all states.
+        A cursor is bound to this provider, normalized query, league, status, dates, and selectors;
+        never edit or reuse it for another request. Caller-correctable failures are isError results
+        containing JSON error.code, message, and fields; fix those fields before retrying.
+        discovery.warnings and discarded_record_count identify isolated unsafe provider records;
+        valid games remain usable. matching_events supplies complete labeled game choices.
+        quote_as_of is null when Kalshi supplies no authoritative quote timestamp; never replace it
+        with retrieved_at. observation_id identifies a cached quote snapshot.
         Only use exact returned MARKET tickers for details; never construct or guess tickers.
         Never substitute Polymarket for a Kalshi request.
         """
@@ -151,6 +158,7 @@ def create_server(client: KalshiClient | None = None) -> FastMCP[Any]:
                     continuation=continuation,
                     next_game_only=next_game_only,
                     most_recent_game_only=most_recent_game_only,
+                    timezone=zone.key,
                 )
                 return KalshiSearchResults(
                     query=query,
@@ -195,6 +203,9 @@ def create_server(client: KalshiClient | None = None) -> FastMCP[Any]:
         Use remembered tickers directly for fresh quotes. Read-only public data; no account needed.
         Only copy exact tickers supplied by the user or returned by discovery (including memory).
         Never construct or guess tickers, dates, team codes, or game-time segments.
+        Within the declared 30-second observation cache, a search/detail pair keeps the same
+        observation_id and quote fields; cache_hit and cache_age_ms make reuse explicit. Sports
+        detail retains the search timezone, local_date, and scheduled_start_local when cached.
         """
         async with controlled_errors("Kalshi"):
             assert active_client is not None

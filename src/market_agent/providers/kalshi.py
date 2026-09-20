@@ -171,7 +171,7 @@ class KalshiClient(AsyncMarketClient):
                     continue
                 seen_markets.add(parsed.market_id)
                 market_score = event_score + _relevance(query, _market_text(market))
-                ranked_markets.append((market_score, parsed))
+                ranked_markets.append((market_score, self.record_observation(parsed)))
 
         ranked_markets.sort(key=lambda item: item[0], reverse=True)
         return tuple(market for _, market in ranked_markets[:limit])
@@ -221,7 +221,7 @@ class KalshiClient(AsyncMarketClient):
             if sports and winner_market(market, sports.raw_title):
                 parsed.provider_data["sports"] = sports.model_dump(mode="json")
                 parsed.provider_data["series_ticker"] = event.get("series_ticker")
-            return parsed
+            return self.reuse_observation(parsed)
         resolution_source: str | None = None
         series_ticker = _optional_str(market.get("series_ticker"))
         if series_ticker is not None:
@@ -229,10 +229,12 @@ class KalshiClient(AsyncMarketClient):
             series_root = _as_dict(series_payload, "series response")
             series = _as_dict(series_root.get("series"), "series response series")
             resolution_source = _resolution_source(series)
-        return _parse_market(
-            market,
-            retrieved_at=retrieved_at,
-            resolution_source=resolution_source,
+        return self.reuse_observation(
+            _parse_market(
+                market,
+                retrieved_at=retrieved_at,
+                resolution_source=resolution_source,
+            )
         )
 
     async def _get_event(self, event_ticker: str) -> dict[str, Any]:

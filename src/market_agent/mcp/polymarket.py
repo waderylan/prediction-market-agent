@@ -64,6 +64,11 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
         event_date remains an exact-date alias. next_game_only and most_recent_game_only select
         one game. limit counts games, not contracts. Doubleheaders keep separate event IDs.
         Pass discovery.next_cursor as continuation for the next bounded page.
+        A cursor is bound to Polymarket, normalized query, league, status, dates, and selectors;
+        never edit or reuse it for another request. Caller-correctable failures are isError results
+        containing JSON error.code, message, and fields; fix those fields before retrying.
+        discovery.warnings and discarded_record_count identify isolated unsafe provider records;
+        valid games remain usable. matching_events supplies complete labeled game choices.
         Spreads/totals/props/futures are excluded
         from sports discovery. Named outcomes carry labeled snapshot prices, not YES prices.
         Generic topics retain bounded free-text discovery. Defaults to open
@@ -72,6 +77,8 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
         if empty. Fetch a candidate by ID for resolution rules before interpreting its odds.
         Scans up to three pages, stopping when enough candidates are found. Resolved requires
         explicit provider resolution metadata; a zero or one price does not prove settlement.
+        quote_as_of is null when Gamma supplies no authoritative quote timestamp; never substitute
+        retrieved_at. observation_id identifies the normalized quote snapshot.
         """
         async with controlled_errors("Polymarket"):
             assert active_client is not None
@@ -100,6 +107,7 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
                     continuation=continuation,
                     next_game_only=next_game_only,
                     most_recent_game_only=most_recent_game_only,
+                    timezone=zone.key,
                 )
                 return SearchResults(
                     markets=[],
@@ -130,6 +138,9 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
         an independent probability forecast. No trading or account access.
         YES bid/ask are available only for standard Yes/No outcome ordering. Team-named or
         reversed outcomes have null YES bid/ask; do not infer a YES mapping for them.
+        Within the declared 30-second observation cache, a search/detail pair keeps the same
+        observation_id and quote fields; cache_hit and cache_age_ms make reuse explicit. Sports
+        detail retains the search timezone, local_date, and scheduled_start_local when cached.
         """
         async with controlled_errors("Polymarket"):
             assert active_client is not None

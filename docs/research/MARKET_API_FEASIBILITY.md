@@ -64,15 +64,17 @@ Base URLs are `https://external-api.kalshi.com/trade-api/v2` and
 | `expected_resolution_time` | `expected_expiration_time` | Null |
 | `resolution_deadline` | `latest_expiration_time`, otherwise `expiration_time` | Null |
 | `provider_updated_at` | `updated_time` | `updatedAt` |
-| `quote_as_of` | Shared server observation time | Shared server observation time |
+| `quote_as_of` | Null unless an authoritative price clock is supplied | Null unless an authoritative price clock is supplied |
 | settlement | `settlement_value_dollars`, `result`, `settlement_ts` | Explicit resolution plus unambiguous terminal outcome vector and `closedTime` |
 | `price_observed_at/last_trade_at` | Null without those specific clocks | Null without those specific clocks |
 | `rules` | Primary and secondary rule text | Description |
 | `api_url/source_url` | Market API endpoint | Market API endpoint |
 | `market_url` | Indexed series/event route plus returned identities | Documented market route plus returned slug |
 
-Object-update time is not last-trade time. `quote_as_of` records when this server observed the
-response, and stale flags keep old/non-trading data visible. Trading close is not scheduled game start.
+Object-update time is not last-trade or quote time. `quote_as_of` therefore remains null for the
+currently mapped endpoints instead of copying `retrieved_at`; stale flags explain the missing
+authoritative clock. `observation_id` identifies normalized response reuse independently from time.
+Trading close is not scheduled game start.
 A NO complement is not necessarily the opponent's win. Missing data remains null.
 The server does not infer settlement from a 99-cent or 1-cent trade. Settlement fields require
 provider resolution evidence. The server does not fetch order books because this product does

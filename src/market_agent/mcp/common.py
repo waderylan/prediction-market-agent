@@ -1,6 +1,7 @@
 """Bounded canonical projections and safe errors shared by separate market servers."""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -16,6 +17,7 @@ from market_agent.domain import CanonicalMarket, MarketStatus, Platform
 from market_agent.providers.exceptions import (
     MarketHTTPError,
     MarketMissingDataError,
+    MarketRequestError,
     MarketTransportError,
     MarketValidationError,
 )
@@ -55,9 +57,12 @@ class MarketSummary(BaseModel):
     close_time: datetime | None
     source_url: Annotated[str, Field(max_length=2048)]
     retrieved_at: datetime
-    quote_as_of: datetime
+    quote_as_of: datetime | None
     quote_is_stale: bool
     quote_stale_reason: str | None = None
+    observation_id: str | None = None
+    cache_hit: bool = False
+    cache_age_ms: int = Field(default=0, ge=0)
     event_id: str | None = None
     raw_title: ShortText | None = None
     sports: SportsEvent | None = None
@@ -151,23 +156,28 @@ def project(market: CanonicalMarket, *, detail: bool = False) -> MarketSummary:
             f"https://kalshi.com/markets/{quote(series_ticker.lower(), safe='')}/x/"
             f"{quote(market.event_id.lower(), safe='')}"
         )
-    data["quote_as_of"] = market.retrieved_at
-    data["quote_is_stale"] = False
+    # Neither provider documents its generic record-update clock as the timestamp of the
+    # returned quote. Only expose an actual price-observation clock when one exists.
+    data["quote_as_of"] = data.get("price_observed_at")
+    stale_reasons: list[str] = []
+    if data["quote_as_of"] is None:
+        stale_reasons.append(
+            "Provider supplies no authoritative timestamp for this quote observation."
+        )
     if market.status not in {MarketStatus.OPEN, MarketStatus.PAUSED, MarketStatus.UNOPENED}:
-        data["quote_is_stale"] = True
-        data["quote_stale_reason"] = "The contract is not actively trading."
-    else:
-        updated = data.get("provider_updated_at")
-        if isinstance(updated, str):
-            try:
-                updated_at = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-            except ValueError:
-                updated_at = None
-            if updated_at and market.retrieved_at - updated_at.astimezone(UTC) > timedelta(days=1):
-                data["quote_is_stale"] = True
-                data["quote_stale_reason"] = (
-                    "Provider record metadata is more than 24 hours old; verify before use."
-                )
+        stale_reasons.append("The contract is not actively trading.")
+    updated = data.get("provider_updated_at")
+    if isinstance(updated, str):
+        try:
+            updated_at = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+        except ValueError:
+            updated_at = None
+        if updated_at and market.retrieved_at - updated_at.astimezone(UTC) > timedelta(days=1):
+            stale_reasons.append(
+                "Provider record metadata is more than 24 hours old; verify before use."
+            )
+    data["quote_is_stale"] = bool(stale_reasons)
+    data["quote_stale_reason"] = " ".join(stale_reasons) or None
     sports = data.get("sports")
     if sports:
         mapping = dict(zip(sports["raw_participants"], sports["participants"], strict=True))
@@ -237,7 +247,7 @@ def group_games(markets: list[CanonicalMarket], *, timezone: str) -> list[Sports
         ):
             raise MarketValidationError(values[0].platform.value, "game contracts disagree")
         contracts = [project(value) for value in values]
-        observed_at = max(contract.quote_as_of for contract in contracts)
+        observed_at = max(contract.retrieved_at for contract in contracts)
         status, reason = _live_status(sports, contracts, observed_at)
         local = sports.scheduled_start.astimezone(zone) if sports.scheduled_start else None
         market_urls = {contract.market_url for contract in contracts if contract.market_url}
@@ -291,6 +301,21 @@ async def controlled_errors(provider: str) -> AsyncIterator[None]:
     except (MarketValidationError, ValidationError):
         raise ToolError(
             f"{provider} returned malformed or oversized market data; cannot use it."
+        ) from None
+    except MarketRequestError as error:
+        raise ToolError(
+            json.dumps(
+                {
+                    "error": {
+                        "code": error.code,
+                        "message": error.message,
+                        "fields": error.fields,
+                    }
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+                default=str,
+            )
         ) from None
     except ValueError:
         raise ToolError(

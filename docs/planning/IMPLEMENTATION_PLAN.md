@@ -180,7 +180,8 @@ Multi-server MCP client
   - `volume`
   - consumer-facing `market_url`
   - provider API provenance URL
-  - `quote_as_of`, `provider_updated_at`, and `quote_is_stale`
+  - nullable authoritative `quote_as_of`, `retrieved_at`, `provider_updated_at`, and stale reason
+  - `observation_id`, `cache_hit`, and `cache_age_ms`
   - `settlement_value`, `winning_outcome`, and `resolved_at`
   - `retrieved_at`
 - Attach a typed sports event containing league, provider event identity, raw and canonical
@@ -572,7 +573,7 @@ Multi-server MCP client
 - Platform-specific queries do not force the other market MCP.
 - Local-date requests use the requested IANA timezone rather than treating a UTC calendar date as
   the user's date.
-- Search/detail follow-ups preserve sports metadata and a coherent observation timestamp.
+- Search/detail follow-ups preserve sports metadata and one explicit normalized observation identity.
 - Multi-turn follow-ups use the correct session context.
 - The agent handles arbitrary reasonable in-scope queries rather than memorized examples.
 - `NO POSITION` is produced when evidence or equivalence is insufficient.
@@ -623,6 +624,12 @@ Multi-server MCP client
 - Test ambiguous aliases, unknown opponents, unsupported spreads/totals/props, invalid timezones,
   conflicting date filters, reversed ranges, mutually exclusive selectors, and invalid limits.
 - Test malformed, provider-mismatched, and query-mismatched continuation cursors.
+- Preserve stable validation codes and offending fields, and prove semantic/cursor rejection occurs
+  before provider I/O.
+- Parse provider records independently, return bounded discard warnings with partial results, and
+  enforce page/record size limits.
+- Give cached normalized observations an identity and explicit hit/age metadata; never relabel
+  retrieval time as quote provenance.
 - Test bounded empty coverage, stale quotes, awaiting-resolution lifecycle, explicit settlement,
   inconsistent provider timing, and missing sports detail context.
 - Run formatting, linting, type checking, unit tests, and integration tests.

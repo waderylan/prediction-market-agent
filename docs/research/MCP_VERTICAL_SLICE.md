@@ -39,9 +39,11 @@ The host checks provider identity and requested detail IDs. Each tool result has
 models with decimal strings and explicit nulls. Detail rules are limited to 12,000 characters
 with `rules_truncated`; a truncated rule cannot establish full settlement equivalence.
 
-Provider transport failures, HTTP errors, incomplete data, malformed data, and oversized
-projections become sanitized tool errors. Each MCP tool also has a thirty-second wall-clock
-budget; the client's per-attempt timeouts and retry bounds remain active inside it.
+Provider transport failures, HTTP errors, structurally unsafe page roots, incomplete data, and
+oversized projections become sanitized tool errors. Malformed or oversized individual records on
+an otherwise usable page are discarded independently with bounded structured warnings. Each MCP
+tool also has a thirty-second wall-clock budget; the client's per-attempt timeouts and retry bounds
+remain active inside it.
 External cancellation propagates.
 
 The agent catches tool/transport/schema failures and continues with an explicit inability
@@ -60,9 +62,10 @@ contracts and carries localized kickoff labels, lifecycle status, consumer links
 and explicit settlement when available. Exact local dates, inclusive date ranges, next/recent
 selectors, and opaque continuation cursors stay inside the existing two search tools. The agent
 validates both generic `markets[]` and sports `games[].contracts[]` paths.
-The Polymarket client retains verified search event context for 15 minutes in a bounded cache
-because Gamma market detail can omit its event array; contract quotes still come from the fresh
-detail response.
+The Polymarket client retains verified search event context for 15 minutes because Gamma market
+detail can omit its event array. A separate 30-second normalized-observation cache gives immediate
+search/detail calls one explicit observation identity and exposes cache hit/age. Provider retrieval
+time is never relabeled as quote time.
 
 [Sports MCP design](SPORTS_MCP.md) explains catalog provenance, series selection, Gamma
 fallback, output fields, and budgets. [Provider contracts](MARKET_API_FEASIBILITY.md)

@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from market_agent.providers.exceptions import MarketRequestError
+
 League = Literal["mlb", "nfl", "ncaa_football"]
 Division = Literal["FBS", "FCS"]
 LiveStatus = Literal["pregame", "live", "awaiting_resolution", "settled"]
@@ -198,6 +200,9 @@ class SportsEvent(BaseModel):
     line: None = None
     scheduled_start: datetime | None = None
     schedule_source: str | None = None
+    timezone: str | None = None
+    local_date: str | None = None
+    scheduled_start_local: datetime | None = None
     comparison_eligibility: Literal["insufficient_evidence"] = "insufficient_evidence"
     comparison_eligibility_reason: str = (
         "Discovery verifies event identity and contract type, but not equivalent settlement rules."
@@ -210,6 +215,45 @@ class SportsEvent(BaseModel):
             raise ValueError("scheduled_start must have a timezone")
         return value.astimezone(UTC) if value else None
 
+    @field_validator("scheduled_start_local")
+    @classmethod
+    def aware_local(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("scheduled_start_local must have a timezone")
+        return value
+
+    def localized(self, timezone: str) -> "SportsEvent":
+        """Attach the caller's display context without changing provider event identity."""
+        zone = ZoneInfo(timezone)
+        local = self.scheduled_start.astimezone(zone) if self.scheduled_start else None
+        return self.model_copy(
+            update={
+                "timezone": zone.key,
+                "local_date": local.date().isoformat() if local else None,
+                "scheduled_start_local": local,
+            }
+        )
+
+
+class DiscoveryWarning(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: Literal["discarded_provider_record"] = "discarded_provider_record"
+    record_type: Literal["event", "market"]
+    record_id: str | None = None
+    message: str
+
+
+class DiscoveryGameChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: Literal["kalshi", "polymarket"]
+    event_id: str
+    participants: list[str] = Field(min_length=2, max_length=2)
+    scheduled_start: datetime | None
+    timezone: str
+    local_date: str | None
+    scheduled_start_local: datetime | None
+    label: str
+
 
 class DiscoveryCoverage(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -218,7 +262,7 @@ class DiscoveryCoverage(BaseModel):
     markets_scanned: int = Field(default=0, ge=0)
     candidates_matched: int = Field(default=0, ge=0)
     candidate_event_count: int = Field(default=0, ge=0)
-    matching_events: list[dict[str, str | None]] = Field(default_factory=list, max_length=10)
+    matching_events: list[DiscoveryGameChoice] = Field(default_factory=list, max_length=10)
     selection_required: bool = False
     truncated: bool = False
     has_more: bool | None = None
@@ -228,6 +272,8 @@ class DiscoveryCoverage(BaseModel):
     total_meaning: str | None = None
     stop_reason: str = "not_started"
     scope: str = "bounded discovery; not proof of market absence"
+    discarded_record_count: int = Field(default=0, ge=0)
+    warnings: list[DiscoveryWarning] = Field(default_factory=list, max_length=20)
 
 
 def date_bounds(
@@ -242,16 +288,42 @@ def date_bounds(
     try:
         zone = ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError) as error:
-        raise ValueError("timezone must be a valid IANA timezone") from error
+        raise MarketRequestError(
+            "invalid_timezone",
+            "timezone must be a valid IANA timezone",
+            fields={"timezone": timezone},
+        ) from error
     exact = local_date or event_date
     if event_date and local_date and event_date != local_date:
-        raise ValueError("event_date and local_date conflict")
+        raise MarketRequestError(
+            "conflicting_date_filters",
+            "event_date and local_date cannot specify different dates",
+            fields={"event_date": event_date.isoformat(), "local_date": local_date.isoformat()},
+        )
     if exact and (date_from or date_to):
-        raise ValueError("use an exact date or a date range, not both")
+        supplied = {
+            key: value.isoformat()
+            for key, value in {
+                "event_date": event_date,
+                "local_date": local_date,
+                "date_from": date_from,
+                "date_to": date_to,
+            }.items()
+            if value is not None
+        }
+        raise MarketRequestError(
+            "conflicting_date_filters",
+            "exact date filters and date range filters are mutually exclusive",
+            fields=supplied,
+        )
     start_date = exact or date_from
     end_date = exact or date_to
     if start_date and end_date and start_date > end_date:
-        raise ValueError("date_from must be on or before date_to")
+        raise MarketRequestError(
+            "reversed_date_range",
+            "date_from must be on or before date_to",
+            fields={"date_from": start_date.isoformat(), "date_to": end_date.isoformat()},
+        )
     start = datetime.combine(start_date, time.min, zone).astimezone(UTC) if start_date else None
     end = (
         datetime.combine(date.fromordinal(end_date.toordinal() + 1), time.min, zone).astimezone(UTC)

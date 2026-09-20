@@ -631,10 +631,78 @@ async def test_limit_counts_games_and_groups_both_kalshi_contracts():
     assert len(markets) == 2
     assert {market.event_id for market in markets} == {first["event_ticker"]}
     assert coverage.candidate_event_count == 2 and coverage.truncated
+    assert coverage.selection_required
+    assert len(coverage.matching_events) == 2
+    assert all(choice.provider == "kalshi" for choice in coverage.matching_events)
+    assert all(
+        choice.event_id and len(choice.participants) == 2 for choice in coverage.matching_events
+    )
+    assert all(
+        choice.local_date and choice.scheduled_start_local for choice in coverage.matching_events
+    )
+    assert all("UTC" in choice.label for choice in coverage.matching_events)
     games = group_games(markets, timezone="America/Los_Angeles")
     assert len(games) == 1 and len(games[0].contracts) == 2
     assert games[0].local_date == "2026-09-19"
     assert "PDT" in games[0].label
+
+
+async def test_dirty_polymarket_record_is_discarded_without_losing_valid_candidate():
+    valid = poly_fixture()
+    dirty = poly_fixture("dirty-event", "dirty-market")
+    dirty["markets"][0]["outcomes"] = "not-json"
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "events": [dirty, valid],
+                "pagination": {"hasMore": False, "totalResults": 2},
+            },
+        )
+
+    async with http_client(handler, "polymarket") as http:
+        markets, coverage = await search_polymarket(
+            PolymarketClient(http_client=http),
+            resolve_query("Yankees"),
+            status=MarketStatus.OPEN,
+            limit=2,
+        )
+    assert [market.market_id for market in markets] == ["201"]
+    assert coverage.discarded_record_count == 1
+    assert coverage.warnings[0].record_id == "dirty-market"
+    assert "outcomes" in coverage.warnings[0].message
+
+
+async def test_dirty_kalshi_market_is_discarded_without_losing_game():
+    event, milestone = kalshi_fixture()
+    dirty = copy.deepcopy(event["markets"][0])
+    dirty["ticker"] = "KXMLBGAME-OPAQUE-1-DIRTY"
+    dirty["last_price_dollars"] = "not-a-price"
+    event["markets"].insert(0, dirty)
+
+    def handler(request):
+        if "/series/" in request.url.path:
+            return httpx.Response(
+                200,
+                json={"series": {"ticker": "KXMLBGAME", "title": KALSHI_SERIES["KXMLBGAME"][1]}},
+            )
+        return httpx.Response(
+            200,
+            json={"events": [event], "milestones": [milestone], "cursor": ""},
+        )
+
+    async with http_client(handler, "kalshi") as http:
+        markets, coverage = await search_kalshi(
+            KalshiClient(http_client=http),
+            resolve_query("Yankees"),
+            status=MarketStatus.OPEN,
+            limit=1,
+            series_ticker=None,
+        )
+    assert len(markets) == 2
+    assert coverage.discarded_record_count == 1
+    assert coverage.warnings[0].record_id == dirty["ticker"]
 
 
 async def test_continuation_cursor_can_be_passed_back_to_kalshi_search():
@@ -706,8 +774,9 @@ def test_settlement_and_quote_freshness_are_explicit():
     assert summary.settlement_value == 1
     assert summary.winning_outcome == "New York Y"
     assert summary.resolved_at == datetime(2026, 9, 20, 5, tzinfo=UTC)
-    assert summary.quote_as_of == canonical.retrieved_at
+    assert summary.quote_as_of is None
     assert summary.quote_is_stale
+    assert "authoritative timestamp" in summary.quote_stale_reason
 
 
 def test_open_quote_flags_old_provider_metadata():
@@ -717,9 +786,9 @@ def test_open_quote_flags_old_provider_metadata():
     market = event["markets"][0]
     market["updated_time"] = "2026-09-01T00:00:00Z"
     summary = project(_parse_market(market, retrieved_at=datetime(2026, 9, 19, tzinfo=UTC)))
-    assert summary.quote_as_of == datetime(2026, 9, 19, tzinfo=UTC)
+    assert summary.quote_as_of is None
     assert summary.quote_is_stale
-    assert "24 hours" in summary.quote_stale_reason
+    assert "authoritative timestamp" in summary.quote_stale_reason
 
 
 def test_invalid_expected_resolution_is_omitted_with_warning():
