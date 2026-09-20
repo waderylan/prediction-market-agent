@@ -64,3 +64,18 @@ async def test_one_server_unavailable_preserves_other(tmp_path, monkeypatch):
         await ChatAgent(model, market_tools).chat("Read Polymarket", "a")
         == "Available platform works"
     )
+
+
+async def test_sports_state_server_starts_as_independent_stdio_process():
+    adapter = MultiServerMCPClient(
+        {
+            "sports_state": {
+                "transport": "stdio",
+                "command": sys.executable,
+                "args": ["-m", "market_agent.mcp.sports_state"],
+            }
+        }
+    )
+    async with adapter.session("sports_state") as session:
+        tools = {tool.name for tool in await load_mcp_tools(session)}
+    assert tools == {"sports_state_find_games", "sports_state_get_game_state"}

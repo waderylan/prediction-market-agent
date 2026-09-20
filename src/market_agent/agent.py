@@ -8,7 +8,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from importlib.resources import files
 from typing import Any
 
@@ -26,6 +26,7 @@ from market_agent.domain.matching import MatchingReport, comparison_notice, matc
 from market_agent.logging import log_event
 from market_agent.mcp.common import MarketDetail, SearchResults
 from market_agent.mcp.kalshi import KalshiSearchResults, SeriesResults
+from market_agent.providers.game_state import FindGamesResult, GameState
 
 logger = logging.getLogger(__name__)
 MAX_TOOL_CALLS = 4
@@ -46,7 +47,7 @@ fetch each contract's rules before assessing comparability. Similar headlines do
 equivalence. Show rule differences and refuse an equivalent-price comparison when uncertain.
 If a requested platform has no available tools, say it is unavailable; never silently substitute.
 Kalshi tickers and Polymarket numeric IDs are different namespaces; never swap them.
-For sports, search the team or matchup directly; use local_date/date ranges with the user's
+For market sports, search the team or matchup directly; use local_date/date ranges with the user's
 timezone and use next_game_only or most_recent_game_only when requested. Sports results group
 contracts under games with localized kickoff labels. A sports limit counts games. Follow
 discovery.next_cursor through continuation only when the user needs more results, and reuse it
@@ -55,6 +56,18 @@ selection_required is true, present discovery.matching_events labels and event I
 choosing silently. Treat discovery warnings as skipped unsafe records, not proof that valid returned
 games are unusable. Tool errors with JSON error.code and fields identify arguments to correct; do
 not retry the same invalid arguments or switch providers.
+Use sports_state tools only for a requested current/recent game score, lifecycle, or in-game
+situation, or when that state is necessary for an explicitly requested analysis. First call
+sports_state_find_games with an explicit league and IANA timezone, then copy one returned game_ref
+unchanged into sports_state_get_game_state. Never construct a game_ref or pass an ESPN event ID or
+MLB gamePk. If discovery returns multiple games, present the choices instead of selecting silently.
+Do not call game-state tools for ordinary market discovery, contract rules, general sports
+knowledge, or no-tool questions. Game state is authoritative only for its attributed sporting
+observation. Market tools remain authoritative for contract identity, prices, rules, and
+settlement. The host supplies sports_identity_report when market and game observations coexist;
+never combine mismatched or insufficient identities. A final score never proves market settlement
+or contract equivalence. Name the game-state source and retrieved_at observation time, and disclose
+missing, stale, fallback, or conflicting state.
 For generic Kalshi topics, use kalshi_search_series when it adds a useful precision filter.
 Never invent or construct Kalshi tickers, including date/time/team segments. Only use
 exact market tickers from discovery, user input, or previously retrieved conversation data.
@@ -83,7 +96,7 @@ ToolConnection = Callable[[], AbstractAsyncContextManager[list[BaseTool]]]
 
 @asynccontextmanager
 async def market_tools() -> AsyncIterator[list[BaseTool]]:
-    """Separate server processes with request-owned sessions and partial availability."""
+    """Separate MCP processes with request-owned sessions and partial availability."""
     connections = json.loads(files("market_agent.mcp").joinpath("servers.json").read_text())
     for connection in connections.values():
         connection["command"] = sys.executable
@@ -100,14 +113,16 @@ async def market_tools() -> AsyncIterator[list[BaseTool]]:
             except Exception:
                 log_event(logger, "mcp_unavailable", server=name)
         if not tools:
-            raise ConnectionError("No market MCP server is available")
+            raise ConnectionError("No MCP data server is available")
         yield tools
 
 
 class AgentState(MessagesState):
     calls: int
     details: list[dict[str, Any]]
+    game_states: list[dict[str, Any]]
     matching_report: dict[str, Any] | None
+    sports_identity_report: list[dict[str, Any]]
     activity: list[dict[str, Any]]
 
 
@@ -146,6 +161,8 @@ def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | Non
         "next_game_only",
         "most_recent_game_only",
         "continuation",
+        "game_ref",
+        "league",
     }
     return {
         key: value
@@ -154,7 +171,20 @@ def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | Non
     }
 
 
-def _tool_summary(validated: SearchResults | MarketDetail | SeriesResults) -> str:
+ToolResult = SearchResults | MarketDetail | SeriesResults | FindGamesResult | GameState
+
+
+def _tool_summary(validated: ToolResult) -> str:
+    if isinstance(validated, FindGamesResult):
+        if validated.clarification:
+            return f"Game clarification required: {validated.clarification}"
+        return f"Found {len(validated.games)} game-state candidate(s) for {validated.local_date}."
+    if isinstance(validated, GameState):
+        return (
+            f"Observed {validated.away_team} at {validated.home_team}: "
+            f"{validated.away_score}-{validated.home_score}, {validated.lifecycle}; "
+            f"source {validated.source}."
+        )
     if isinstance(validated, SeriesResults):
         return f"Found {len(validated.series)} candidate series."
     if isinstance(validated, SearchResults):
@@ -174,7 +204,11 @@ def _tool_summary(validated: SearchResults | MarketDetail | SeriesResults) -> st
 
 def _tool_result_schema(
     tool_name: str,
-) -> type[SearchResults | MarketDetail | SeriesResults]:
+) -> type[ToolResult]:
+    if tool_name == "sports_state_find_games":
+        return FindGamesResult
+    if tool_name == "sports_state_get_game_state":
+        return GameState
     if tool_name == "kalshi_search_series":
         return SeriesResults
     if tool_name == "kalshi_search_markets":
@@ -186,10 +220,22 @@ def _tool_result_schema(
 
 def _validate_tool_result(
     tool_name: str, arguments: dict[str, Any], result: ToolMessage
-) -> SearchResults | MarketDetail | SeriesResults:
+) -> ToolResult:
     artifact = result.artifact
     structured_content = artifact.get("structured_content") if isinstance(artifact, dict) else None
     validated = _tool_result_schema(tool_name).model_validate(structured_content)
+
+    if isinstance(validated, FindGamesResult):
+        if validated.league != arguments.get("league"):
+            raise ValueError("Game league mismatch")
+        return validated
+    if isinstance(validated, GameState):
+        if validated.game_ref != arguments.get("game_ref"):
+            raise ValueError("Game reference mismatch")
+        expected_sport = "baseball" if validated.league == "mlb" else "football"
+        if validated.situation.sport != expected_sport:
+            raise ValueError("Game situation league mismatch")
+        return validated
 
     markets = []
     if isinstance(validated, SearchResults):
@@ -205,6 +251,76 @@ def _validate_tool_result(
     if isinstance(validated, MarketDetail) and validated.market_id != arguments.get("market_id"):
         raise ValueError("Market identifier mismatch")
     return validated
+
+
+def _sports_identity_report(
+    details: list[dict[str, Any]], game_states: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Compare only explicit league, participants, and scheduled-game evidence."""
+
+    report: list[dict[str, Any]] = []
+    for game_data in game_states:
+        game = GameState.model_validate(game_data)
+        for market in details:
+            sports = market.get("sports")
+            if not isinstance(sports, dict):
+                continue
+            league_match = sports.get("league") == game.league
+            participants = sports.get("participants")
+            participant_match = isinstance(participants, list) and set(participants) == {
+                game.home_team,
+                game.away_team,
+            }
+            scheduled = sports.get("scheduled_start")
+            schedule_match: bool | None = None
+            if isinstance(scheduled, str):
+                try:
+                    market_start = datetime.fromisoformat(scheduled.replace("Z", "+00:00"))
+                    schedule_match = (
+                        abs((market_start - game.scheduled_start).total_seconds()) <= 30 * 60
+                    )
+                except ValueError:
+                    schedule_match = None
+            checks = {
+                "league": league_match,
+                "participants": participant_match,
+                "scheduled_start": schedule_match,
+            }
+            verdict = (
+                "different"
+                if any(value is False for value in checks.values())
+                else "match"
+                if all(value is True for value in checks.values())
+                else "insufficient_evidence"
+            )
+            report.append(
+                {
+                    "market_platform": market["platform"],
+                    "market_id": market["market_id"],
+                    "game_ref": game.game_ref,
+                    "verdict": verdict,
+                    "checks": checks,
+                    "use_together": verdict == "match",
+                }
+            )
+    return report
+
+
+def _record_game_state(game_states: list[dict[str, Any]], state: GameState) -> list[dict[str, Any]]:
+    snapshot = state.model_dump(mode="json")
+    retained = [saved for saved in game_states if saved["game_ref"] != state.game_ref]
+    return [*retained, snapshot]
+
+
+def _game_state_notice(states: list[dict[str, Any]]) -> str | None:
+    if not states:
+        return None
+    latest = GameState.model_validate(states[-1])
+    return (
+        f"- Game state: {latest.source} observed at {latest.retrieved_at.isoformat()}. "
+        "This sporting result does not establish prediction-market settlement or "
+        "contract equivalence."
+    )
 
 
 def _record_market_detail(
@@ -299,7 +415,9 @@ class ChatAgent:
             results = []
             used = state["calls"]
             details = list(state["details"])
+            game_states = list(state["game_states"])
             matching_report = state["matching_report"]
+            sports_identity_report = list(state["sports_identity_report"])
             activity = list(state["activity"])
             for call in message.tool_calls:
                 name = call["name"]
@@ -325,14 +443,15 @@ class ChatAgent:
                             summary = _tool_summary(validated)
                             if isinstance(validated, MarketDetail):
                                 details, report = _record_market_detail(details, validated)
+                                sports_identity_report = _sports_identity_report(
+                                    details, game_states
+                                )
+                                additions: dict[str, Any] = {
+                                    "market": validated.model_dump(mode="json")
+                                }
                                 if report is not None:
                                     matching_report = report.model_dump(mode="json")
-                                    content = json.dumps(
-                                        {
-                                            "market": validated.model_dump(mode="json"),
-                                            "matching_report": matching_report,
-                                        }
-                                    )
+                                    additions["matching_report"] = matching_report
                                     log_event(
                                         logger,
                                         "matching_completed",
@@ -342,6 +461,25 @@ class ChatAgent:
                                         sorted({pair.verdict for pair in report.pairs})
                                     )
                                     summary += f" Contract check: {verdicts}."
+                                if sports_identity_report:
+                                    additions["sports_identity_report"] = sports_identity_report
+                                if len(additions) > 1:
+                                    content = json.dumps(additions)
+                            elif isinstance(validated, GameState):
+                                game_states = _record_game_state(game_states, validated)
+                                sports_identity_report = _sports_identity_report(
+                                    details, game_states
+                                )
+                                content = json.dumps(
+                                    {
+                                        "game_state": validated.model_dump(mode="json"),
+                                        "sports_identity_report": sports_identity_report,
+                                        "market_settlement_notice": (
+                                            "Sporting state does not establish market settlement "
+                                            "or contract equivalence."
+                                        ),
+                                    }
+                                )
                             status = "success"
                             activity_status = "success"
                     except Exception:
@@ -355,7 +493,13 @@ class ChatAgent:
                         tool=name if name in by_name else "unknown",
                         status=status,
                     )
-                server = name.split("_", 1)[0] if "_" in name else "unknown"
+                server = (
+                    "sports_state"
+                    if name.startswith("sports_state_")
+                    else name.split("_", 1)[0]
+                    if "_" in name
+                    else "unknown"
+                )
                 activity.append(
                     ToolActivity(
                         tool=name[:100] or "unknown",
@@ -371,7 +515,9 @@ class ChatAgent:
                 "messages": results,
                 "calls": used,
                 "details": details,
+                "game_states": game_states,
                 "matching_report": matching_report,
+                "sports_identity_report": sports_identity_report,
                 "activity": activity,
             }
 
@@ -440,7 +586,9 @@ class ChatAgent:
                             "messages": [HumanMessage(query)],
                             "calls": 0,
                             "details": [],
+                            "game_states": [],
                             "matching_report": None,
+                            "sports_identity_report": [],
                             "activity": [],
                         },
                         {"configurable": {"thread_id": session_id}, "recursion_limit": 12},
@@ -451,13 +599,15 @@ class ChatAgent:
                             MatchingReport.model_validate(result["matching_report"])
                         )
                         answer = notice + "\n\n" + answer
+                    if game_notice := _game_state_notice(result.get("game_states", [])):
+                        answer = game_notice + "\n\n" + answer
                     return ChatTurn(response=answer, activity=result["activity"])
             except Exception:
                 log_event(logger, "chat_dependency_unavailable")
                 return ChatTurn(
                     response=(
-                        "Market servers could not be connected. Please retry; "
-                        "no fresh market data was verified."
+                        "Data servers could not be connected. Please retry; "
+                        "no fresh provider data was verified."
                     ),
                     activity=[],
                 )

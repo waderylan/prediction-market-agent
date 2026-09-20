@@ -19,8 +19,15 @@ Each result groups outcome contracts by game and preserves provider identity and
 alongside canonical participants, localized kickoff, game lifecycle, quote freshness, and bounded
 discovery coverage. Exact local dates, ranges, next/recent selection, and continuation cursors keep
 common searches direct. A detail call supplies settlement rules and explicit resolution. The
-FastAPI/LangGraph application invokes
-both servers through real MCP and retains session context.
+FastAPI/LangGraph application invokes all three servers through real MCP and retains session
+context.
+
+The sports-state MCP separately finds a supported game by team, league, one local calendar day,
+and timezone, then reads one current normalized snapshot through an opaque discovery reference.
+ESPN is the primary free source. MLB StatsAPI is an MLB-only fallback after exact team/date/start
+matching; NFL and NCAA football fail honestly when ESPN is unavailable. The result includes score,
+lifecycle, observation provenance, and one nullable league-specific situation object. It does not
+provide odds, forecasts, contract identity, or settlement.
 
 Representative requests:
 
@@ -29,6 +36,8 @@ Representative requests:
 - Find Ohio State vs Michigan with league `ncaa_football`.
 - Read the rules for this returned market ID.
 - Which game does that price refer to, when was the quote observed, and is it stale?
+- What is the Yankees score and inning right now in America/Los_Angeles?
+- Who has possession in the Falcons game, and what are the down and distance?
 
 Results describe discovered contracts, not a claim that a particular game is currently listed.
 Multiple event IDs require selection before discussing a singular game.
@@ -51,7 +60,7 @@ extend the deterministic matching pipeline, not create a parallel MCP matching s
 Only after event, outcome, and settlement equivalence is established should the application
 present a comparable price difference.
 
-Later optional work includes bounded external evidence research through a third MCP server,
+Later optional work includes bounded external evidence research through a fourth MCP server,
 an evaluated semantic-equivalence helper, an evidence-based forecast, and an explicitly
 requested saved research snapshot. These are plans, not current capabilities.
 
@@ -69,12 +78,13 @@ abstain when equivalence or evidence is insufficient.
 
 ## Assignment commitments
 
-The project retains two independent MCP servers with actual `tools/list` and `tools/call`,
-model-driven tool choice, framework-native session memory, and the required `POST /chat`
-contract. Cloud Run deployment, a live grading URL, source ZIP, README diagrams, and
-Rylan Wade's personal `PROCESS_LOG.md` remain submission obligations.
+The project retains two independent market MCP servers and one independent sports-state server
+with actual `tools/list` and `tools/call`, model-driven tool choice, framework-native session
+memory, and the required `POST /chat` contract. Cloud Run deployment, a live grading URL, source
+ZIP, README diagrams, and Rylan Wade's personal `PROCESS_LOG.md` remain submission obligations.
 
-A third integrated MCP server is a rubric opportunity; it is not already implemented.
+The sports-state process is the third integrated MCP server and uses free, unauthenticated
+providers without a new secret or paid dependency.
 Personal reflections must come from Rylan Wade. Technical development evidence in the
 automatic transcript does not replace that authorship.
 
@@ -84,5 +94,6 @@ fixtures, MCP tests, bounded live checks, and real-agent validation. The team id
 contains reviewed provider-derived names and aliases; it contains no market identifiers and
 cannot enable a league, spread, total, prop, or future by itself.
 
-See [Sports MCP design](../research/SPORTS_MCP.md) for implemented details and
+See [Sports market MCP design](../research/SPORTS_MCP.md),
+[game-state MCP design](../research/GAME_STATE_MCP.md), and
 [Remaining work](IMPLEMENTATION_PLAN.md) for future acceptance criteria.

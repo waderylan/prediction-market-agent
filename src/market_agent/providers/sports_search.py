@@ -43,6 +43,7 @@ KALSHI_SERIES: dict[str, tuple[League, str]] = {
     "KXNCAAFCSGAME": ("ncaa_football", "College Football FCS Game"),
 }
 POLY_TAGS: dict[str, League] = {"mlb": "mlb", "nfl": "nfl", "cfb": "ncaa_football"}
+POLY_CATALOG_PAGE_SIZE = 10
 
 
 def _validate_game_selectors(next_game_only: bool, most_recent_game_only: bool) -> None:
@@ -609,7 +610,7 @@ async def search_polymarket(
         if catalog_series is not None:
             params: dict[str, str | int] = {
                 "series_id": catalog_series,
-                "limit": 100,
+                "limit": POLY_CATALOG_PAGE_SIZE,
                 "offset": catalog_offset,
                 "order": "startTime",
                 "ascending": "true",
@@ -620,7 +621,7 @@ async def search_polymarket(
                 await client._request_json("/events", params=params), "polymarket", "events"
             )
             catalog_offset += len(events)
-            more = len(events) == 100
+            more = len(events) == POLY_CATALOG_PAGE_SIZE
             # Offset feeds supply no hasMore flag or total; fullness is only a hint.
             coverage.has_more = None if more else False
         else:

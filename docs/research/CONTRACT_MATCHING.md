@@ -42,6 +42,11 @@ The current matching engine does not yet use all those fields. It requires YES/N
 so a named-team Polymarket contract cannot be promoted to equivalence with a Kalshi contract.
 An apparent price difference is not an established arbitrage or comparable probability gap.
 
+The sports-state MCP is separate evidence. Its host-side identity report checks league, both
+participants, and scheduled start before a current score/situation can be discussed with a market.
+That match does not establish outcome mapping, rule equivalence, cancellation treatment, or
+settlement. A final score cannot upgrade a market pair or declare either contract resolved.
+
 ## Planned sports extension
 
 Extend the matcher and report rather than implementing a separate MCP comparison tool.

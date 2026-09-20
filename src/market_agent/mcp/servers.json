@@ -8,5 +8,10 @@
     "transport": "stdio",
     "command": "python",
     "args": ["-m", "market_agent.mcp.kalshi"]
+  },
+  "sports_state": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["-m", "market_agent.mcp.sports_state"]
   }
 }

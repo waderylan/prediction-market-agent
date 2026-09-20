@@ -21,14 +21,15 @@
 | 3. Polymarket MCP | Complete for generic and supported sports discovery |
 | 4. Local vertical slice | Complete locally |
 | 5. Kalshi MCP, routing, and sports discovery | Complete at the MCP/provider layer |
-| 6. Sports-aware deterministic matching | In progress |
-| 7. Jev sports-contract equivalence | Planned |
-| 8. Bounded sports evidence research | Planned |
-| 9. Complete sports agent and forecast output | Planned |
-| 10. Optional sports-research ledger | Optional |
-| 11. Failure handling and verification | In progress across implemented layers |
-| 12. Cloud Run and submission | Required |
-| 13. Polymarket US migration evaluation | Optional after deployment |
+| 6. Sports game-state MCP | Complete locally |
+| 7. Sports-aware deterministic matching | In progress |
+| 8. Jev sports-contract equivalence | Planned |
+| 9. Bounded sports evidence research | Planned |
+| 10. Complete sports agent and forecast output | Planned |
+| 11. Optional sports-research ledger | Optional |
+| 12. Failure handling and verification | In progress across implemented layers |
+| 13. Cloud Run and submission | Required |
+| 14. Polymarket US migration evaluation | Optional after deployment |
 
 ## 2. Fixed Decisions
 
@@ -101,11 +102,14 @@ LangGraph agent + session checkpointer
 Multi-server MCP client
   |-- Polymarket MCP ------> Polymarket public APIs
   |-- Kalshi MCP ----------> Kalshi public APIs
+  |-- Sports-state MCP ----> ESPN public JSON / MLB StatsAPI fallback
   |-- Tavily MCP ----------> Search and extraction
   `-- SQLite MCP ----------> Optional sports-research ledger
 ```
 
 - The two market servers remain separate processes and separate MCP configurations.
+- The sports-state server remains a third independent process and never becomes a fallback for
+  market identity, prices, rules, or settlement.
 - Market servers share Python domain types where useful, but they do not call each other.
 - Each server has unique tool names to avoid collisions after tool aggregation.
 - Tavily remains a separate MCP integration.
@@ -147,6 +151,13 @@ Multi-server MCP client
 
 - Use the supported Tavily search and extraction tools.
 - Enforce budgets in application state rather than relying only on the prompt.
+
+### Sports Game-State MCP
+
+- `sports_state_find_games`
+- `sports_state_get_game_state`
+- Keep the public surface limited to supported-game discovery and a current normalized state
+  snapshot. Milestone 6 fixes the exact inputs, outputs, provider boundaries, and budgets.
 
 ### Optional SQLite MCP
 
@@ -421,7 +432,7 @@ Multi-server MCP client
 #### Current State
 
 - **Status:** Complete at the MCP/provider layer; agent-specific sports behavior continues in
-  Milestone 9.
+  Milestone 10.
 - The independent Kalshi server and shared projections preserve partial availability, unique tool
   names, provider/identifier validation, and model-driven platform selection.
 - Both servers support MLB, NFL, and NCAA Division I full-game winner discovery using reviewed
@@ -432,7 +443,301 @@ Multi-server MCP client
 - `../research/SPORTS_MCP.md` is the source of truth for algorithms, schemas, budgets, catalog
   maintenance, and known provider boundaries.
 
-### Milestone 6: Sports-Aware Deterministic Contract Matching
+### Milestone 6: Sports Game-State MCP
+
+#### Purpose and Confirmed Feasibility
+
+- Add one narrow, read-only MCP server that answers what is happening in a supported game now.
+- Support the same initial leagues as market discovery: MLB, NFL, and NCAA Division I football.
+- Keep game state separate from prediction-market price, contract equivalence, and settlement.
+- Use ESPN's unauthenticated public JSON scoreboard/summary surface as the primary cross-sport
+  source. It is free and requires no account or API key, but it is undocumented and has no SLA.
+- Use MLB StatsAPI as a fallback for MLB only. Do not claim an equivalent official free fallback
+  for NFL or NCAA football unless a later feasibility check verifies one.
+- A 2026-09-20 feasibility check through the project's `httpx` stack returned HTTP 200 for all
+  three ESPN league scoreboards. Live MLB exposed inning, count, outs, bases, pitcher, batter, and
+  last play. Live NFL exposed score, period, clock, down, distance, field position, timeouts, last
+  play, and possession when supplied. The prior NCAA football slate returned scheduled/final game
+  identity and scores. MLB StatsAPI independently returned a matching live game and detailed
+  baseball state.
+- Treat this feasibility evidence as proof of a workable interface, not a promise that an
+  undocumented provider schema will remain stable.
+
+#### Fixed Architecture Decisions
+
+- Implement a student-authored Python stdio MCP server in the existing package and container.
+- Register it as a third independent process beside Kalshi and Polymarket. Give every tool a
+  `sports_state_` prefix so aggregated tool names cannot collide.
+- Reuse the existing asynchronous client, typed-error, bounded-response, logging, and FastMCP
+  patterns. The server lifespan owns one asynchronous HTTP client; injected test transports remain
+  caller-owned.
+- Keep all provider URLs in code-owned allowlists. Tool inputs never accept a URL, hostname, path,
+  arbitrary provider name, or HTTP headers.
+- Use only fixed ESPN routes under `site.api.espn.com` for the three supported league scoreboards
+  and event summaries. Use only fixed MLB StatsAPI schedule/live-feed routes under
+  `statsapi.mlb.com` for the MLB fallback.
+- Do not spoof a browser user agent. ESPN rejected browser-shaped clients during feasibility
+  testing while the default `httpx` client succeeded. Treat a future 403 as provider
+  unavailability rather than rotating identities or attempting to evade access controls.
+- Do not add Node, a hosted MCP dependency, Apify, a paid sports API, background workers,
+  WebSockets, or continuous polling.
+- Do not import an existing broad ESPN MCP. Existing servers expose unrelated news, standings,
+  odds, roster, and betting surfaces or introduce metered hosting. This server exposes only the
+  minimum game-discovery and state tools needed by this product.
+- Do not expose provider odds, provider win probability, player projections, fantasy data, news,
+  or full box scores. Those fields are outside the game-state requirement and could be mistaken
+  for the agent's forecast evidence.
+
+#### Tool Surface
+
+- `sports_state_find_games`
+  - Inputs: `query`, required `league` and IANA `timezone`, optional exact `local_date`, and game
+    `limit` from 1 through 10. Do not add date ranges, season scans, or an exhaustive mode.
+  - Purpose: resolve a supported team or matchup and return bounded provider-backed game choices.
+  - Output: zero to ten normalized game summaries plus explicit coverage, clarification, and
+    selection evidence. The limit counts games.
+  - The default calendar window is the requested local day. If no date is supplied, use the
+    current day in the supplied timezone and disclose that derived date in the result.
+- `sports_state_get_game_state`
+  - Input: one opaque `game_ref` copied unchanged from `sports_state_find_games`.
+  - Purpose: return one current normalized snapshot for the exact discovered game.
+  - Output: common game state plus exactly one league-specific situation object.
+  - Reject edited, malformed, cross-league, or unsupported-source references before
+    provider I/O. Never accept a guessed ESPN event ID or MLB `gamePk` as a substitute.
+- Require discovery before detail. The agent must not construct identifiers from team names,
+  dates, market IDs, or prior knowledge.
+- Return MCP tool errors with compact JSON containing stable `error.code`, `message`, and
+  caller-correctable `fields`, matching the existing market-server convention.
+
+#### Identity and Game Reference
+
+- Reuse the reviewed team catalog and exact alias resolver. Do not create a second fuzzy identity
+  system for ESPN names.
+- Add reviewed ESPN identifiers or labels to the shared catalog only when fixtures or live data
+  prove them. Preserve the raw ESPN labels beside canonical participants.
+- A candidate must match the requested league and one or two resolved participants. Unknown or
+  conflicting opponents produce clarification, not the known team's unrelated game.
+- Preserve home/away roles and the provider event ID. Two games with the same participants remain
+  distinct by event ID and scheduled start; doubleheaders are never merged.
+- `game_ref` is an opaque, versioned, URL-safe token containing only the minimum validated lookup
+  context: source namespace, league, provider event ID, scheduled start, requested timezone, and
+  canonical participants. It is an identifier carrier, not an authentication credential.
+- Include a domain-separated SHA-256 checksum of the canonical serialized payload to detect
+  truncation and accidental model edits. This checksum is not an authentication boundary; the
+  strict allowlist, bounded lookup, and response-identity checks provide the security boundary.
+- References remain valid across MCP subprocess and Cloud Run instance restarts and require no
+  deployment secret. Reject invalid encoding, schema, version, checksum, or field values before
+  provider I/O.
+- Validate the detail response against every reference field. A provider response cannot silently
+  substitute another game, league, date, or participant pair.
+- When ESPN fails for an MLB reference, locate the MLB StatsAPI game using league, scheduled date,
+  both canonical participants, and start-time evidence. If one same-team game exists on that local
+  date, it is the fallback candidate. If a doubleheader or multiple candidates exist, require a
+  unique start within 30 minutes and matching game number when available. Otherwise return
+  unavailable or clarification rather than guessing.
+
+#### Normalized Output Contract
+
+- Common game fields:
+  - `league`, `game_ref`, `source`, and raw provider game ID.
+  - Canonical and raw home/away participants.
+  - UTC scheduled start, requested timezone, local date, and localized start.
+  - Home and away score as nonnegative integers or null when the provider does not supply them.
+  - Lifecycle: `scheduled`, `pregame`, `live`, `halftime`, `delayed`, `suspended`, `postponed`,
+    `cancelled`, `final`, or `unknown`.
+  - Period/inning number and provider display label.
+  - Game clock when meaningful.
+  - Bounded last-play text when supplied.
+  - `retrieved_at`, nullable authoritative `provider_updated_at`, cache metadata, source URL, and
+    warnings.
+- Football situation fields:
+  - Nullable possession team, down, distance, field position, red-zone flag, and home/away
+    timeouts.
+  - Preserve a bounded provider down-and-distance label for explanation.
+- Baseball situation fields:
+  - Nullable inning, top/bottom/unknown half, balls, strikes, outs, first/second/third-base
+    occupancy, batter, and pitcher.
+- Missing situation fields remain null. Halftime, inning transitions, reviews, delays, and provider
+  update races commonly omit fields; never derive possession from the last-play team or infer base
+  occupancy from prose.
+- `retrieved_at` records when this service observed the response. It is not a provider update
+  clock. Leave `provider_updated_at` null unless the provider supplies an authoritative state
+  timestamp.
+- Return bounded warnings for internally inconsistent but usable state. Reject impossible values
+  such as negative scores, football downs outside 1-4, baseball outs outside 0-3, nonfinite
+  numbers, conflicting participants, or a response identity mismatch.
+- Do not return raw provider payloads to the model.
+
+#### Lifecycle and State Rules
+
+- Normalize lifecycle from explicit provider status codes first. Display text may refine a known
+  state, such as recognizing halftime, but must not override an explicit final, postponed,
+  cancelled, or delayed status.
+- Scores alone never determine lifecycle. A tied or lopsided score can occur in any phase.
+- A nonzero score is not evidence that a game is live. A `0-0` score is not evidence that a game
+  has not started.
+- A provider's final state describes the sporting event only. It does not establish prediction-
+  market settlement, contract equivalence, cancellation treatment, or winning market outcome.
+- When ESPN and the MLB fallback disagree, return the primary observation plus a structured
+  conflict warning. Do not average scores or select whichever state appears more favorable.
+
+#### Request, Cache, and Size Budgets
+
+- Discovery performs one ESPN scoreboard request for the requested local date. Convert every
+  returned start to the requested timezone and filter by that local calendar date.
+- If the primary calendar page returns no matching team after filtering and the requested local
+  day overlaps an adjacent provider/UTC calendar day, discovery may request the immediately
+  adjacent date pages. The hard maximum is three scoreboard requests total; stop as soon as a
+  qualifying game is found. This boundary check prevents UTC rollover misses without scanning a
+  season or week.
+- Detail performs one ESPN event-summary request. MLB fallback permits at most one date-scoped
+  schedule request and one exact live-feed request after an ESPN transport, HTTP, or schema
+  failure.
+- Allow at most two attempts per logical HTTP request. Retry only transport failures, HTTP 429,
+  and retryable 5xx responses with bounded backoff. Do not retry 4xx validation failures or an
+  unchanged malformed payload.
+- Use a ten-second timeout per HTTP attempt and a thirty-second MCP tool wall-clock budget.
+  External cancellation propagates.
+- Cap any upstream response at 5 MiB, a scoreboard page at 200 events, and returned candidates at
+  ten games. NCAA scoreboards measured about 1.2 MiB in feasibility testing, so the limit leaves
+  headroom without accepting unbounded payloads.
+- Maintain a bounded in-process cache of at most 256 normalized snapshots. Respect the provider's
+  cache header within conservative caps: at most five seconds for live state, thirty seconds for
+  scheduled/pregame state, and five minutes for terminal state.
+- Expose `observation_id`, `cache_hit`, and `cache_age_ms`. Cached snapshots retain their original
+  `retrieved_at`; never restamp cached data as newly observed.
+- Make no background requests. One user request may trigger only the bounded work above.
+
+#### Failure and Security Behavior
+
+- Handle the three rubric failure classes independently: connection/transport failure, tool
+  execution error, and malformed or schema-invalid response.
+- One malformed event record must not discard valid sibling games after the scoreboard envelope
+  and pagination structure are known safe. Report bounded discard counts and warnings.
+- A malformed root, oversized response, conflicting response identity, or unusable exact detail
+  fails the call safely.
+- ESPN failure may use MLB StatsAPI only for MLB. Never substitute a different sport, league,
+  provider game, or market MCP.
+- NFL or NCAA provider failure returns a controlled unavailable result with the requested game
+  identity preserved; it does not fabricate a score or fall back to web search.
+- Logs contain operation name, league, response status, latency, result counts, cache status, and
+  sanitized error class only. Do not log full provider payloads, user prompts, or opaque refs.
+- Stdout remains exclusively MCP protocol traffic. Operational logs go to stderr through the
+  existing safe logger.
+- The server is read-only and exposes no arbitrary fetch, order, account, credential, polling,
+  notification, or provider-disconnect tool.
+
+#### Agent Integration Rules
+
+- Use this MCP only when the user requests a current/recent game score, lifecycle, or in-game
+  situation, or when such state is necessary for an explicitly requested analysis.
+- Do not call it for ordinary market discovery, historical contract rules, general sports
+  knowledge, or a no-tool question.
+- Market MCPs remain authoritative for contract identity, prices, rules, and settlement fields.
+  The game-state MCP remains authoritative only for its attributed sporting-event observation.
+- Before combining game state with a market result, deterministically verify league, both
+  participants, and scheduled-game identity. If more than one event remains plausible, ask the
+  user to select a game.
+- State observations may explain context but cannot certify equivalent contracts, calculate a
+  trading edge, declare a market resolved, or override the deterministic matcher.
+- Final responses must name the data source and observation time and disclose stale, missing, or
+  conflicting state.
+
+#### Documentation Alignment After Implementation
+
+- Update all project documentation only after the sports-state MCP is implemented and its behavior
+  is verified. Do not describe planned behavior as currently available.
+- Update `README.md` with the third server's purpose, supported leagues, two-tool reference, setup
+  and run behavior, free-provider attribution, source limitations, observation freshness, and
+  example current-score/scenario requests.
+- Update all three required README diagrams so they show the sports-state MCP process, ESPN primary
+  source, MLB StatsAPI fallback, agent routing, and Cloud Run deployment path accurately.
+- Update `PROJECT_PROPOSAL.md` and this implementation plan's status table to distinguish the
+  implemented game-state capability from future comparison, research, and forecasting work.
+- Update `SPORTS_MCP.md` or add one focused game-state design document, then link it from the README
+  documentation map. Keep provider contracts, field provenance, identity rules, budgets, cache
+  semantics, error codes, and known limitations in one canonical research document rather than
+  duplicating them across files.
+- Update `MCP_VERTICAL_SLICE.md`, `MARKET_API_FEASIBILITY.md`, `CONTRACT_MATCHING.md`, and
+  `TESTING.md` wherever their architecture, provider boundary, test map, or completion claims are
+  affected.
+- Update `.env.example`, deployment instructions, server-manifest examples, cost disclosure, MCP
+  attribution, and submission checklist only if the final implementation changes them. The planned
+  design requires no new secret or paid service, so do not invent configuration requirements.
+- Search the repository for stale counts and claims such as "two MCP servers," "third server,"
+  "future work," and architecture lists. Preserve statements that intentionally describe the two
+  market servers; revise only statements whose total-server or current-capability meaning changed.
+- Verify every documented command, tool name, schema field, provider fallback, request budget,
+  diagram edge, and limitation against the implemented code and observed verification results.
+- Leave `PROCESS_LOG.md` to Rylan Wade's personal authorship. Documentation alignment must not
+  fabricate personal prompts, lessons, or reflections.
+
+#### Verification Plan
+
+- Provider fixtures must cover each league and these phases where applicable: scheduled, live,
+  halftime or inning transition, delayed/suspended, postponed/cancelled, final, and unknown.
+- Unit tests cover exact team resolution, NCAA ambiguity, doubleheaders, timezone/date boundaries,
+  lifecycle normalization, null situation fields, score bounds, reference tampering, response
+  identity conflicts, cache identity, response limits, and MLB fallback matching.
+- Provider-client tests inject timeout, 403, 429, 503, malformed roots, malformed sibling records,
+  oversized responses, cancellation, and conflicting primary/fallback observations.
+- Real MCP tests prove `tools/list`, strict JSON Schemas, `tools/call`, stable errors, bounded
+  outputs, discovery-before-detail, and independent process startup.
+- Agent tests prove correct tool selection for current-state questions, no call for irrelevant
+  questions, market/game identity verification, ambiguous-game clarification, and explicit
+  separation between final score and market settlement.
+- Opt-in live checks perform bounded discovery for all three leagues and exact detail for one
+  returned game when available. Empty live slates are valid and must not cause fabricated test
+  expectations.
+- Container verification proves the third stdio process starts as the non-root runtime user and
+  needs no secret or additional runtime.
+- Documentation checks prove every project document and required diagram matches the implemented
+  third-server architecture and contains no premature or stale capability claim.
+
+#### Exit Criteria
+
+- All three supported leagues return normalized scheduled, live, or final game state through real
+  MCP discovery and invocation.
+- At least one observed live football response exposes the available scenario fields without
+  requiring them all, and at least one observed live MLB response exposes inning/count/out/base
+  state.
+- Ambiguous games and missing situation data produce explicit choices or nulls rather than guesses.
+- ESPN failures are controlled; the MLB fallback works only after exact identity matching; NFL and
+  NCAA fail honestly without substitution.
+- Request counts, retries, timeouts, response sizes, candidate counts, cache lifetimes, and output
+  text are bounded and verified.
+- The agent can answer a current-score/scenario question, cite observation time and source, and
+  keep the sporting result separate from prediction-market settlement.
+- All project documentation, diagrams, setup/deployment instructions, provider attribution, cost
+  disclosure, limitations, and test maps describe the verified sports-state MCP accurately.
+- Offline tests, Ruff, formatting, strict mypy, real MCP tests, bounded live checks, and container
+  checks pass before sports-aware contract matching resumes.
+
+#### Current State
+
+- **Status:** Complete locally.
+- The third independent stdio server exposes strict discovery/detail schemas, opaque checksummed
+  game references, ESPN normalization for all three leagues, and exact-identity MLB StatsAPI
+  fallback without a secret or paid dependency.
+- Bounded caches preserve observation identity and time. The agent validates league, participants,
+  and scheduled start before combining game and market evidence, names source/time, and keeps final
+  sporting state separate from prediction-market settlement.
+- Deterministic, real MCP, agent, bounded public-provider, and non-root container checks cover the
+  documented request, retry, size, cache, identity, situation, fallback, and failure contracts.
+- Cloud Run deployment remains Milestone 13 work; local/container verification does not claim a
+  deployed third-server runtime.
+
+#### Pivot Point
+
+- If ESPN becomes unavailable to the deployed `httpx` client, its schema cannot be bounded safely,
+  or live checks show unreliable identity/state, do not scrape HTML or weaken validation. Keep the
+  typed MCP interface and pause NFL/NCAA support until another verified free source exists.
+- If MLB StatsAPI is substantially more reliable in measured live checks, make it the primary MLB
+  source while keeping the same public MCP schema.
+- Do not add a paid dependency merely to preserve this optional product capability; the assignment
+  already satisfies its minimum two-server requirement with Kalshi and Polymarket.
+
+### Milestone 7: Sports-Aware Deterministic Contract Matching
 
 #### Work
 
@@ -476,7 +781,7 @@ Multi-server MCP client
   cross-platform sports price difference is presented as like-for-like.
 - `../research/CONTRACT_MATCHING.md` defines the matcher boundary and evidence policy.
 
-### Milestone 7: Jev Sports-Contract Equivalence Evaluation
+### Milestone 8: Jev Sports-Contract Equivalence Evaluation
 
 #### Work
 
@@ -506,11 +811,11 @@ Multi-server MCP client
 - If Jev does not improve the sports evaluation set, retain the typed interface but disable
   automatic routing and use the primary LLM for ambiguous pairs.
 
-### Milestone 8: Bounded Sports Evidence Research
+### Milestone 9: Bounded Sports Evidence Research
 
 #### Work
 
-- Connect the supported Tavily MCP as a third server.
+- Connect the supported Tavily MCP as a fourth server after the sports-state MCP.
 - Run research only after one sports event is identified and a viable primary pair or clearly
   scoped single-platform request exists.
 - Track search and extraction counts in per-request graph state.
@@ -538,7 +843,7 @@ Multi-server MCP client
 - Adjust research limits using observed latency, cost, and answer quality.
 - Remove extraction if search snippets provide enough evidence for the assignment demonstration.
 
-### Milestone 9: Complete Sports Agent Workflow and Forecast Output
+### Milestone 10: Complete Sports Agent Workflow and Forecast Output
 
 #### Work
 
@@ -583,7 +888,7 @@ Multi-server MCP client
 - Simplify output sections or graph branching if latency becomes excessive.
 - Preserve tool selection, memory, and MCP correctness before optional forecast detail.
 
-### Milestone 10: Optional SQLite Sports-Research Ledger
+### Milestone 11: Optional SQLite Sports-Research Ledger
 
 #### Work
 
@@ -606,7 +911,7 @@ Multi-server MCP client
 - Cut or defer this milestone if core rubric work, deployment, or verification is incomplete.
 - Do not introduce managed database infrastructure for Assignment 1.
 
-### Milestone 11: Sports Failure Handling and Verification
+### Milestone 12: Sports Failure Handling and Verification
 
 #### Work
 
@@ -647,7 +952,7 @@ Multi-server MCP client
 
 - Fix correctness and failure behavior before adding presentation features.
 
-### Milestone 12: Cloud Run Deployment and Submission Artifacts
+### Milestone 13: Cloud Run Deployment and Submission Artifacts
 
 #### Work
 
@@ -672,7 +977,7 @@ Multi-server MCP client
 - Required submission files are present and secrets are absent.
 - The service remains available for grading.
 
-### Milestone 13: Optional Polymarket US Migration Evaluation
+### Milestone 14: Optional Polymarket US Migration Evaluation
 
 #### Work
 

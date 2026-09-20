@@ -13,8 +13,8 @@ unauthenticated, and not durable or automatically evicted.
 
 ## MCP lifecycle
 
-The packaged `mcp/servers.json` manifest describes two separate Python stdio processes:
-Kalshi and Polymarket. The client substitutes the running Python interpreter, initializes
+The packaged `mcp/servers.json` manifest describes three separate Python stdio processes:
+Kalshi, Polymarket, and sports game state. The client substitutes the running Python interpreter, initializes
 each session, discovers tools through `tools/list`, and loads them through
 `langchain-mcp-adapters`.
 
@@ -23,8 +23,8 @@ one asynchronous provider client; injected test clients remain caller-owned. A p
 client closes its HTTP resources when the server shuts down. Stdout belongs exclusively
 to MCP protocol traffic.
 
-One unavailable server does not disable the other. A new turn attempts connection again.
-If both are unavailable, the application returns a controlled response.
+One unavailable server does not disable the others. A new turn attempts connection again.
+If all are unavailable, the application returns a controlled response.
 
 The locked dependency set uses the MCP SDK's bundled FastMCP implementation. The project
 does not install a second FastMCP framework or emulate JSON-RPC in application code.
@@ -50,6 +50,12 @@ The agent catches tool/transport/schema failures and continues with an explicit 
 to verify that data. It does not substitute fabricated quotes. Logs use safe operational
 metadata; provider response bodies and credential values do not become tool-error text.
 
+The sports-state host path validates its distinct discovery/detail schemas, requires the returned
+opaque reference, and checks the situation discriminator against the league. When market and game
+details coexist, code compares league, both participants, and scheduled start before model
+synthesis. Every exact state response names source/time and states that sporting results do not
+establish market settlement.
+
 ## Sports adaptation
 
 The two MCP search tools perform exact sports query resolution before selecting their
@@ -71,6 +77,10 @@ time is never relabeled as quote time.
 fallback, output fields, and budgets. [Provider contracts](MARKET_API_FEASIBILITY.md)
 maps the external fields and links to primary documentation.
 
+The independent [game-state MCP](GAME_STATE_MCP.md) uses ESPN for bounded one-day discovery and
+detail, with exact-identity MLB StatsAPI fallback only after primary failure. It shares the team
+catalog but never supplies market identity, price, rules, or settlement.
+
 ## Matching path
 
 When both providers' detail snapshots are available, the graph invokes the
@@ -87,7 +97,7 @@ The local UI starts the HTTP application and an optional host Codex gateway. The
 only supplies model decisions. The application still owns memory and MCP calls.
 CLI authentication remains outside the container.
 
-The Docker image uses locked runtime dependencies, contains both MCP modules and their
+The Docker image uses locked runtime dependencies, contains all three MCP modules and their
 reference data, runs as a non-root user, and reads `PORT`.
 Cloud Run deployment is still required. A cloud-accessible backend, one worker, and one
 instance preserve the assignment's instance-lifetime memory expectation.

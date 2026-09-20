@@ -22,6 +22,9 @@ No test requires a particular game to be open.
 |---|---|
 | `unit/test_sports.py` | Exact aliases, local dates/ranges, selectors, grouping, continuation, lifecycle, settlement, coverage, cancellation, malformed data, quote semantics |
 | `integration/test_sports_mcp.py` | Actual tools/list schemas and tools/call results, invalid limit rejection, clarification without HTTP, safe errors, agent schema consumption |
+| `unit/test_game_state.py` | Game identity/state parsing, lifecycle, situation nulls/bounds, refs, cache, retry/size limits, cancellation, MLB fallback |
+| `integration/test_game_state_mcp.py` | Third server tools/list and tools/call, strict schemas, errors, agent routing, market/game identity, settlement separation |
+| `live/test_game_state_mcp_live.py` | Current ESPN/MLB compatibility through the independent stdio process across all three leagues |
 | `live/test_sports_mcp_live.py` | Independent stdio processes, current public API compatibility, searches across MLB/NFL/NCAA, detail retrieval when a candidate exists |
 | Provider unit tests | Parsing, status, identity, arrays, retries, transport and HTTP errors |
 | MCP integration tests | Discovery/detail, input/output schema validation, oversized data, lifecycle and partial server availability |
@@ -61,11 +64,27 @@ The sports suite specifically verifies:
   production failure switch; a platform-specific failure never substitutes the other provider.
 - The agent receives the sports schema through real MCP and validates it.
 
+The game-state suite additionally verifies:
+
+- One exact local day, derived-date disclosure, and at most three UTC-boundary scoreboard reads.
+- Reviewed team resolution, NCAA clarification without I/O, doubleheader-safe event IDs, and
+  checksummed references that reject edits before I/O.
+- Scheduled, pregame, live, halftime, delayed, suspended, postponed, cancelled, final, and unknown
+  lifecycle normalization without using score as phase evidence.
+- Nullable football/baseball situations, impossible-value rejection, bounded last play, and no raw
+  provider payload.
+- Two-attempt retry policy, 10-second HTTP attempts, 30-second tool budget, 5 MiB response limit,
+  200-event pages, ten candidates, external cancellation, and 256-entry lifecycle-aware cache.
+- ESPN transport/HTTP/schema failures, no NFL/NCAA substitution, exact MLB schedule/live-feed
+  fallback, ambiguous doubleheader refusal, response identity conflicts, and provider conflicts.
+- Host validation of league/participants/start before market/state combination and an enforced
+  separation between final score and prediction-market settlement.
+
 ## Public checks
 
 ```powershell
 $env:RUN_LIVE_SMOKE = "1"
-uv run pytest tests/live/test_sports_mcp_live.py tests/live/test_market_clients_live.py tests/live/test_kalshi_mcp_live.py tests/live/test_polymarket_mcp_live.py -s
+uv run pytest tests/live/test_game_state_mcp_live.py tests/live/test_sports_mcp_live.py tests/live/test_market_clients_live.py tests/live/test_kalshi_mcp_live.py tests/live/test_polymarket_mcp_live.py -s
 Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
@@ -88,7 +107,7 @@ Real-model checks use `RUN_LIVE_AGENT=1` and a configured backend with
 `tests/live/test_chat_live.py`. They can incur model costs and are separate from provider checks.
 
 Cloud Run acceptance remains required: verify the deployed URL, arbitrary reasonable queries,
-session recall, both MCP servers, and controlled failure cases. Local tests do not establish
+session recall, all three MCP servers, and controlled failure cases. Local tests do not establish
 a completed deployment.
 
 ## Expansion gate

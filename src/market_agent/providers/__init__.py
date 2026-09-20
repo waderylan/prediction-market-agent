@@ -8,6 +8,7 @@ from market_agent.providers.exceptions import (
     MarketTransportError,
     MarketValidationError,
 )
+from market_agent.providers.game_state import SportsStateClient
 from market_agent.providers.kalshi import KalshiClient
 from market_agent.providers.polymarket import PolymarketClient
 
@@ -20,4 +21,5 @@ __all__ = [
     "MarketTransportError",
     "MarketValidationError",
     "PolymarketClient",
+    "SportsStateClient",
 ]

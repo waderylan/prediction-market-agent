@@ -1,4 +1,8 @@
-# Sports MCP design
+# Sports market MCP design
+
+This document covers Kalshi and Polymarket contract discovery. The separate implemented
+[sports game-state MCP](GAME_STATE_MCP.md) reuses team identity but has distinct providers,
+references, state models, budgets, and authority boundaries.
 
 ## Product boundary
 
@@ -23,6 +27,7 @@ paying differently after a cancellation.
 | `providers/kalshi.py`, `providers/polymarket.py` | HTTP-backed clients, canonical contract parsing, detail enrichment |
 | `mcp/common.py` | Typed public projections, price labels, links, deadline and error translation |
 | `mcp/kalshi.py`, `mcp/polymarket.py` | Independently discoverable tool definitions and provider-client lifetimes |
+| `providers/game_state.py`, `mcp/sports_state.py` | Separate current-score/state client and third MCP process; never market settlement |
 
 The ordinary clients retain their generic `search_markets` interface. MCP search resolves
 sports requests before delegating to the sports discovery functions. Compatibility behavior
@@ -326,7 +331,7 @@ unambiguous. The public fields are `settlement_value`, `winning_outcome`, and `r
 | `warnings` | Bounded record type/ID/reason diagnostics for those discards |
 
 A Gamma search total is not the number of matching moneylines. It can be zero while the
-league-catalog fallback finds a game. An offset page containing 100 entries only suggests
+league-catalog fallback finds a game. An offset page containing 10 entries only suggests
 possible continuation; it does not provide an exact total. Exhausting a scoped feed does
 not prove universal market absence.
 

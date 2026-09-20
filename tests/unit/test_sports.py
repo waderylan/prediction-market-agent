@@ -470,6 +470,7 @@ async def test_college_catalog_fallback_repairs_empty_search_with_shared_budget(
         if request.url.path == "/sports":
             return httpx.Response(200, json=[{"sport": "cfb", "series": "987"}])
         assert request.url.params["series_id"] == "987"
+        assert request.url.params["limit"] == "10"
         assert request.url.params["offset"] == "0"
         return httpx.Response(200, json=[event])
 

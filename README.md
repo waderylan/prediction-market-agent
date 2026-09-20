@@ -2,20 +2,22 @@
 
 A read-only CSCI 599 course project for sports prediction-market research on Kalshi and
 Polymarket. Initial support covers MLB, NFL, and NCAA Division I football game winners.
-The two MCP servers turn team names into
-provider-backed candidates with explicit event identity, labeled prices, schedules, rules,
-and discovery coverage. They never place orders or access accounts.
+Three independent MCP servers provide market discovery on each platform plus current game state
+from ESPN, with an exact-identity MLB StatsAPI fallback. They never place orders or access accounts.
 
 Start with `kalshi_search_markets(query="Yankees")` or
 `polymarket_search_markets(query="Chiefs vs Bills")`. No exchange taxonomy or constructed
 ticker is required. For college football, use a school name and `league="ncaa_football"`.
 Shared cities and ambiguous abbreviations produce clarification choices.
+For a current score, start with
+`sports_state_find_games(query="Yankees", league="mlb", timezone="America/Los_Angeles")`,
+then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
 
 ## What is implemented
 
 | Capability | Current behavior |
 |---|---|
-| Two independent MCP servers | Kalshi and Polymarket, public GET requests, real stdio discovery and calls |
+| Three independent MCP servers | Kalshi, Polymarket, and sports game state; real stdio discovery and calls |
 | Sports discovery | MLB, NFL, NCAA Division I FBS/FCS; full-game winners only |
 | Team identity | Exact aliases from a reviewed provider catalog; same-city teams stay distinct |
 | Candidate selection | Results group both outcome contracts by game; separate event IDs preserve doubleheaders |
@@ -23,21 +25,25 @@ Shared cities and ambiguous abbreviations produce clarification choices.
 | Prices | Honest nullable quote clocks, explicit observation identity/cache reuse, stale flags, snapshots, trades, bids, and complements |
 | Coverage | Actual pages/events/contracts scanned, partial-result warnings, truncation, continuation evidence, and scoped totals |
 | Contract detail | Rules, game/close/resolution clocks, consumer links, and explicit settlement results |
+| Current game state | ESPN scores/lifecycle/situations; MLB StatsAPI fallback after exact identity matching |
+| Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
 | Comparison boundary | Deterministic contract checks run before synthesis; sports equivalence is not implemented |
 
-Sports-specific matching, agent prompt refinement, external evidence research, forecasting,
+Sports-specific contract matching, external evidence research, forecasting,
 a saved-forecast ledger, and Cloud Run deployment are **future work**. The current agent accepts
-the sports MCP result schemas, but its comparison engine does not establish equivalence
-between named-team sports contracts.
+market and game-state schemas and verifies their event identity before combining them, but its
+comparison engine does not establish equivalence between named-team sports contracts. A final
+sporting result does not establish prediction-market settlement.
 
 The product can expand to additional sports and contract types, including spreads, totals,
 props, and futures. These require verified provider mappings, typed models, settlement
 checks, and tests; they are not enabled by adding team aliases. See the
 [implementation plan](docs/planning/IMPLEMENTATION_PLAN.md) for acceptance criteria.
 
-Read [Sports MCP design](docs/research/SPORTS_MCP.md) for the complete server contract,
-catalog maintenance procedure, algorithms, and request budgets.
+Read [Sports market MCP design](docs/research/SPORTS_MCP.md) for market discovery and
+[Game-state MCP design](docs/research/GAME_STATE_MCP.md) for live-state contracts, provenance,
+identity rules, budgets, cache semantics, errors, and provider limitations.
 
 ## Setup and run
 
@@ -53,10 +59,11 @@ Keep credentials in the ignored `.env`. The MCP servers need no exchange or LLM 
 ```powershell
 uv run python -m market_agent.mcp.kalshi
 uv run python -m market_agent.mcp.polymarket
+uv run python -m market_agent.mcp.sports_state
 ```
 
 These commands speak MCP on stdin/stdout; use an MCP client rather than an HTTP browser.
-The packaged [server manifest](src/market_agent/mcp/servers.json) configures both processes
+The packaged [server manifest](src/market_agent/mcp/servers.json) configures all three processes
 for the agent.
 
 For the conversational application, configure `OPENAI_API_KEY` and run:
@@ -88,6 +95,8 @@ Interactive HTTP documentation is at `/docs`.
 | `kalshi_get_market` | Exact returned uppercase `market_id` |
 | `polymarket_search_markets` | `query`, `status="open"`, game `limit=5`; optional league, local date/range, timezone, next/recent selector, continuation |
 | `polymarket_get_market` | Exact returned numeric Gamma `market_id` |
+| `sports_state_find_games` | `query`, required `league` and IANA `timezone`; optional exact `local_date`, game `limit=5` |
+| `sports_state_get_game_state` | Exact opaque `game_ref` copied unchanged from discovery |
 
 - Limits are strict integers from 1 through 10 in the client-visible MCP schema.
 - League values are `mlb`, `nfl`, and `ncaa_football`.
@@ -117,6 +126,16 @@ Interactive HTTP documentation is at `/docs`.
   `sports` object, including an immediate detail call after search.
 - Fetch details before interpreting settlement rules. Resolved details expose
   `settlement_value`, `winning_outcome`, and `resolved_at`; prices are not settlement evidence.
+- Game-state discovery checks one requested local day and at most two adjacent UTC boundary pages;
+  it never scans a season. Omitting `local_date` uses and discloses today in the requested timezone.
+- `game_ref` is restart-safe, versioned, checksummed, and bound to the ESPN game, league, teams,
+  scheduled start, and timezone. It is not a credential and must not be edited or reconstructed.
+- Game state returns one baseball or football situation object. Missing possession, count, outs,
+  bases, players, timeouts, or field position remain null rather than being inferred.
+- ESPN is free, unauthenticated, undocumented, and has no SLA. MLB StatsAPI is the MLB-only
+  fallback; NFL and NCAA failures return controlled unavailability without substitution.
+- `retrieved_at` is this service's observation time. Cached state keeps that original time and
+  exposes `observation_id`, `cache_hit`, and `cache_age_ms`.
 - Empty bounded discovery is not proof of absence. Polymarket automatically checks its league
   catalog when exhausted text search yields no qualifying game and page budget remains.
 
@@ -165,13 +184,13 @@ Bounded public checks:
 
 ```powershell
 $env:RUN_LIVE_SMOKE = "1"
-uv run pytest tests/live/test_sports_mcp_live.py tests/live/test_market_clients_live.py tests/live/test_kalshi_mcp_live.py tests/live/test_polymarket_mcp_live.py
+uv run pytest tests/live/test_game_state_mcp_live.py tests/live/test_sports_mcp_live.py tests/live/test_market_clients_live.py tests/live/test_kalshi_mcp_live.py tests/live/test_polymarket_mcp_live.py
 Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
 The sports live checks discover schemas, reject `limit=20`, search all three supported
-leagues, and retrieve a returned contract when available. They do not fabricate an expected
-open game. See [Testing](docs/research/TESTING.md) for test boundaries
+leagues, and retrieve a returned contract or game state when available. Empty current slates are
+valid. They do not fabricate an expected open game. See [Testing](docs/research/TESTING.md) for test boundaries
 and [Provider contracts](docs/research/MARKET_API_FEASIBILITY.md) for primary sources.
 
 Real-model checks are separate: configure a backend, set `RUN_LIVE_AGENT=1`, and run
@@ -186,7 +205,7 @@ docker run --rm -p 8080:8080 --env-file .env market-agent:local
 ```
 
 The multi-stage image installs locked runtime dependencies and runs as UID 10001.
-It includes both Python MCP servers and requires no Node runtime. For Docker Desktop with
+It includes all three Python MCP servers and requires no Node runtime. For Docker Desktop with
 the host test gateway, override `OPENAI_BASE_URL=http://host.docker.internal:8091/v1`
 and use a local placeholder API key.
 
@@ -197,10 +216,11 @@ The [assignment](docs/assignment/Assignment_1_Description.md) supplies the deplo
 and required submission contract. Never deploy the local CLI gateway or copy local credentials
 into an image.
 
-Public provider calls use no account credentials in this implementation. LLM usage, Cloud Run,
+Public market, ESPN, and MLB StatsAPI calls use no account credentials in this implementation.
+The game-state providers are free but supply no availability guarantee. LLM usage, Cloud Run,
 builds, image storage, and future external research can incur provider charges. There is no
-continuous polling or background research. No latency or bandwidth improvement is claimed
-without measurement.
+continuous polling or background research. No latency or bandwidth improvement is claimed without
+measurement.
 
 ## Architecture
 
@@ -216,10 +236,14 @@ flowchart LR
     G --> A[MCP client adapter]
     A <-->|stdio tools/list, tools/call, results| K[Kalshi MCP]
     A <-->|separate stdio session and results| P[Polymarket MCP]
+    A <-->|separate stdio session and results| SS[Sports-state MCP]
     K --> S[Exact sports identity and projections]
     P --> S
+    SS --> S
     K <-->|bounded GET and response| KA[Public Kalshi API]
     P <-->|bounded GET and response| PA[Public Gamma API]
+    SS <-->|primary bounded GET| ESPN[ESPN public JSON]
+    SS -.->|MLB-only exact fallback| MLB[MLB StatsAPI]
 ```
 
 ```mermaid
@@ -229,7 +253,7 @@ flowchart LR
     T --> C[MCP tools/call]
     C --> S[Server validation and bounded provider requests]
     S --> V[Structured result or controlled error]
-    V --> H[Host schema validation and matching report]
+    V --> H[Host schema and sports identity validation]
     H --> R
     R -->|Answer ready or tool budget exhausted| O[LLM synthesis and response]
 ```
@@ -237,7 +261,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     ENV[Ignored local .env / shell variables] --> LOCAL[Local Docker or Python]
-    IMG[Multi-stage Docker image] --> LOCAL
+    IMG[Multi-stage Docker image with 3 stdio MCP processes] --> LOCAL
     LOCAL --> DEV[Optional host test gateway]
     IMG -. Planned .-> AR[Artifact Registry]
     AR -. Planned .-> CR[Cloud Run: one instance]
@@ -255,6 +279,7 @@ The application uses [LangGraph](https://docs.langchain.com/oss/python/langgraph
 ## Documentation map
 
 - [Sports MCP design and catalog maintenance](docs/research/SPORTS_MCP.md)
+- [Sports game-state MCP design](docs/research/GAME_STATE_MCP.md)
 - [Runtime architecture](docs/research/MCP_VERTICAL_SLICE.md)
 - [Provider contracts and field mapping](docs/research/MARKET_API_FEASIBILITY.md)
 - [Current matching and future sports comparison](docs/research/CONTRACT_MATCHING.md)

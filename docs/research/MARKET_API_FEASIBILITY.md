@@ -22,6 +22,17 @@ credentials. No account, order, trade-submission, or authenticated portfolio end
 Base URLs are `https://external-api.kalshi.com/trade-api/v2` and
 `https://gamma-api.polymarket.com`.
 
+Current sporting state is a separate provider boundary, never a market fallback:
+
+| Provider | Fixed route | Use |
+|---|---|---|
+| ESPN public JSON | League `/scoreboard` and event `/summary` under `site.api.espn.com` | MLB/NFL/NCAA game discovery and normalized state |
+| MLB StatsAPI | Date `/api/v1/schedule` and exact `/api/v1.1/game/{gamePk}/feed/live` | MLB-only state fallback after ESPN failure and identity matching |
+
+These free unauthenticated routes supply no market prices, contract rules, outcome mapping, or
+settlement. ESPN is undocumented and has no SLA. The exact state contract and measured limitations
+are in [Game-state MCP](GAME_STATE_MCP.md).
+
 ## Contract-sensitive details
 
 - Kalshi event pages cap at 200 and return an opaque cursor. Nested historical markets can
