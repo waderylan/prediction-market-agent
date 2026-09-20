@@ -121,6 +121,28 @@ storage as non-durable. Do not add managed database infrastructure merely for th
 - Obtain Rylan Wade's personal process narrative and learning reflection; do not generate it
   as if it were his experience.
 
+## 8. If time remains: evaluate Polymarket US migration
+
+After the required deployment and submission work is complete, evaluate replacing the
+international Gamma adapter with a read-only Polymarket US adapter for the project's US
+audience. This is not a base-URL substitution: bounded live probes confirmed that the current
+`/public-search`, `/sports`, `/events`, and `/markets/{id}` paths return 404 from the US gateway.
+
+Migration acceptance criteria:
+
+- Use the documented US routes, including `/v1/search`, `/v1/markets`, market detail, and
+  league-event discovery, while preserving the current MCP tool interface.
+- Treat US market and event IDs, slugs, prices, statuses, and settlement terms as a separate
+  provider namespace. Never relabel Gamma results or links as US contracts.
+- Parse US `marketSides`, `bestBidQuote`, `bestAskQuote`, `sportsMarketTypeV2`, and wrapped
+  detail responses according to their actual semantics.
+- Verify MLB, NFL, and NCAA football taxonomy independently. Initial probes found MLB and NFL
+  league routes but did not establish the correct NCAA football league-discovery route.
+- Replace human-facing links only after the returned US slug is verified against the US API.
+- Add deterministic fixtures, identity and quote-semantics regressions, real MCP schema/call
+  tests, bounded live checks, agent-consumption tests, and updated provider documentation.
+- Keep the integration read-only; do not use authenticated order, account, or portfolio APIs.
+
 ## Verification gates
 
 Use deterministic tests for provider contracts, identity, matching, budgets, and schema
