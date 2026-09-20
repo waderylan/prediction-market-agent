@@ -492,8 +492,10 @@ Multi-server MCP client
 
 - `sports_state_find_games`
   - Inputs: `query`, required `league` and IANA `timezone`, optional exact `local_date`, and game
-    `limit` from 1 through 10. Do not add date ranges, season scans, or an exhaustive mode.
-  - Purpose: resolve a supported team or matchup and return bounded provider-backed game choices.
+    `limit` from 1 through 10. The exact reserved query `all` returns one bounded same-day slate;
+    do not add date ranges, season scans, pagination, or an exhaustive mode.
+  - Purpose: resolve a supported team or matchup, or list one bounded same-day slate, and return
+    provider-backed game choices.
   - Output: zero to ten normalized game summaries plus explicit coverage, clarification, and
     selection evidence. The limit counts games.
   - The default calendar window is the requested local day. If no date is supplied, use the
@@ -550,13 +552,15 @@ Multi-server MCP client
   - Bounded last-play text when supplied.
   - `retrieved_at`, nullable authoritative `provider_updated_at`, cache metadata, source URL, and
     warnings.
+  - A bounded usage note distinguishing lightweight discovery from authoritative normalized detail.
 - Football situation fields:
   - Nullable possession team, down, distance, field position, red-zone flag, and home/away
     timeouts.
   - Preserve a bounded provider down-and-distance label for explanation.
 - Baseball situation fields:
-  - Nullable inning, top/bottom/unknown half, balls, strikes, outs, first/second/third-base
-    occupancy, batter, and pitcher.
+  - Semantic phase (`not_started`, `active`, `transition`, `complete`, or `unavailable`), nullable
+    inning, top/bottom/unknown half, balls, strikes, outs, first/second/third-base occupancy,
+    batter, and pitcher.
 - Missing situation fields remain null. Halftime, inning transitions, reviews, delays, and provider
   update races commonly omit fields; never derive possession from the last-play team or infer base
   occupancy from prose.

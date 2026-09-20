@@ -37,7 +37,7 @@ async def test_game_state_stdio_live_all_supported_leagues():
         for query, league in [
             ("Yankees", "mlb"),
             ("Chicago Bears", "nfl"),
-            ("USC Trojans", "ncaa_football"),
+            ("all", "ncaa_football"),
         ]:
             result = await session.call_tool(
                 "sports_state_find_games",
@@ -48,6 +48,7 @@ async def test_game_state_stdio_live_all_supported_leagues():
             validate(payload, tools["sports_state_find_games"].outputSchema)
             assert payload["coverage"]["scoreboard_requests"] <= 3
             assert len(payload["games"]) <= 2
+            assert payload["discovery_mode"] == ("schedule" if query == "all" else "team")
             print(
                 league,
                 "returned",
@@ -71,8 +72,16 @@ async def test_game_state_stdio_live_all_supported_leagues():
             assert state["source"] in {"espn", "mlb_statsapi"}
             assert state["retrieved_at"]
             assert state["situation"]["sport"] == ("baseball" if league == "mlb" else "football")
+            if state["lifecycle"] in {"scheduled", "pregame"}:
+                assert state["home_score"] is None and state["away_score"] is None
+                assert state["period"] is None and state["clock"] is None
+                assert state["last_play"] is None
+                if league == "mlb":
+                    assert state["situation"]["phase"] == "not_started"
+                    assert state["situation"]["half"] == "unknown"
             if state["lifecycle"] in {"live", "halftime"} and league == "mlb":
                 assert {"inning", "balls", "strikes", "outs", "on_first"} <= set(state["situation"])
+                assert state["situation"]["phase"] in {"active", "transition"}
             if state["lifecycle"] in {"live", "halftime"} and league != "mlb":
                 assert {"possession_team", "down", "distance", "field_position"} <= set(
                     state["situation"]

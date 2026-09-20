@@ -21,7 +21,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from market_agent.logging import log_event
 from market_agent.providers.sports import League, Team, participant, resolve_query, teams
@@ -42,6 +42,19 @@ Lifecycle = Literal[
 ]
 Source = Literal["espn", "mlb_statsapi"]
 HalfInning = Literal["top", "bottom", "unknown"]
+BaseballPhase = Literal["not_started", "active", "transition", "complete", "unavailable"]
+NOT_STARTED_LIFECYCLES = {"scheduled", "pregame"}
+
+DISCOVERY_USAGE = (
+    "Discovery is a lightweight scoreboard snapshot for choosing a game. Copy game_ref unchanged "
+    "into sports_state_get_game_state for authoritative normalized state fields. Scheduled and "
+    "pregame state placeholders are returned as null. game_ref is scoped to the requested timezone."
+)
+DETAIL_USAGE = (
+    "Detail is the authoritative normalized sporting-state snapshot for this game reference. "
+    "Null fields are unavailable or not meaningful for the lifecycle; sporting state does not "
+    "establish prediction-market settlement."
+)
 
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_SCOREBOARD_EVENTS = 200
@@ -111,6 +124,7 @@ class BaseballSituation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sport: Literal["baseball"] = "baseball"
+    phase: BaseballPhase = "unavailable"
     inning: int | None = Field(default=None, ge=1, le=30)
     half: HalfInning = "unknown"
     balls: int | None = Field(default=None, ge=0, le=4)
@@ -121,6 +135,33 @@ class BaseballSituation(BaseModel):
     on_third: bool | None = None
     batter: str | None = Field(default=None, max_length=200)
     pitcher: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def valid_phase(self) -> Self:
+        state_values = (
+            self.inning,
+            self.balls,
+            self.strikes,
+            self.outs,
+            self.on_first,
+            self.on_second,
+            self.on_third,
+            self.batter,
+            self.pitcher,
+        )
+        if self.phase == "not_started" and (
+            self.half != "unknown" or any(value is not None for value in state_values)
+        ):
+            raise ValueError("not-started baseball state must not contain game situation values")
+        if self.phase == "active":
+            if self.inning is None or self.half == "unknown":
+                raise ValueError("active baseball state requires an inning and half")
+            if any(
+                value is not None and value > maximum
+                for value, maximum in ((self.balls, 3), (self.strikes, 2), (self.outs, 2))
+            ):
+                raise ValueError("active plate-appearance counts exceed baseball bounds")
+        return self
 
 
 class GameSummary(BaseModel):
@@ -166,6 +207,7 @@ class GameSummary(BaseModel):
 
 
 class GameState(GameSummary):
+    usage_note: str = Field(default=DETAIL_USAGE, max_length=500)
     situation: FootballSituation | BaseballSituation
 
 
@@ -190,10 +232,13 @@ class FindGamesResult(BaseModel):
     league: League
     timezone: str
     local_date: date
+    discovery_mode: Literal["team", "schedule"] = "team"
     games: list[GameSummary] = Field(max_length=10)
     coverage: DiscoveryCoverage
     clarification: str | None = Field(default=None, max_length=500)
     choices: list[str] = Field(default_factory=list, max_length=20)
+    suggested_queries: list[str] = Field(default_factory=list, max_length=20)
+    usage_note: str = Field(default=DISCOVERY_USAGE, max_length=500)
 
 
 class _GameRefPayload(BaseModel):
@@ -481,6 +526,9 @@ def _event_summary(
     last_play = None
     if isinstance(situation, dict) and isinstance(situation.get("lastPlay"), dict):
         last_play = _text(situation["lastPlay"].get("text"))
+    if lifecycle in NOT_STARTED_LIFECYCLES:
+        home_score = away_score = period = clock = last_play = None
+        label = None
     ref = encode_game_ref(
         _GameRefPayload(
             version=1,
@@ -615,8 +663,10 @@ def _football_situation(
 
 
 def _baseball_situation(
-    root: dict[str, Any], status: dict[str, Any], period: int | None
+    root: dict[str, Any], status: dict[str, Any], period: int | None, lifecycle: Lifecycle
 ) -> tuple[BaseballSituation, str | None]:
+    if lifecycle in NOT_STARTED_LIFECYCLES:
+        return BaseballSituation(phase="not_started"), None
     situation = root.get("situation")
     state = _object(situation, "summary.situation") if situation is not None else {}
     type_data = _object(status.get("type"), "status.type")
@@ -632,13 +682,34 @@ def _baseball_situation(
         else "unknown"
     )
     last_play = state.get("lastPlay")
+    balls = _optional_integer(state.get("balls"), "balls", maximum=4)
+    strikes = _optional_integer(state.get("strikes"), "strikes", maximum=3)
+    outs = _optional_integer(state.get("outs"), "outs", maximum=3)
+    active = (
+        lifecycle == "live"
+        and period is not None
+        and half != "unknown"
+        and (balls is None or balls <= 3)
+        and (strikes is None or strikes <= 2)
+        and (outs is None or outs <= 2)
+    )
+    phase: BaseballPhase = (
+        "complete"
+        if lifecycle == "final"
+        else "active"
+        if active
+        else "transition"
+        if lifecycle in {"live", "delayed", "suspended"}
+        else "unavailable"
+    )
     return (
         BaseballSituation(
+            phase=phase,
             inning=period,
             half=half,
-            balls=_optional_integer(state.get("balls"), "balls", maximum=4),
-            strikes=_optional_integer(state.get("strikes"), "strikes", maximum=3),
-            outs=_optional_integer(state.get("outs"), "outs", maximum=3),
+            balls=balls,
+            strikes=strikes,
+            outs=outs,
             on_first=_boolean(state.get("onFirst"), "first-base occupancy"),
             on_second=_boolean(state.get("onSecond"), "second-base occupancy"),
             on_third=_boolean(state.get("onThird"), "third-base occupancy"),
@@ -674,6 +745,9 @@ def _espn_detail(
     scheduled = _timestamp(competition.get("date"), "summary competition date")
     status_data = _object(competition.get("status"), "summary competition status")
     lifecycle, period, label, clock = _status(status_data)
+    if lifecycle in NOT_STARTED_LIFECYCLES:
+        home_score = away_score = period = clock = None
+        label = None
     zone = ZoneInfo(reference.timezone)
     local = scheduled.astimezone(zone)
     summary = GameSummary(
@@ -702,8 +776,15 @@ def _espn_detail(
     _validate_reference(summary, reference)
     situation: FootballSituation | BaseballSituation
     warnings: list[StateWarning] = []
-    if reference.league == "mlb":
-        situation, last_play = _baseball_situation(payload, status_data, period)
+    if lifecycle in NOT_STARTED_LIFECYCLES:
+        situation = (
+            BaseballSituation(phase="not_started")
+            if reference.league == "mlb"
+            else FootballSituation()
+        )
+        last_play = None
+    elif reference.league == "mlb":
+        situation, last_play = _baseball_situation(payload, status_data, period, lifecycle)
     else:
         situation, last_play, warnings = _football_situation(payload, competition, team_ids)
     state_data = summary.model_dump()
@@ -826,6 +907,10 @@ def _mlb_detail(
     last_play = None
     if isinstance(current_play, dict) and isinstance(current_play.get("result"), dict):
         last_play = _text(current_play["result"].get("description"))
+    lifecycle = _mlb_lifecycle(status)
+    if lifecycle in NOT_STARTED_LIFECYCLES:
+        home_runs = away_runs = inning = last_play = None
+        half = "unknown"
     summary = GameSummary(
         league="mlb",
         game_ref=encode_game_ref(reference),
@@ -841,9 +926,13 @@ def _mlb_detail(
         scheduled_start_local=local,
         home_score=None if home_runs is None else _integer(home_runs, "MLB home runs"),
         away_score=None if away_runs is None else _integer(away_runs, "MLB away runs"),
-        lifecycle=_mlb_lifecycle(status),
+        lifecycle=lifecycle,
         period=inning,
-        period_label=_text(linescore.get("currentInningOrdinal"), limit=100),
+        period_label=(
+            None
+            if lifecycle in NOT_STARTED_LIFECYCLES
+            else _text(linescore.get("currentInningOrdinal"), limit=100)
+        ),
         clock=None,
         last_play=last_play,
         retrieved_at=retrieved_at,
@@ -869,17 +958,44 @@ def _mlb_detail(
         raise IdentityMismatchError(
             "response_identity_mismatch", "MLB fallback detail conflicts with game_ref"
         )
-    situation = BaseballSituation(
-        inning=inning,
-        half=half,
-        balls=_optional_integer(linescore.get("balls"), "MLB balls", maximum=4),
-        strikes=_optional_integer(linescore.get("strikes"), "MLB strikes", maximum=3),
-        outs=_optional_integer(linescore.get("outs"), "MLB outs", maximum=3),
-        on_first="first" in offense,
-        on_second="second" in offense,
-        on_third="third" in offense,
-        batter=_athlete_name(offense.get("batter")),
-        pitcher=_athlete_name(defense.get("pitcher")),
+    balls = _optional_integer(linescore.get("balls"), "MLB balls", maximum=4)
+    strikes = _optional_integer(linescore.get("strikes"), "MLB strikes", maximum=3)
+    outs = _optional_integer(linescore.get("outs"), "MLB outs", maximum=3)
+    active = (
+        lifecycle == "live"
+        and inning is not None
+        and half != "unknown"
+        and (balls is None or balls <= 3)
+        and (strikes is None or strikes <= 2)
+        and (outs is None or outs <= 2)
+    )
+    phase: BaseballPhase = (
+        "not_started"
+        if lifecycle in NOT_STARTED_LIFECYCLES
+        else "complete"
+        if lifecycle == "final"
+        else "active"
+        if active
+        else "transition"
+        if lifecycle in {"live", "delayed", "suspended"}
+        else "unavailable"
+    )
+    situation = (
+        BaseballSituation(phase="not_started")
+        if lifecycle in NOT_STARTED_LIFECYCLES
+        else BaseballSituation(
+            phase=phase,
+            inning=inning,
+            half=half,
+            balls=balls,
+            strikes=strikes,
+            outs=outs,
+            on_first="first" in offense,
+            on_second="second" in offense,
+            on_third="third" in offense,
+            batter=_athlete_name(offense.get("batter")),
+            pitcher=_athlete_name(defense.get("pitcher")),
+        )
     )
     return GameState(**summary.model_dump(), situation=situation)
 
@@ -1005,14 +1121,31 @@ class SportsStateClient:
                 "limit must be an integer from 1 through 10",
                 fields={"limit": limit},
             )
-        sports_query = resolve_query(query, league)
+        normalized_query = " ".join(re.findall(r"[a-z0-9]+", query.casefold()))
+        schedule_query = normalized_query in {
+            "all",
+            "all games",
+            "games",
+            "schedule",
+            "today games",
+            "todays games",
+        }
+        sports_query = None if schedule_query else resolve_query(query, league)
         selected_day = local_date or self._now().astimezone(zone).date()
-        if sports_query.clarification:
+        if sports_query is not None and sports_query.clarification:
+            example = sports_query.choices[0] if sports_query.choices else None
+            retry = (
+                f' Retry sports_state_find_games with query="{example}" and keep league, '
+                "timezone, and local_date unchanged."
+                if example
+                else " Retry with one full team name or one exact matchup."
+            )
             return FindGamesResult(
                 query=query,
                 league=league,
                 timezone=zone.key,
                 local_date=selected_day,
+                discovery_mode="team",
                 games=[],
                 coverage=DiscoveryCoverage(
                     requested_local_date=selected_day,
@@ -1023,8 +1156,9 @@ class SportsStateClient:
                     matching_games=0,
                     discarded_event_count=0,
                 ),
-                clarification=sports_query.clarification,
+                clarification=f"{sports_query.clarification}{retry}",
                 choices=sports_query.choices,
+                suggested_queries=sports_query.choices,
             )
         provider_dates = self._provider_dates(selected_day, zone)
         games: dict[str, GameSummary] = {}
@@ -1065,7 +1199,7 @@ class SportsStateClient:
                     continue
                 if summary.local_date != selected_day:
                     continue
-                if not all(
+                if sports_query is not None and not all(
                     requested.name in {summary.home_team, summary.away_team}
                     for requested in sports_query.teams
                 ):
@@ -1073,10 +1207,17 @@ class SportsStateClient:
                 games.setdefault(summary.provider_game_id, summary)
             if games:
                 break
-        ranked = sorted(
+        all_ranked = sorted(
             games.values(), key=lambda game: (game.scheduled_start, game.provider_game_id)
         )
-        ranked = ranked[:limit]
+        ranked = all_ranked[:limit]
+        if len(all_ranked) > limit and len(warnings) < 20:
+            warnings.append(
+                StateWarning(
+                    code="results_truncated",
+                    message=f"Returned the first {limit} games from this bounded local-day slate.",
+                )
+            )
         for game in ranked:
             self._discoveries[game.game_ref] = game
             self._discoveries.move_to_end(game.game_ref)
@@ -1097,6 +1238,7 @@ class SportsStateClient:
             league=league,
             timezone=zone.key,
             local_date=selected_day,
+            discovery_mode="schedule" if schedule_query else "team",
             games=ranked,
             coverage=coverage,
         )

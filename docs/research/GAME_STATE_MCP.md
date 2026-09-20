@@ -32,7 +32,8 @@ header, credential, or arbitrary fetch target. No new environment variable is re
 
 Required inputs:
 
-- `query`: exact supported team or matchup text, 1-200 characters.
+- `query`: exact supported team or matchup text, or reserved exact value `all` for a bounded
+  same-day slate; 1-200 characters.
 - `league`: `mlb`, `nfl`, or `ncaa_football`.
 - `timezone`: IANA timezone used for the requested local calendar day.
 
@@ -43,15 +44,22 @@ Optional inputs:
 - `limit`: integer 1-10, default 5. It counts games.
 
 The tool reuses the reviewed market-team catalog and exact alias resolver. Ambiguous NCAA names,
-unknown opponents, conflicting leagues, and unsupported query residue return clarification and
-perform no provider request. It does not offer date ranges, season scans, next/recent selectors,
-pagination, or exhaustive mode.
+unknown opponents, conflicting leagues, and unsupported query residue return clarification,
+machine-ready `suggested_queries`, and an exact example retry call while performing no provider
+request. Use the reserved exact query `all` for a bounded same-day league slate. It returns at most
+the requested limit and warns when truncated; it does not offer date ranges, season scans,
+next/recent selectors, pagination, or exhaustive mode.
 
 Each returned summary contains canonical and raw home/away names, ESPN event ID, opaque
 `game_ref`, UTC/local start, score, lifecycle, period/clock, bounded last play, source URL,
 observation identity/time, cache fields, and bounded warnings. Results never include a raw provider
 payload. ESPN's observed `-1` football-down transition sentinel is treated as unavailable and
 returned as null with a warning; other values outside 1-4 reject detail.
+
+Discovery is explicitly labeled as a lightweight scoreboard snapshot for choosing a game. Detail
+is authoritative for normalized state fields. For `scheduled` and `pregame` games, provider
+placeholders such as `0-0`, period `1`, clock `0:00`, top of inning, count, bases, and last play are
+normalized to null; baseball `half` remains the explicit non-null enum value `unknown`.
 
 ### `sports_state_get_game_state`
 
@@ -61,20 +69,32 @@ Input:
 
 The tool returns the common summary fields plus exactly one situation object:
 
-- MLB: `sport="baseball"`, inning/half, balls, strikes, outs, three base-occupancy flags,
-  batter, and pitcher.
+- MLB: `sport="baseball"`, semantic `phase`, inning/half, balls, strikes, outs, three
+  base-occupancy flags, batter, and pitcher. `phase` is `not_started`, `active`, `transition`,
+  `complete`, or `unavailable`; it explains why situation fields may be null.
 - NFL/NCAA football: `sport="football"`, possession team, down, distance, field position,
   red-zone flag, home/away timeouts, and provider down-distance label.
 
-Every situation field except the sport discriminator is nullable. Transitions, halftime, replay,
-delay, and provider update races legitimately omit fields. The parser does not derive possession
-from last-play team, infer bases from prose, or calculate unavailable timeout/red-zone state.
+Every situation field except the sport discriminator and baseball phase is nullable. Transitions,
+halftime, replay, delay, and provider update races legitimately omit fields. The parser does not
+derive possession from last-play team, infer bases from prose, or calculate unavailable
+timeout/red-zone state.
+
+Baseball invariants prevent contradictory state: `not_started` has no inning/count/base/player
+values and `half="unknown"`; `active` requires a positive inning and top/bottom half, with balls
+0-3, strikes 0-2, and outs 0-2. Provider terminal-count sentinels or incomplete live inning data
+are labeled `transition` rather than misrepresented as an active plate appearance.
 
 ## Identity and opaque references
 
 Discovery references carry only version, source namespace, league, ESPN event ID, scheduled start,
 requested timezone, and canonical home/away teams. Canonical JSON is wrapped with a
 domain-separated SHA-256 checksum and URL-safe base64 encoding.
+
+Because requested timezone is required identity context, rediscovering the same ESPN event in a
+different timezone intentionally produces a different `game_ref`. Compare the explicit source,
+league, provider event ID, participants, and UTC start when recognizing the same real-world event;
+never compare opaque token text or cross-use references between discovery contexts.
 
 The checksum detects truncation and common model edits; it is not authentication. References need
 no deployment secret and remain valid across subprocess or Cloud Run restarts. Before provider

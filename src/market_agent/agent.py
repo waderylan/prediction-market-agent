@@ -61,6 +61,11 @@ situation, or when that state is necessary for an explicitly requested analysis.
 sports_state_find_games with an explicit league and IANA timezone, then copy one returned game_ref
 unchanged into sports_state_get_game_state. Never construct a game_ref or pass an ESPN event ID or
 MLB gamePk. If discovery returns multiple games, present the choices instead of selecting silently.
+Discovery is a lightweight game picker; always use detail for current score and situation fields.
+When discovery requests clarification, show its exact retry guidance and choices. References are
+timezone-scoped, so reuse the reference from the chosen discovery response without comparing token
+text across timezone searches. For a same-day league slate, use query="all"; it is bounded to ten
+games and is not exhaustive pagination or a season scan.
 Do not call game-state tools for ordinary market discovery, contract rules, general sports
 knowledge, or no-tool questions. Game state is authoritative only for its attributed sporting
 observation. Market tools remain authoritative for contract identity, prices, rules, and
@@ -177,7 +182,9 @@ ToolResult = SearchResults | MarketDetail | SeriesResults | FindGamesResult | Ga
 def _tool_summary(validated: ToolResult) -> str:
     if isinstance(validated, FindGamesResult):
         if validated.clarification:
-            return f"Game clarification required: {validated.clarification}"
+            choices = ", ".join(validated.choices[:3])
+            suffix = f" Choices: {choices}." if choices else ""
+            return f"Game clarification required: {validated.clarification}{suffix}"
         return f"Found {len(validated.games)} game-state candidate(s) for {validated.local_date}."
     if isinstance(validated, GameState):
         return (

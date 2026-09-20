@@ -70,9 +70,12 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
         """Find a current-day MLB, NFL, or NCAA Division I football game by team or matchup.
         league and IANA timezone are required. local_date is one exact local calendar day; when
         omitted, the server uses and discloses today's date in that timezone. Returns at most ten
-        provider-backed game choices. Copy one returned game_ref unchanged into
-        sports_state_get_game_state. Ambiguous teams return choices without provider I/O. This
-        tool does not return odds, forecasts, contract rules, or market settlement.
+        provider-backed game choices. Use query="all" for a bounded same-day league slate (at
+        most ten games); it is not a season scan or exhaustive pagination surface.
+        Copy one returned game_ref unchanged into sports_state_get_game_state for authoritative
+        normalized state fields. Ambiguous teams return choices and exact retry guidance without
+        provider I/O. References are scoped to the requested timezone. This tool does not return
+        odds, forecasts, contract rules, or market settlement.
         """
         assert active_client is not None
         try:
@@ -98,9 +101,11 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
         """Read one current normalized game snapshot from an unchanged discovery game_ref.
         The opaque reference is checksummed and restart-safe; never construct it from an ESPN ID,
         MLB gamePk, team, date, market ID, or prior knowledge. Returns common score/lifecycle data
-        and exactly one league-specific situation object. Null situation fields are unavailable,
-        not inferred. ESPN is primary; exact-identity MLB StatsAPI fallback is MLB-only. A final
-        sporting result does not establish prediction-market settlement or contract equivalence.
+        and exactly one league-specific situation object. This detail response, not discovery, is
+        authoritative for normalized state fields. Scheduled/pregame placeholders and unavailable
+        fields are null, not inferred. ESPN is primary; exact-identity MLB StatsAPI fallback is
+        MLB-only. A final sporting result does not establish prediction-market settlement or
+        contract equivalence.
         """
         assert active_client is not None
         try:

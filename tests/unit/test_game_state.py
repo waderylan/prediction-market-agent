@@ -212,6 +212,15 @@ def test_lifecycle_uses_explicit_status(provider_status, expected):
     assert _status(provider_status)[0] == expected
 
 
+def test_baseball_phase_rejects_contradictory_state():
+    with pytest.raises(ValueError, match="inning and half"):
+        BaseballSituation(phase="active", half="top")
+    with pytest.raises(ValueError, match="counts exceed"):
+        BaseballSituation(phase="active", inning=1, half="top", balls=4)
+    with pytest.raises(ValueError, match="must not contain"):
+        BaseballSituation(phase="not_started", inning=1, half="top")
+
+
 async def test_discovery_normalizes_identity_timezone_state_and_bounds_requests():
     calls = []
 
@@ -235,6 +244,8 @@ async def test_discovery_normalizes_identity_timezone_state_and_bounds_requests(
     assert game.scheduled_start_local.utcoffset() == timedelta(hours=-7)
     assert game.home_score == 10 and game.away_score == 17
     assert game.lifecycle == "live" and game.period == 3
+    assert "lightweight scoreboard snapshot" in result.usage_note
+    assert "scoped to the requested timezone" in result.usage_note
     assert result.coverage.scoreboard_requests == 1
     assert result.coverage.events_scanned == 1
 
@@ -272,6 +283,9 @@ async def test_ambiguity_invalid_timezone_and_limit_fail_before_provider_io():
             "OSU", league="ncaa_football", timezone="UTC", local_date=date(2026, 9, 20)
         )
         assert unclear.clarification and unclear.games == []
+        assert 'query="Ohio State Buckeyes"' in unclear.clarification
+        assert "keep league, timezone, and local_date unchanged" in unclear.clarification
+        assert unclear.suggested_queries == unclear.choices
         with pytest.raises(SportsStateError, match="IANA") as timezone_error:
             await client.find_games("Falcons", league="nfl", timezone="Nowhere/Local")
         assert timezone_error.value.code == "invalid_timezone"
@@ -281,6 +295,77 @@ async def test_ambiguity_invalid_timezone_and_limit_fail_before_provider_io():
     finally:
         await http.aclose()
     assert calls == []
+
+
+async def test_scheduled_discovery_and_detail_remove_provider_state_placeholders():
+    scheduled_status = status(
+        "STATUS_SCHEDULED",
+        "pre",
+        "Scheduled",
+        detail="Scheduled",
+        period=1,
+        clock="0:00",
+    )
+    event = scoreboard_event(
+        event_id="401000002",
+        start="2026-09-20T20:10:00Z",
+        game_status=scheduled_status,
+        teams=competitors(
+            home="New York Yankees",
+            away="San Diego Padres",
+            home_id="10",
+            away_id="25",
+            home_score="0",
+            away_score="0",
+        ),
+        situation={"lastPlay": {"text": "Provider placeholder."}},
+    )
+    summary = mlb_summary(event)
+
+    def handler(request):
+        payload = summary if request.url.path.endswith("/summary") else {"events": [event]}
+        return httpx.Response(200, json=payload)
+
+    client, http = client_with(handler)
+    try:
+        result = await discover(client, "Yankees", "mlb")
+        discovered = result.games[0]
+        state = await client.get_game_state(discovered.game_ref)
+    finally:
+        await http.aclose()
+
+    for snapshot in (discovered, state):
+        assert snapshot.lifecycle == "scheduled"
+        assert snapshot.home_score is None and snapshot.away_score is None
+        assert snapshot.period is None and snapshot.period_label is None
+        assert snapshot.clock is None and snapshot.last_play is None
+    assert "authoritative normalized sporting-state snapshot" in state.usage_note
+    assert isinstance(state.situation, BaseballSituation)
+    assert state.situation.model_dump() == BaseballSituation(phase="not_started").model_dump()
+
+
+async def test_bounded_schedule_query_lists_games_without_team_wordle():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"events": [scoreboard_event()]})
+
+    client, http = client_with(handler)
+    try:
+        result = await client.find_games(
+            "all",
+            league="nfl",
+            timezone="America/Los_Angeles",
+            local_date=date(2026, 9, 20),
+        )
+    finally:
+        await http.aclose()
+
+    assert result.discovery_mode == "schedule"
+    assert len(result.games) == 1
+    assert result.games[0].home_team == "Atlanta Falcons"
+    assert len(calls) == 1
 
 
 async def test_malformed_sibling_is_discarded_but_valid_game_survives():
@@ -396,6 +481,7 @@ async def test_detail_exposes_mlb_inning_count_outs_bases_and_players():
     finally:
         await http.aclose()
     assert isinstance(state.situation, BaseballSituation)
+    assert state.situation.phase == "active"
     assert (state.situation.inning, state.situation.half) == (6, "bottom")
     assert (state.situation.balls, state.situation.strikes, state.situation.outs) == (1, 2, 1)
     assert (state.situation.on_first, state.situation.on_second, state.situation.on_third) == (

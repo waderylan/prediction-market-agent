@@ -128,10 +128,17 @@ Interactive HTTP documentation is at `/docs`.
   `settlement_value`, `winning_outcome`, and `resolved_at`; prices are not settlement evidence.
 - Game-state discovery checks one requested local day and at most two adjacent UTC boundary pages;
   it never scans a season. Omitting `local_date` uses and discloses today in the requested timezone.
+- Game-state discovery is a lightweight picker. Use `query="all"` for a bounded same-day league
+  slate of at most 10 games; this is not exhaustive pagination or a season scan. Its `usage_note`
+  directs callers to detail for authoritative normalized state fields.
 - `game_ref` is restart-safe, versioned, checksummed, and bound to the ESPN game, league, teams,
   scheduled start, and timezone. It is not a credential and must not be edited or reconstructed.
+  Rediscovery in another timezone intentionally returns a different reference.
 - Game state returns one baseball or football situation object. Missing possession, count, outs,
   bases, players, timeouts, or field position remain null rather than being inferred.
+- Scheduled/pregame provider placeholders are normalized to null in discovery and detail; baseball
+  `half` is `unknown` until an inning exists. Baseball `phase` distinguishes `not_started`, active
+  play, provider transitions, completed games, and unavailable situation data.
 - ESPN is free, unauthenticated, undocumented, and has no SLA. MLB StatsAPI is the MLB-only
   fallback; NFL and NCAA failures return controlled unavailability without substitution.
 - `retrieved_at` is this service's observation time. Cached state keeps that original time and

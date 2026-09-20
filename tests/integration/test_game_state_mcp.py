@@ -171,6 +171,10 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
             {"query": "OSU", "league": "ncaa_football", "timezone": "UTC"},
         )
         assert not unclear.isError and unclear.structuredContent["clarification"]
+        assert 'query="Ohio State Buckeyes"' in unclear.structuredContent["clarification"]
+        assert (
+            unclear.structuredContent["suggested_queries"] == unclear.structuredContent["choices"]
+        )
         assert calls == []
         found = await session.call_tool(
             "sports_state_find_games",
@@ -189,6 +193,7 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         assert game["local_date"] == "2026-09-20"
         assert game["source"] == "espn"
         assert game["game_ref"] != game["provider_game_id"]
+        assert "lightweight scoreboard snapshot" in found.structuredContent["usage_note"]
 
         detail = await session.call_tool(
             "sports_state_get_game_state", {"game_ref": game["game_ref"]}
@@ -198,6 +203,10 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         assert detail.structuredContent["situation"]["sport"] == "football"
         assert detail.structuredContent["situation"]["possession_team"] == "Carolina Panthers"
         assert detail.structuredContent["situation"]["down"] == 2
+        assert (
+            "authoritative normalized sporting-state snapshot"
+            in detail.structuredContent["usage_note"]
+        )
         cached = await session.call_tool(
             "sports_state_get_game_state", {"game_ref": game["game_ref"]}
         )
