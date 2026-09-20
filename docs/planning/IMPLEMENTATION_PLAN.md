@@ -26,10 +26,11 @@
 | 8. Jev sports-contract equivalence | Planned |
 | 9. Bounded sports evidence research | Planned |
 | 10. Complete sports agent and forecast output | Planned |
-| 11. Optional sports-research ledger | Optional |
-| 12. Failure handling and verification | In progress across implemented layers |
-| 13. Cloud Run and submission | Required |
-| 14. Polymarket US migration evaluation | Optional after deployment |
+| 11. Unified multi-MCP sports intelligence brief | Planned |
+| 12. Optional sports-research ledger | Optional |
+| 13. Failure handling and verification | In progress across implemented layers |
+| 14. Cloud Run and submission | Required |
+| 15. Polymarket US migration evaluation | Optional after deployment |
 
 ## 2. Fixed Decisions
 
@@ -731,7 +732,7 @@ Multi-server MCP client
   sporting state separate from prediction-market settlement.
 - Deterministic, real MCP, agent, bounded public-provider, and non-root container checks cover the
   documented request, retry, size, cache, identity, situation, fallback, and failure contracts.
-- Cloud Run deployment remains Milestone 13 work; local/container verification does not claim a
+- Cloud Run deployment remains Milestone 14 work; local/container verification does not claim a
   deployed third-server runtime.
 
 #### Pivot Point
@@ -895,7 +896,73 @@ Multi-server MCP client
 - Simplify output sections or graph branching if latency becomes excessive.
 - Preserve tool selection, memory, and MCP correctness before optional forecast detail.
 
-### Milestone 11: Optional SQLite Sports-Research Ledger
+### Milestone 11: Unified Multi-MCP Sports Intelligence Brief
+
+#### Work
+
+- Define and test an explicit intent-to-source routing matrix:
+  - Current score, lifecycle, or in-game situation uses the sports-state MCP.
+  - A named prediction-market platform uses only that platform's MCP unless comparison is requested.
+  - Cross-market comparison uses both market MCPs and retrieves exact contract detail before
+    comparing terms or prices.
+  - A full sports intelligence brief uses the sports-state MCP, both relevant market MCPs, and the
+    bounded research MCP from Milestone 9 when it is available and materially relevant.
+  - General knowledge and unrelated questions preserve the no-tool path.
+- Resolve one canonical sporting event before synthesis. Bind every game-state observation,
+  market contract, and research item to league, both participants, and scheduled start; never merge
+  evidence when identity is different, ambiguous, or insufficient.
+- Add a typed intelligence-brief view model with these sections when evidence exists:
+  - Event identity, localized start, lifecycle, score, and sport-specific situation.
+  - Kalshi and Polymarket contract identities, named outcomes, prices, quote times, links, and
+    freshness warnings.
+  - Deterministic equivalence or mismatch result, material rule differences, settlement authority,
+    and cancellation/postponement treatment.
+  - Bounded external evidence from Milestone 9, separated into supporting, conflicting, and
+    unrelated findings.
+  - Source-attributed synthesis, missing evidence, uncertainty, and explicit limitations.
+- Keep each fact attached to its source, `retrieved_at`, and authoritative provider timestamp when
+  one exists. Never present separate MCP calls as one transactionally consistent snapshot.
+- Keep sporting state, market trading state, contract equivalence, and market settlement as four
+  separate concepts. A final game result may inform the brief but never proves contract settlement.
+- Retrieve exact detail after discovery, reuse opaque references unchanged, and respect each
+  server's request, pagination, cache, size, and timeout budgets.
+- Run independent MCP calls concurrently only after event identity and requested scope are known.
+  Preserve deterministic result ordering and bounded total tool calls.
+- Support follow-up questions from session memory without silently treating an old observation as
+  fresh. Refresh only the sources required by the follow-up.
+- Present useful partial briefs when one MCP is unavailable. Name the missing source and avoid
+  substituting another provider's facts or expanding to an unrequested source.
+- Add scripted-model and real-MCP integration tests that assert the exact servers and tools called,
+  their order/dependencies, normalized evidence passed to synthesis, and sources intentionally not
+  called.
+
+#### Exit Criteria
+
+- A representative full-brief request invokes sports state, Kalshi, and Polymarket through real MCP
+  sessions; it also invokes bounded research when Milestone 9 is enabled and relevant.
+- Sports-state-only, Kalshi-only, Polymarket-only, cross-market, full-brief, follow-up, and no-tool
+  prompts route to the minimum correct source set with no invented identifiers.
+- The agent deterministically verifies event identity before combining sources and asks for
+  clarification when multiple games or contracts remain plausible.
+- The intelligence brief names every source and observation/quote time, distinguishes live snapshot
+  drift, and keeps game result, price, contract rules, equivalence, and settlement separate.
+- Partial server failure produces an explicitly incomplete but useful brief; identity conflict or
+  insufficient evidence prevents unsupported synthesis.
+- Integration tests prove that irrelevant MCPs are not called and that a full brief can consume all
+  relevant MCP outputs within bounded latency and tool-call budgets.
+- Documentation and diagrams describe this as planned until the complete routing and brief tests
+  pass; no earlier milestone is relabeled as providing the unified brief.
+
+#### Pivot Point
+
+- If the complete brief exceeds latency or context budgets, keep the routing matrix and typed view
+  model but make external research opt-in and use compact discovery projections before removing a
+  required identity, provenance, rule, or freshness field.
+- If model-selected routing remains inconsistent, add a small deterministic intent classifier for
+  source eligibility while leaving exact tool choice and synthesis to the agent.
+- Never collapse the independent MCP servers into one provider facade merely to simplify routing.
+
+### Milestone 12: Optional SQLite Sports-Research Ledger
 
 #### Work
 
@@ -918,7 +985,7 @@ Multi-server MCP client
 - Cut or defer this milestone if core rubric work, deployment, or verification is incomplete.
 - Do not introduce managed database infrastructure for Assignment 1.
 
-### Milestone 12: Sports Failure Handling and Verification
+### Milestone 13: Sports Failure Handling and Verification
 
 #### Work
 
@@ -959,7 +1026,7 @@ Multi-server MCP client
 
 - Fix correctness and failure behavior before adding presentation features.
 
-### Milestone 13: Cloud Run Deployment and Submission Artifacts
+### Milestone 14: Cloud Run Deployment and Submission Artifacts
 
 #### Work
 
@@ -984,7 +1051,7 @@ Multi-server MCP client
 - Required submission files are present and secrets are absent.
 - The service remains available for grading.
 
-### Milestone 14: Optional Polymarket US Migration Evaluation
+### Milestone 15: Optional Polymarket US Migration Evaluation
 
 #### Work
 
