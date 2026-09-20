@@ -172,6 +172,66 @@ def _tool_summary(validated: SearchResults | MarketDetail | SeriesResults) -> st
     return f"Retrieved {validated.platform.value} {validated.market_id}; YES {price}; {rules}."
 
 
+def _tool_result_schema(
+    tool_name: str,
+) -> type[SearchResults | MarketDetail | SeriesResults]:
+    if tool_name == "kalshi_search_series":
+        return SeriesResults
+    if tool_name == "kalshi_search_markets":
+        return KalshiSearchResults
+    if tool_name.endswith("_search_markets"):
+        return SearchResults
+    return MarketDetail
+
+
+def _validate_tool_result(
+    tool_name: str, arguments: dict[str, Any], result: ToolMessage
+) -> SearchResults | MarketDetail | SeriesResults:
+    artifact = result.artifact
+    structured_content = artifact.get("structured_content") if isinstance(artifact, dict) else None
+    validated = _tool_result_schema(tool_name).model_validate(structured_content)
+
+    markets = []
+    if isinstance(validated, SearchResults):
+        markets = [contract for game in validated.games for contract in game.contracts]
+        if not markets:
+            markets = list(validated.markets)
+    elif isinstance(validated, MarketDetail):
+        markets = [validated]
+
+    expected_platform = tool_name.split("_", 1)[0]
+    if any(market.platform.value != expected_platform for market in markets):
+        raise ValueError("Market platform mismatch")
+    if isinstance(validated, MarketDetail) and validated.market_id != arguments.get("market_id"):
+        raise ValueError("Market identifier mismatch")
+    return validated
+
+
+def _record_market_detail(
+    details: list[dict[str, Any]], detail: MarketDetail
+) -> tuple[list[dict[str, Any]], MatchingReport | None]:
+    snapshot = detail.model_dump(mode="json")
+    updated_details = [
+        saved
+        for saved in details
+        if (saved["platform"], saved["market_id"]) != (snapshot["platform"], snapshot["market_id"])
+    ]
+    updated_details.append(snapshot)
+
+    # The per-turn tool budget bounds this list to four snapshots.
+    canonical = [CanonicalMarket.model_validate(saved) for saved in updated_details]
+    report = match_candidates(
+        [market for market in canonical if market.platform == Platform.POLYMARKET],
+        [market for market in canonical if market.platform == Platform.KALSHI],
+        truncated={
+            (Platform(saved["platform"]), saved["market_id"])
+            for saved in updated_details
+            if saved["rules_truncated"]
+        },
+    )
+    return updated_details, report if report.pairs else None
+
+
 class ChatAgent:
     def __init__(
         self,
@@ -260,70 +320,17 @@ class ChatAgent:
                         if not isinstance(result, ToolMessage) or result.status == "error":
                             content = "Market tool failed. Check arguments or try again later."
                         else:
-                            schema: type[SearchResults | MarketDetail | SeriesResults]
-                            if name == "kalshi_search_series":
-                                schema = SeriesResults
-                            elif name == "kalshi_search_markets":
-                                schema = KalshiSearchResults
-                            else:
-                                schema = (
-                                    SearchResults
-                                    if name.endswith("_search_markets")
-                                    else MarketDetail
-                                )
-                            artifact = result.artifact
-                            data = (
-                                artifact["structured_content"]
-                                if isinstance(artifact, dict)
-                                else None
-                            )
-                            validated = schema.model_validate(data)
-                            markets = (
-                                [
-                                    contract
-                                    for game in validated.games
-                                    for contract in game.contracts
-                                ]
-                                or validated.markets
-                                if isinstance(validated, SearchResults)
-                                else [validated]
-                                if isinstance(validated, MarketDetail)
-                                else []
-                            )
-                            if any(m.platform.value != name.split("_", 1)[0] for m in markets):
-                                raise ValueError("Market platform mismatch")
-                            if isinstance(validated, MarketDetail) and validated.market_id != call[
-                                "args"
-                            ].get("market_id"):
-                                raise ValueError("Market identifier mismatch")
+                            validated = _validate_tool_result(name, call["args"], result)
                             content = validated.model_dump_json()
                             summary = _tool_summary(validated)
                             if isinstance(validated, MarketDetail):
-                                snapshot = validated.model_dump(mode="json")
-                                details = [
-                                    d
-                                    for d in details
-                                    if (d["platform"], d["market_id"])
-                                    != (snapshot["platform"], snapshot["market_id"])
-                                ]
-                                details.append(snapshot)
-                                # Budget bounds this list to four snapshots per turn.
-                                canonical = [CanonicalMarket.model_validate(d) for d in details]
-                                report = match_candidates(
-                                    [m for m in canonical if m.platform == Platform.POLYMARKET],
-                                    [m for m in canonical if m.platform == Platform.KALSHI],
-                                    truncated={
-                                        (Platform(d["platform"]), d["market_id"])
-                                        for d in details
-                                        if d["rules_truncated"]
-                                    },
-                                )
-                                if report.pairs:
+                                details, report = _record_market_detail(details, validated)
+                                if report is not None:
                                     matching_report = report.model_dump(mode="json")
                                     content = json.dumps(
                                         {
-                                            "market": snapshot,
-                                            "matching_report": report.model_dump(mode="json"),
+                                            "market": validated.model_dump(mode="json"),
+                                            "matching_report": matching_report,
                                         }
                                     )
                                     log_event(

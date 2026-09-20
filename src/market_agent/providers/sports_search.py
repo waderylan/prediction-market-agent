@@ -45,6 +45,133 @@ KALSHI_SERIES: dict[str, tuple[League, str]] = {
 POLY_TAGS: dict[str, League] = {"mlb": "mlb", "nfl": "nfl", "cfb": "ncaa_football"}
 
 
+def _validate_game_selectors(next_game_only: bool, most_recent_game_only: bool) -> None:
+    if next_game_only and most_recent_game_only:
+        raise MarketRequestError(
+            "conflicting_selectors",
+            "next_game_only and most_recent_game_only are mutually exclusive",
+            fields={"next_game_only": True, "most_recent_game_only": True},
+        )
+
+
+def _resolve_date_range(
+    date_range: tuple[datetime | None, datetime | None] | None,
+    event_date: date | None,
+) -> tuple[datetime | None, datetime | None]:
+    if date_range is not None:
+        return date_range
+    if event_date is None:
+        return None, None
+    start = datetime.combine(event_date, time.min, UTC)
+    return start, start + timedelta(days=1)
+
+
+def _kalshi_series_scope(query: SportsQuery, series_ticker: str | None) -> list[str]:
+    scope = [ticker for ticker, (league, _) in KALSHI_SERIES.items() if league == query.league]
+    if series_ticker:
+        if series_ticker not in scope:
+            raise MarketRequestError(
+                "conflicting_series_filter",
+                "series_ticker conflicts with the requested league and game-winner scope",
+                fields={"series_ticker": series_ticker, "league": query.league},
+            )
+        return [series_ticker]
+    if query.league == "ncaa_football" and all(team.division == "FBS" for team in query.teams):
+        return ["KXNCAAFGAME"]
+    return scope
+
+
+def _validate_kalshi_cursor(
+    state: dict[str, Any],
+    *,
+    normalized_query: str,
+    expected_scope: dict[str, Any],
+    series_scope: list[str],
+) -> dict[str, str]:
+    if state and state.get("normalized_query") != normalized_query:
+        raise MarketRequestError(
+            "cursor_query_mismatch",
+            "continuation does not match the requested sports query",
+            fields={"query": normalized_query, "cursor_query": state.get("normalized_query")},
+        )
+    if state and any(state.get(key) != value for key, value in expected_scope.items()):
+        raise MarketRequestError(
+            "cursor_filter_mismatch",
+            "continuation does not match the requested league, status, date, or selectors",
+            fields={"query": normalized_query, "league": expected_scope["league"]},
+        )
+    saved_cursors = state.get("cursors", {})
+    if not isinstance(saved_cursors, dict) or any(
+        key not in series_scope or not isinstance(value, str)
+        for key, value in saved_cursors.items()
+    ):
+        raise MarketRequestError(
+            "cursor_filter_mismatch",
+            "continuation does not match the requested sports series scope",
+            fields={"series_scope": series_scope},
+        )
+    return saved_cursors
+
+
+def _polymarket_search_terms(query: SportsQuery) -> tuple[str, str]:
+    search_team = query.teams[0]
+    if query.league == "ncaa_football":
+        search_query = search_team.kalshi_name.replace(" St.", " State")
+    else:
+        # Provider titles often use just the professional nickname. Accept only a
+        # unique catalog alias, never a guessed abbreviation.
+        nicknames = [
+            alias
+            for alias in search_team.aliases
+            if len(words(alias)) > 3
+            and alias not in {search_team.name, search_team.kalshi_name}
+            and words(search_team.name).endswith(" " + words(alias))
+            and participant(alias, search_team.league) == search_team
+        ]
+        search_query = min(nicknames, key=len) if nicknames else search_team.name
+    tag = next(tag for tag, league in POLY_TAGS.items() if league == query.league)
+    return search_query, tag
+
+
+def _validate_polymarket_cursor(
+    state: dict[str, Any],
+    *,
+    search_query: str,
+    expected_filters: dict[str, Any],
+) -> tuple[int, str | None, int]:
+    if state and state.get("query") != search_query:
+        raise MarketRequestError(
+            "cursor_query_mismatch",
+            "continuation does not match the requested sports query",
+            fields={"query": search_query, "cursor_query": state.get("query")},
+        )
+    if state and any(state.get(key) != value for key, value in expected_filters.items()):
+        raise MarketRequestError(
+            "cursor_filter_mismatch",
+            "continuation does not match the requested league, status, date, or selectors",
+            fields={"query": search_query, "league": expected_filters["league"]},
+        )
+
+    mode = state.get("mode", "search")
+    if mode not in {"search", "catalog"}:
+        raise MarketRequestError("invalid_cursor", "continuation contains an invalid mode")
+    page = state.get("page", 1)
+    catalog_series = state.get("series") if mode == "catalog" else None
+    catalog_offset = state.get("offset", 0)
+    if (
+        type(page) is not int
+        or page < 1
+        or (
+            catalog_series is not None
+            and (not isinstance(catalog_series, str) or not catalog_series.isdigit())
+        )
+        or type(catalog_offset) is not int
+        or catalog_offset < 0
+    ):
+        raise MarketRequestError("invalid_cursor", "continuation contains invalid page state")
+    return page, catalog_series, catalog_offset
+
+
 def continuation_token(provider: str, state: dict[str, Any]) -> str:
     payload = json.dumps({"provider": provider, **state}, separators=(",", ":"), sort_keys=True)
     return urlsafe_b64encode(payload.encode()).decode().rstrip("=")
@@ -242,28 +369,9 @@ async def search_kalshi(
     most_recent_game_only: bool = False,
     timezone: str = "UTC",
 ) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
-    if next_game_only and most_recent_game_only:
-        raise MarketRequestError(
-            "conflicting_selectors",
-            "next_game_only and most_recent_game_only are mutually exclusive",
-            fields={"next_game_only": True, "most_recent_game_only": True},
-        )
-    if date_range is None:
-        date_range = (
-            datetime.combine(event_date, time.min, UTC) if event_date else None,
-            datetime.combine(event_date, time.min, UTC) + timedelta(days=1) if event_date else None,
-        )
-    scope = [k for k, (league, _) in KALSHI_SERIES.items() if league == query.league]
-    if series_ticker:
-        if series_ticker not in scope:
-            raise MarketRequestError(
-                "conflicting_series_filter",
-                "series_ticker conflicts with the requested league and game-winner scope",
-                fields={"series_ticker": series_ticker, "league": query.league},
-            )
-        scope = [series_ticker]
-    elif query.league == "ncaa_football" and all(t.division == "FBS" for t in query.teams):
-        scope = ["KXNCAAFGAME"]
+    _validate_game_selectors(next_game_only, most_recent_game_only)
+    date_range = _resolve_date_range(date_range, event_date)
+    scope = _kalshi_series_scope(query, series_ticker)
     state = continuation_state(continuation, "kalshi")
     normalized_query = " vs ".join(team.name for team in query.teams)
     expected_scope = {
@@ -276,27 +384,12 @@ async def search_kalshi(
         "next_game_only": next_game_only,
         "most_recent_game_only": most_recent_game_only,
     }
-    if state and state.get("normalized_query") != normalized_query:
-        raise MarketRequestError(
-            "cursor_query_mismatch",
-            "continuation does not match the requested sports query",
-            fields={"query": normalized_query, "cursor_query": state.get("normalized_query")},
-        )
-    if state and any(state.get(key) != value for key, value in expected_scope.items()):
-        raise MarketRequestError(
-            "cursor_filter_mismatch",
-            "continuation does not match the requested league, status, date, or selectors",
-            fields={"query": normalized_query, "league": query.league},
-        )
-    saved_cursors = state.get("cursors", {})
-    if not isinstance(saved_cursors, dict) or any(
-        key not in scope or not isinstance(value, str) for key, value in saved_cursors.items()
-    ):
-        raise MarketRequestError(
-            "cursor_filter_mismatch",
-            "continuation does not match the requested sports series scope",
-            fields={"series_scope": scope},
-        )
+    saved_cursors = _validate_kalshi_cursor(
+        state,
+        normalized_query=normalized_query,
+        expected_scope=expected_scope,
+        series_scope=scope,
+    )
     # All request-owned cursor state is validated before contacting Kalshi.
     for ticker in scope:
         payload = root_object(
@@ -414,7 +507,7 @@ async def search_kalshi(
         )
     if coverage.stop_reason == "not_started":
         coverage.stop_reason = "page_budget" if coverage.has_more else "provider_exhausted"
-    return finish(
+    return finalize_discovery_results(
         results,
         coverage,
         limit,
@@ -485,17 +578,8 @@ async def search_polymarket(
     most_recent_game_only: bool = False,
     timezone: str = "UTC",
 ) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
-    if next_game_only and most_recent_game_only:
-        raise MarketRequestError(
-            "conflicting_selectors",
-            "next_game_only and most_recent_game_only are mutually exclusive",
-            fields={"next_game_only": True, "most_recent_game_only": True},
-        )
-    if date_range is None:
-        date_range = (
-            datetime.combine(event_date, time.min, UTC) if event_date else None,
-            datetime.combine(event_date, time.min, UTC) + timedelta(days=1) if event_date else None,
-        )
+    _validate_game_selectors(next_game_only, most_recent_game_only)
+    date_range = _resolve_date_range(date_range, event_date)
     coverage = DiscoveryCoverage(
         scope="Full-game moneyline; exact participants within provider-ranked event search.",
         total_meaning="Provider public-search totalResults before local contract/team filters.",
@@ -503,31 +587,9 @@ async def search_polymarket(
     results: dict[str, CanonicalMarket] = {}
     seen: set[str] = set()
     retrieved_at = datetime.now(UTC)
-    # College game titles use school names, while full mascot names mostly find futures.
-    # Scope by the verified league tag slug before requiring ALL participants locally.
-    search_team = query.teams[0]
-    if query.league == "ncaa_football":
-        search_query = search_team.kalshi_name.replace(" St.", " State")
-    else:
-        # Provider titles often use just the professional nickname. Choose only an
-        # exact, uniquely mapped suffix alias, never a guessed abbreviation.
-        nicknames = [
-            a
-            for a in search_team.aliases
-            if len(words(a)) > 3
-            and a not in {search_team.name, search_team.kalshi_name}
-            and words(search_team.name).endswith(" " + words(a))
-            and participant(a, search_team.league) == search_team
-        ]
-        search_query = min(nicknames, key=len) if nicknames else search_team.name
-    tag = next(k for k, league in POLY_TAGS.items() if league == query.league)
+    # Scope by the verified league tag before requiring every participant locally.
+    search_query, tag = _polymarket_search_terms(query)
     state = continuation_state(continuation, "polymarket")
-    if state and state.get("query") != search_query:
-        raise MarketRequestError(
-            "cursor_query_mismatch",
-            "continuation does not match the requested sports query",
-            fields={"query": search_query, "cursor_query": state.get("query")},
-        )
     expected_filters = {
         "version": 2,
         "league": query.league,
@@ -537,29 +599,11 @@ async def search_polymarket(
         "next_game_only": next_game_only,
         "most_recent_game_only": most_recent_game_only,
     }
-    if state and any(state.get(key) != value for key, value in expected_filters.items()):
-        raise MarketRequestError(
-            "cursor_filter_mismatch",
-            "continuation does not match the requested league, status, date, or selectors",
-            fields={"query": search_query, "league": query.league},
-        )
-    mode = state.get("mode", "search")
-    if mode not in {"search", "catalog"}:
-        raise MarketRequestError("invalid_cursor", "continuation contains an invalid mode")
-    page_start = state.get("page", 1)
-    catalog_series = state.get("series") if mode == "catalog" else None
-    catalog_offset = state.get("offset", 0)
-    if (
-        type(page_start) is not int
-        or page_start < 1
-        or (
-            catalog_series is not None
-            and (not isinstance(catalog_series, str) or not catalog_series.isdigit())
-        )
-        or type(catalog_offset) is not int
-        or catalog_offset < 0
-    ):
-        raise MarketRequestError("invalid_cursor", "continuation contains invalid page state")
+    page_start, catalog_series, catalog_offset = _validate_polymarket_cursor(
+        state,
+        search_query=search_query,
+        expected_filters=expected_filters,
+    )
     for request_index in range(client.max_search_pages):
         page = page_start + request_index
         if catalog_series is not None:
@@ -719,7 +763,7 @@ async def search_polymarket(
             break
     if coverage.stop_reason == "not_started":
         coverage.stop_reason = "page_budget"
-    return finish(
+    return finalize_discovery_results(
         results,
         coverage,
         limit,
@@ -728,7 +772,7 @@ async def search_polymarket(
     )
 
 
-def finish(
+def finalize_discovery_results(
     results: dict[str, CanonicalMarket],
     coverage: DiscoveryCoverage,
     limit: int,
@@ -736,12 +780,7 @@ def finish(
     next_game_only: bool = False,
     most_recent_game_only: bool = False,
 ) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
-    if next_game_only and most_recent_game_only:
-        raise MarketRequestError(
-            "conflicting_selectors",
-            "next_game_only and most_recent_game_only are mutually exclusive",
-            fields={"next_game_only": True, "most_recent_game_only": True},
-        )
+    _validate_game_selectors(next_game_only, most_recent_game_only)
     coverage.candidates_matched = len(results)
     events = {m.event_id: m.provider_data["sports"] for m in results.values()}
     providers = {m.event_id: m.platform.value for m in results.values()}
