@@ -23,6 +23,7 @@ from market_agent.providers.sports import League
 Query = Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r"\S")]
 Timezone = Annotated[str, Field(strict=True, min_length=1, max_length=100, pattern=r"\S")]
 Limit = Annotated[int, Field(strict=True, ge=1, le=10)]
+Compact = Annotated[bool, Field(strict=True)]
 GameRef = Annotated[str, Field(strict=True, min_length=1, max_length=2048, pattern=r"\S")]
 
 
@@ -66,12 +67,14 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
         timezone: Timezone,
         local_date: date | None = None,
         limit: Limit = 5,
+        compact: Compact = False,
     ) -> FindGamesResult:
         """Find a current-day MLB, NFL, or NCAA Division I football game by team or matchup.
         league and IANA timezone are required. local_date is one exact local calendar day; when
         omitted, the server uses and discloses today's date in that timezone. Returns at most ten
         provider-backed game choices. Use query="all" for a bounded same-day league slate (at
-        most ten games); it is not a season scan or exhaustive pagination surface.
+        most ten games); it is not a season scan or exhaustive pagination surface. Set compact=true
+        to return only selection identity, timing, lifecycle, and game_ref for each candidate.
         Copy one returned game_ref unchanged into sports_state_get_game_state for authoritative
         normalized state fields. Ambiguous teams return choices and exact retry guidance without
         provider I/O. References are scoped to the requested timezone. This tool does not return
@@ -86,6 +89,7 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
                     timezone=timezone,
                     local_date=local_date,
                     limit=limit,
+                    compact=compact,
                 )
         except TimeoutError:
             raise _tool_error(

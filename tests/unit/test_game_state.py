@@ -245,6 +245,7 @@ async def test_discovery_normalizes_identity_timezone_state_and_bounds_requests(
     assert game.home_score == 10 and game.away_score == 17
     assert game.lifecycle == "live" and game.period == 3
     assert "lightweight scoreboard snapshot" in result.usage_note
+    assert "separate observations and may drift" in result.usage_note
     assert "scoped to the requested timezone" in result.usage_note
     assert result.coverage.scoreboard_requests == 1
     assert result.coverage.events_scanned == 1
@@ -268,6 +269,8 @@ async def test_utc_boundary_requests_stop_when_adjacent_page_matches():
     assert len(result.games) == 1
     assert result.games[0].local_date == date(2026, 9, 20)
     assert result.coverage.scoreboard_requests == 2
+    assert result.coverage.utc_boundary_check is True
+    assert "overlap two ESPN UTC date pages" in result.coverage.utc_boundary_note
 
 
 async def test_ambiguity_invalid_timezone_and_limit_fail_before_provider_io():
@@ -283,6 +286,7 @@ async def test_ambiguity_invalid_timezone_and_limit_fail_before_provider_io():
             "OSU", league="ncaa_football", timezone="UTC", local_date=date(2026, 9, 20)
         )
         assert unclear.clarification and unclear.games == []
+        assert unclear.discovery_mode == "clarification"
         assert 'query="Ohio State Buckeyes"' in unclear.clarification
         assert "keep league, timezone, and local_date unchanged" in unclear.clarification
         assert unclear.suggested_queries == unclear.choices
@@ -358,14 +362,25 @@ async def test_bounded_schedule_query_lists_games_without_team_wordle():
             league="nfl",
             timezone="America/Los_Angeles",
             local_date=date(2026, 9, 20),
+            compact=True,
         )
     finally:
         await http.aclose()
 
     assert result.discovery_mode == "schedule"
+    assert result.compact is True
     assert len(result.games) == 1
     assert result.games[0].home_team == "Atlanta Falcons"
-    assert len(calls) == 1
+    assert set(result.games[0].model_dump()) == {
+        "game_ref",
+        "home_team",
+        "away_team",
+        "scheduled_start",
+        "scheduled_start_local",
+        "lifecycle",
+    }
+    assert len(calls) == 2
+    assert result.coverage.utc_boundary_check is True
 
 
 async def test_malformed_sibling_is_discarded_but_valid_game_survives():
@@ -491,6 +506,52 @@ async def test_detail_exposes_mlb_inning_count_outs_bases_and_players():
     )
     assert state.situation.batter == "Aaron Judge"
     assert state.situation.pitcher == "Yu Darvish"
+
+
+async def test_espn_player_ids_and_partial_base_state_are_enriched_from_boxscore():
+    summary = mlb_summary()
+    summary["situation"] = {
+        "balls": 1,
+        "strikes": 2,
+        "outs": 1,
+        "onSecond": {"playerId": 55},
+        "batter": {"playerId": 77},
+        "pitcher": {"playerId": 88},
+    }
+    summary["boxscore"] = {
+        "players": [
+            {
+                "statistics": [
+                    {
+                        "athletes": [
+                            {"athlete": {"id": "77", "displayName": "Current Batter"}},
+                            {"athlete": {"id": "88", "displayName": "Current Pitcher"}},
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+    def handler(request):
+        payload = summary if request.url.path.endswith("/summary") else {"events": [mlb_event()]}
+        return httpx.Response(200, json=payload)
+
+    client, http = client_with(handler)
+    try:
+        result = await discover(client, "Yankees", "mlb")
+        state = await client.get_game_state(result.games[0].game_ref)
+    finally:
+        await http.aclose()
+
+    assert isinstance(state.situation, BaseballSituation)
+    assert (state.situation.on_first, state.situation.on_second, state.situation.on_third) == (
+        False,
+        True,
+        False,
+    )
+    assert state.situation.batter == "Current Batter"
+    assert state.situation.pitcher == "Current Pitcher"
 
 
 async def test_missing_situation_fields_are_null_not_inferred():

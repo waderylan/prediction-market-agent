@@ -493,7 +493,8 @@ Multi-server MCP client
 - `sports_state_find_games`
   - Inputs: `query`, required `league` and IANA `timezone`, optional exact `local_date`, and game
     `limit` from 1 through 10. The exact reserved query `all` returns one bounded same-day slate;
-    do not add date ranges, season scans, pagination, or an exhaustive mode.
+    optional `compact` projects selection fields only. Do not add date ranges, season scans,
+    pagination, or an exhaustive mode.
   - Purpose: resolve a supported team or matchup, or list one bounded same-day slate, and return
     provider-backed game choices.
   - Output: zero to ten normalized game summaries plus explicit coverage, clarification, and
@@ -564,6 +565,8 @@ Multi-server MCP client
 - Missing situation fields remain null. Halftime, inning transitions, reviews, delays, and provider
   update races commonly omit fields; never derive possession from the last-play team or infer base
   occupancy from prose.
+- Resolve ESPN batter/pitcher IDs only from explicit names in the same summary response. Treat
+  sibling bases as empty only when the response supplies at least one explicit current-base key.
 - `retrieved_at` records when this service observed the response. It is not a provider update
   clock. Leave `provider_updated_at` null unless the provider supplies an authoritative state
   timestamp.

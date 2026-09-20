@@ -95,7 +95,7 @@ Interactive HTTP documentation is at `/docs`.
 | `kalshi_get_market` | Exact returned uppercase `market_id` |
 | `polymarket_search_markets` | `query`, `status="open"`, game `limit=5`; optional league, local date/range, timezone, next/recent selector, continuation |
 | `polymarket_get_market` | Exact returned numeric Gamma `market_id` |
-| `sports_state_find_games` | `query`, required `league` and IANA `timezone`; optional exact `local_date`, game `limit=5` |
+| `sports_state_find_games` | `query`, required `league` and IANA `timezone`; optional exact `local_date`, game `limit=5`, `compact=false` |
 | `sports_state_get_game_state` | Exact opaque `game_ref` copied unchanged from discovery |
 
 - Limits are strict integers from 1 through 10 in the client-visible MCP schema.
@@ -131,6 +131,11 @@ Interactive HTTP documentation is at `/docs`.
 - Game-state discovery is a lightweight picker. Use `query="all"` for a bounded same-day league
   slate of at most 10 games; this is not exhaustive pagination or a season scan. Its `usage_note`
   directs callers to detail for authoritative normalized state fields.
+- Set `compact=true` for multi-game selection results containing only teams, timing, lifecycle, and
+  `game_ref`; league/timezone/date remain at result root. Clarifications use
+  `discovery_mode="clarification"` and machine-ready queries.
+- `coverage.utc_boundary_check` explains when two ESPN UTC pages were needed to cover one local
+  calendar day. It does not indicate that discovery widened the requested local date.
 - `game_ref` is restart-safe, versioned, checksummed, and bound to the ESPN game, league, teams,
   scheduled start, and timezone. It is not a credential and must not be edited or reconstructed.
   Rediscovery in another timezone intentionally returns a different reference.
@@ -143,6 +148,8 @@ Interactive HTTP documentation is at `/docs`.
   fallback; NFL and NCAA failures return controlled unavailability without substitution.
 - `retrieved_at` is this service's observation time. Cached state keeps that original time and
   exposes `observation_id`, `cache_hit`, and `cache_age_ms`.
+- Live discovery and detail are separate observations and can drift between calls. Detail is
+  authoritative for normalized live state; do not merge live fields as one transactional snapshot.
 - Empty bounded discovery is not proof of absence. Polymarket automatically checks its league
   catalog when exhausted text search yields no qualifying game and page budget remains.
 

@@ -42,6 +42,8 @@ Optional inputs:
 - `local_date`: one exact local date. If omitted, the server derives today in `timezone` and
   returns that date with `coverage.derived_local_date=true`.
 - `limit`: integer 1-10, default 5. It counts games.
+- `compact`: boolean, default false. When true, each game contains only teams, UTC/local start,
+  lifecycle, and the opaque reference needed for detail; league/timezone/date remain at result root.
 
 The tool reuses the reviewed market-team catalog and exact alias resolver. Ambiguous NCAA names,
 unknown opponents, conflicting leagues, and unsupported query residue return clarification,
@@ -49,6 +51,10 @@ machine-ready `suggested_queries`, and an exact example retry call while perform
 request. Use the reserved exact query `all` for a bounded same-day league slate. It returns at most
 the requested limit and warns when truncated; it does not offer date ranges, season scans,
 next/recent selectors, pagination, or exhaustive mode.
+
+Clarifications use `discovery_mode="clarification"`, distinct from successful `team` and `schedule`
+discovery. Coverage explicitly marks `utc_boundary_check=true` when multiple ESPN UTC date pages
+were required to cover the one requested local calendar day.
 
 Each returned summary contains canonical and raw home/away names, ESPN event ID, opaque
 `game_ref`, UTC/local start, score, lifecycle, period/clock, bounded last play, source URL,
@@ -60,6 +66,8 @@ Discovery is explicitly labeled as a lightweight scoreboard snapshot for choosin
 is authoritative for normalized state fields. For `scheduled` and `pregame` games, provider
 placeholders such as `0-0`, period `1`, clock `0:00`, top of inning, count, bases, and last play are
 normalized to null; baseball `half` remains the explicit non-null enum value `unknown`.
+Live discovery and detail are independent observations rather than a transactional snapshot, so
+scores and last-play text may legitimately advance or disappear between calls.
 
 ### `sports_state_get_game_state`
 
@@ -84,6 +92,11 @@ Baseball invariants prevent contradictory state: `not_started` has no inning/cou
 values and `half="unknown"`; `active` requires a positive inning and top/bottom half, with balls
 0-3, strikes 0-2, and outs 0-2. Provider terminal-count sentinels or incomplete live inning data
 are labeled `transition` rather than misrepresented as an active plate appearance.
+
+ESPN base occupancy remains null when the current situation supplies no base keys. When at least
+one base key is present, present bases are occupied and omitted sibling bases are empty. Current
+batter and pitcher `playerId` values are resolved only through explicit names in the same bounded
+summary box score or roster; unresolved or conflicting IDs remain null.
 
 ## Identity and opaque references
 

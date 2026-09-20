@@ -48,7 +48,8 @@ NOT_STARTED_LIFECYCLES = {"scheduled", "pregame"}
 DISCOVERY_USAGE = (
     "Discovery is a lightweight scoreboard snapshot for choosing a game. Copy game_ref unchanged "
     "into sports_state_get_game_state for authoritative normalized state fields. Scheduled and "
-    "pregame state placeholders are returned as null. game_ref is scoped to the requested timezone."
+    "pregame state placeholders are returned as null. Live discovery and detail are separate "
+    "observations and may drift. game_ref is scoped to the requested timezone."
 )
 DETAIL_USAGE = (
     "Detail is the authoritative normalized sporting-state snapshot for this game reference. "
@@ -211,6 +212,26 @@ class GameState(GameSummary):
     situation: FootballSituation | BaseballSituation
 
 
+class CompactGameSummary(BaseModel):
+    """Minimum selection fields for callers that will retrieve exact detail next."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_ref: str = Field(min_length=1, max_length=2048)
+    home_team: str = Field(min_length=1, max_length=200)
+    away_team: str = Field(min_length=1, max_length=200)
+    scheduled_start: datetime
+    scheduled_start_local: datetime
+    lifecycle: Lifecycle
+
+    @field_validator("scheduled_start", "scheduled_start_local")
+    @classmethod
+    def aware_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamps must include a timezone")
+        return value
+
+
 class DiscoveryCoverage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -222,6 +243,11 @@ class DiscoveryCoverage(BaseModel):
     matching_games: int = Field(ge=0, le=10)
     discarded_event_count: int = Field(ge=0, le=600)
     warnings: list[StateWarning] = Field(default_factory=list, max_length=20)
+    utc_boundary_check: bool = False
+    utc_boundary_note: str = (
+        "One local calendar day can overlap two ESPN UTC date pages; additional listed reads only "
+        "complete that local day and do not widen the requested date."
+    )
     scope: str = "Requested local day only; bounded UTC-boundary checks are not a season scan."
 
 
@@ -232,8 +258,9 @@ class FindGamesResult(BaseModel):
     league: League
     timezone: str
     local_date: date
-    discovery_mode: Literal["team", "schedule"] = "team"
-    games: list[GameSummary] = Field(max_length=10)
+    discovery_mode: Literal["team", "schedule", "clarification"] = "team"
+    compact: bool = False
+    games: list[GameSummary | CompactGameSummary] = Field(max_length=10)
     coverage: DiscoveryCoverage
     clarification: str | None = Field(default=None, max_length=500)
     choices: list[str] = Field(default_factory=list, max_length=20)
@@ -589,13 +616,58 @@ def _validate_reference(summary: GameSummary, reference: _GameRefPayload) -> Non
         )
 
 
-def _athlete_name(value: Any) -> str | None:
+def _athlete_index(root: dict[str, Any]) -> dict[str, str]:
+    candidates: dict[str, set[str]] = {}
+
+    def remember(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        athlete_id = _text(value.get("id"), limit=100)
+        name = _text(value.get("displayName") or value.get("fullName"), limit=200)
+        if athlete_id and name:
+            candidates.setdefault(athlete_id, set()).add(name)
+
+    boxscore = root.get("boxscore")
+    players = boxscore.get("players") if isinstance(boxscore, dict) else None
+    if isinstance(players, list):
+        for team in players[:4]:
+            statistics = team.get("statistics") if isinstance(team, dict) else None
+            if not isinstance(statistics, list):
+                continue
+            for statistic in statistics[:20]:
+                athletes = statistic.get("athletes") if isinstance(statistic, dict) else None
+                if not isinstance(athletes, list):
+                    continue
+                for entry in athletes[:100]:
+                    if isinstance(entry, dict):
+                        remember(entry.get("athlete"))
+    rosters = root.get("rosters")
+    if isinstance(rosters, list):
+        for team in rosters[:4]:
+            roster = team.get("roster") if isinstance(team, dict) else None
+            if not isinstance(roster, list):
+                continue
+            for entry in roster[:100]:
+                if isinstance(entry, dict):
+                    remember(entry.get("athlete"))
+    return {
+        athlete_id: next(iter(names)) for athlete_id, names in candidates.items() if len(names) == 1
+    }
+
+
+def _athlete_name(value: Any, athlete_index: Mapping[str, str] | None = None) -> str | None:
     if not isinstance(value, dict):
         return None
     athlete = value.get("athlete")
     if isinstance(athlete, dict):
-        return _text(athlete.get("displayName") or athlete.get("fullName"), limit=200)
-    return _text(value.get("fullName") or value.get("displayName"), limit=200)
+        direct = _text(athlete.get("displayName") or athlete.get("fullName"), limit=200)
+        athlete_id = athlete.get("id")
+    else:
+        direct = _text(value.get("fullName") or value.get("displayName"), limit=200)
+        athlete_id = value.get("playerId") or value.get("id")
+    if direct:
+        return direct
+    return athlete_index.get(str(athlete_id)) if athlete_index and athlete_id is not None else None
 
 
 def _football_situation(
@@ -682,6 +754,20 @@ def _baseball_situation(
         else "unknown"
     )
     last_play = state.get("lastPlay")
+    athlete_index = _athlete_index(root)
+    base_keys = ("onFirst", "onSecond", "onThird")
+    has_base_state = any(key in state for key in base_keys)
+
+    def occupied(key: str) -> bool | None:
+        if key not in state:
+            return False if has_base_state else None
+        value = state.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, dict):
+            return True
+        return False if value is None else None
+
     balls = _optional_integer(state.get("balls"), "balls", maximum=4)
     strikes = _optional_integer(state.get("strikes"), "strikes", maximum=3)
     outs = _optional_integer(state.get("outs"), "outs", maximum=3)
@@ -710,11 +796,11 @@ def _baseball_situation(
             balls=balls,
             strikes=strikes,
             outs=outs,
-            on_first=_boolean(state.get("onFirst"), "first-base occupancy"),
-            on_second=_boolean(state.get("onSecond"), "second-base occupancy"),
-            on_third=_boolean(state.get("onThird"), "third-base occupancy"),
-            batter=_athlete_name(state.get("batter")),
-            pitcher=_athlete_name(state.get("pitcher")),
+            on_first=occupied("onFirst"),
+            on_second=occupied("onSecond"),
+            on_third=occupied("onThird"),
+            batter=_athlete_name(state.get("batter"), athlete_index),
+            pitcher=_athlete_name(state.get("pitcher"), athlete_index),
         ),
         _text(last_play.get("text")) if isinstance(last_play, dict) else None,
     )
@@ -1106,6 +1192,7 @@ class SportsStateClient:
         timezone: str,
         local_date: date | None = None,
         limit: int = 5,
+        compact: bool = False,
     ) -> FindGamesResult:
         try:
             zone = ZoneInfo(timezone)
@@ -1130,6 +1217,10 @@ class SportsStateClient:
             "today games",
             "todays games",
         }
+        if type(compact) is not bool:
+            raise SportsStateError(
+                "invalid_compact", "compact must be a boolean", fields={"compact": "invalid"}
+            )
         sports_query = None if schedule_query else resolve_query(query, league)
         selected_day = local_date or self._now().astimezone(zone).date()
         if sports_query is not None and sports_query.clarification:
@@ -1145,7 +1236,8 @@ class SportsStateClient:
                 league=league,
                 timezone=zone.key,
                 local_date=selected_day,
-                discovery_mode="team",
+                discovery_mode="clarification",
+                compact=compact,
                 games=[],
                 coverage=DiscoveryCoverage(
                     requested_local_date=selected_day,
@@ -1205,7 +1297,7 @@ class SportsStateClient:
                 ):
                     continue
                 games.setdefault(summary.provider_game_id, summary)
-            if games:
+            if games and not schedule_query:
                 break
         all_ranked = sorted(
             games.values(), key=lambda game: (game.scheduled_start, game.provider_game_id)
@@ -1232,6 +1324,26 @@ class SportsStateClient:
             matching_games=len(ranked),
             discarded_event_count=discarded,
             warnings=warnings,
+            utc_boundary_check=requests > 1,
+        )
+        returned_games: list[GameSummary | CompactGameSummary] = (
+            [
+                CompactGameSummary(
+                    **game.model_dump(
+                        include={
+                            "game_ref",
+                            "home_team",
+                            "away_team",
+                            "scheduled_start",
+                            "scheduled_start_local",
+                            "lifecycle",
+                        }
+                    )
+                )
+                for game in ranked
+            ]
+            if compact
+            else list(ranked)
         )
         return FindGamesResult(
             query=query,
@@ -1239,7 +1351,8 @@ class SportsStateClient:
             timezone=zone.key,
             local_date=selected_day,
             discovery_mode="schedule" if schedule_query else "team",
-            games=ranked,
+            compact=compact,
+            games=returned_games,
             coverage=coverage,
         )
 

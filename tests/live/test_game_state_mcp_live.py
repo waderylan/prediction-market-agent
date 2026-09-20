@@ -41,7 +41,13 @@ async def test_game_state_stdio_live_all_supported_leagues():
         ]:
             result = await session.call_tool(
                 "sports_state_find_games",
-                {"query": query, "league": league, "timezone": "America/Los_Angeles", "limit": 2},
+                {
+                    "query": query,
+                    "league": league,
+                    "timezone": "America/Los_Angeles",
+                    "limit": 2,
+                    "compact": query == "all",
+                },
             )
             assert not result.isError
             payload = result.structuredContent
@@ -49,6 +55,7 @@ async def test_game_state_stdio_live_all_supported_leagues():
             assert payload["coverage"]["scoreboard_requests"] <= 3
             assert len(payload["games"]) <= 2
             assert payload["discovery_mode"] == ("schedule" if query == "all" else "team")
+            assert payload["compact"] is (query == "all")
             print(
                 league,
                 "returned",

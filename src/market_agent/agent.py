@@ -66,6 +66,7 @@ When discovery requests clarification, show its exact retry guidance and choices
 timezone-scoped, so reuse the reference from the chosen discovery response without comparing token
 text across timezone searches. For a same-day league slate, use query="all"; it is bounded to ten
 games and is not exhaustive pagination or a season scan.
+Use compact=true for multi-game slate selection when full scoreboard snapshots are unnecessary.
 Do not call game-state tools for ordinary market discovery, contract rules, general sports
 knowledge, or no-tool questions. Game state is authoritative only for its attributed sporting
 observation. Market tools remain authoritative for contract identity, prices, rules, and
@@ -168,6 +169,7 @@ def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | Non
         "continuation",
         "game_ref",
         "league",
+        "compact",
     }
     return {
         key: value

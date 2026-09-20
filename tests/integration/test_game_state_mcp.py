@@ -156,6 +156,7 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         assert set(find_schema["required"]) == {"query", "league", "timezone"}
         assert find_schema["properties"]["limit"]["minimum"] == 1
         assert find_schema["properties"]["limit"]["maximum"] == 10
+        assert find_schema["properties"]["compact"]["type"] == "boolean"
         assert "enum" in find_schema["properties"]["league"]
         detail_schema = tools["sports_state_get_game_state"].inputSchema
         assert detail_schema["additionalProperties"] is False
@@ -171,11 +172,25 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
             {"query": "OSU", "league": "ncaa_football", "timezone": "UTC"},
         )
         assert not unclear.isError and unclear.structuredContent["clarification"]
+        assert unclear.structuredContent["discovery_mode"] == "clarification"
         assert 'query="Ohio State Buckeyes"' in unclear.structuredContent["clarification"]
         assert (
             unclear.structuredContent["suggested_queries"] == unclear.structuredContent["choices"]
         )
         assert calls == []
+        compact = await session.call_tool(
+            "sports_state_find_games",
+            {
+                "query": "all",
+                "league": "nfl",
+                "timezone": "America/Los_Angeles",
+                "local_date": "2026-09-20",
+                "compact": True,
+            },
+        )
+        assert not compact.isError
+        assert compact.structuredContent["compact"] is True
+        assert "raw_home_team" not in compact.structuredContent["games"][0]
         found = await session.call_tool(
             "sports_state_find_games",
             {
@@ -189,6 +204,7 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         assert not found.isError
         validate(found.structuredContent, tools["sports_state_find_games"].outputSchema)
         assert found.structuredContent["coverage"]["scoreboard_requests"] == 1
+        assert found.structuredContent["coverage"]["utc_boundary_check"] is False
         game = found.structuredContent["games"][0]
         assert game["local_date"] == "2026-09-20"
         assert game["source"] == "espn"
