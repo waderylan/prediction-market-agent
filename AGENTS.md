@@ -20,24 +20,31 @@ At the start of every agent session:
 
 1. Read this file completely.
 2. Read `docs/assignment/Assignment_1_Description.md` completely.
-3. Append a `SESSION START` entry to `AI_TRANSCRIPT.md` using §4.1.
+3. If you are the top-level agent, generate one session UUID for working context only. Do not write a session-start entry.
 4. Complete the user's request while preserving the assignment contract.
-5. If the turn qualifies under §3, append the user prompt and final response to `AI_TRANSCRIPT.md` using §4.2 before sending the response.
+5. Only if the completed work qualifies under §3, the top-level agent appends exactly one event entry using §4.1 and §4.2 immediately before sending the response.
 
-Do not skip logging for qualifying turns. Sub-agents and worktrees use the same transcript.
+The top-level agent is the only transcript writer for its conversation. Sub-agents must never write to the transcript; they report qualifying work to the parent, which includes it in one consolidated entry. Separate top-level sessions and worktrees share the transcript and must use the concurrency-safe append protocol in §4.2.
 
 ## 3. Transcript Location and Safety
 
 The shared transcript is `AI_TRANSCRIPT.md` beside this file in the repository root.
 
 - Resolve its path relative to this file; do not hardcode an absolute path.
-- Create it if missing.
+- Create it if missing with the single final line `<!-- AI_TRANSCRIPT_EOF -->`.
 - Append only. Never rewrite, reorder, truncate, or delete earlier entries.
-- Log a turn only when at least one of these conditions is true:
-  - Code, documentation, configuration, tests, deployment files, or other repository artifacts are created, edited, or deleted.
-  - The user gives feedback on prior agent work, repository work, or a proposed change, including requests for revisions.
-- Do not log information-only questions or answers when no repository artifact changes and the user is not giving feedback.
-- Do not log routine planning or status-only exchanges unless they also meet one of the conditions above.
+- The file must contain exactly one `<!-- AI_TRANSCRIPT_EOF -->` marker, and it must remain the final line. Treat this marker as the only legal insertion point.
+- Never anchor a transcript edit on a previous heading, `Context` block, timestamp, or other repeated content. That can insert new entries in the middle of the file.
+- Never rewrite the whole transcript with a formatter, generated file, search-and-replace, or shell redirection.
+- Write an event entry only when at least one of these conditions is satisfied:
+  - **Major feature implemented:** the turn completes and verifies a substantial new user-visible capability, assignment milestone, external integration, service, endpoint, persistent data model, deployment component, or comparably significant workflow.
+  - **Major bug discovered or fixed:** the turn produces concrete evidence of, or verifies a fix for, a high-impact correctness, security, data-loss, crash, deployment, MCP-contract, or core-workflow failure.
+- A feature plan, partial scaffold, or unverified implementation does not qualify until the major capability works.
+- Minor bugs, cosmetic defects, small refactors, dependency maintenance, test-only changes, documentation-only changes, configuration tweaks, and routine cleanup do not qualify unless they are inseparable from a qualifying major feature or major bug.
+- User feedback, revision requests, information-only answers, planning, status updates, code review, and ordinary repository edits do not qualify by themselves.
+- Do not write `SESSION START`, interruption, or administrative entries. If no qualifying event occurred, do not touch `AI_TRANSCRIPT.md`.
+- If a major bug is discovered and fixed in the same turn, write one combined entry rather than separate discovery and fix entries.
+- When uncertain whether the threshold is met, do not log the turn.
 - Record the user prompt verbatim unless it contains secrets or sensitive personal information.
 - Record the final user-facing response verbatim. Draft it, append it, verify it, then send the same response.
 - Replace API keys, tokens, passwords, cookies, OAuth codes, private keys, `.env` values, and sensitive PII with `[REDACTED]`.
@@ -46,22 +53,13 @@ The shared transcript is `AI_TRANSCRIPT.md` beside this file in the repository r
 
 ## 4. Transcript Format
 
-### 4.1 Session Start
+### 4.1 Major Event Entry
 
 ```markdown
-## YYYY-MM-DDTHH:MM:SS±HH:MM — SESSION START
+<!-- transcript-entry-id: event:<event-uuid> -->
+## YYYY-MM-DDTHH:MM:SS±HH:MM — [MAJOR FEATURE|MAJOR BUG] <short descriptive title>
 
-- Tool: <exact coding agent or harness name>
-- Repository root: <absolute path>
-- Branch: <branch name or `not a Git repository`>
-- Worktree: <path or `main`>
-- Parent agent: <name or `none`>
-```
-
-### 4.2 Per-Turn Entry
-
-```markdown
-## YYYY-MM-DDTHH:MM:SS±HH:MM — <short descriptive title>
+- Event: <major feature implemented|major bug discovered|major bug fixed|major bug discovered and fixed>
 
 ### User Prompt
 
@@ -74,28 +72,35 @@ The shared transcript is `AI_TRANSCRIPT.md` beside this file in the repository r
 ### Work Performed
 
 - <files created or edited>
-- <commands, tests, or tools used>
+- <implementation or bug evidence>
+- <verification commands and results>
 - <important decisions or unresolved issues>
 
 ### Context
 
+- Session ID: <session UUID held in working context>
 - Tool: <exact coding agent or harness name>
 - Branch: <branch name or `not a Git repository`>
 - Repository root: <absolute path>
 - Parent agent: <name or `none`>
 ```
 
-If interrupted before a final response, log the work completed and write `Interrupted before final response`. Append a new entry when work resumes.
+Generate one event UUID when qualifying work is confirmed and reuse it if the finalization step is retried. Before appending, search for its exact `transcript-entry-id`; if present, update nothing and do not create a duplicate.
 
-### 4.3 Verification
+### 4.2 Concurrency-Safe Append and Verification
 
-Before sending each final response for a qualifying turn:
+For every qualifying event entry:
 
+- Re-read the transcript tail immediately before editing and confirm the EOF marker is the final line.
+- Use one `apply_patch` operation that matches only the unique EOF marker and replaces it with: the new entry, one blank line, and the same EOF marker. Do not use prior transcript content as patch context.
+- If the patch fails, another session may have appended concurrently. Re-read the tail and retry against the EOF marker; never replace the file.
+- Search for the new `transcript-entry-id` and confirm it occurs exactly once.
+- Confirm the EOF marker occurs exactly once and is still the final line.
 - Re-read the new transcript entry.
 - Confirm the prompt and final response match the conversation.
 - Confirm `Tool` is present and accurate.
 - Confirm no secrets or sensitive PII were logged.
-- Confirm earlier transcript entries were not changed.
+- Confirm the content that preceded the old EOF marker was not changed.
 
 ## 5. Minimal Repository Guardrails
 
