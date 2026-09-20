@@ -311,3 +311,41 @@ props require subject, statistic, threshold, and stat authority; futures require
 season, field, and elimination/void rules. A type remains disabled until its provider and
 settlement gates pass. This expansion is optional and follows the required assignment
 deployment and submission work.
+
+### Stretch goals: additional markets
+
+Consider these only after the core sports workflow, matching, agent validation, deployment,
+and assignment deliverables are complete. None is implemented or a promise of availability
+on either provider. Examples illustrate contract shapes, not current listings.
+
+| Market | Example | Required identity and settlement checks |
+|---|---|---|
+| Spread | Chiefs -3.5 points | Team, signed handicap, final margin, overtime, and pushes |
+| Game total | Chiefs-Bills over 47.5 points | Both participants, over/under, threshold, counted periods, overtime, and pushes |
+| Team total | Yankees over 4.5 runs | One team's score, threshold, extra innings, and game-completion requirements |
+| Partial-game market | Yankees win the first five innings | Exact period, tie outcomes, and shortened-game rules; never equate with a full-game winner |
+| Player prop | Quarterback over 249.5 passing yards | Athlete, game, statistic, participation requirements, threshold, official source, and stat corrections |
+| Future | Team wins its conference or championship | Competition, season, eligible outcomes, qualification, withdrawal, and void rules |
+| Season total | Team wins over 9.5 regular-season games | Team, season, threshold, counted games, cancellations, and postseason exclusions |
+
+Model subject, contract type, period, and line separately: a first-half spread combines a
+period with a handicap. Equal teams or similar titles do not establish equivalent contracts.
+Different lines must remain distinct, and matching lines still require matching settlement
+terms. Preserve provider identifiers and raw wording alongside typed fields.
+
+Each stretch goal follows the expansion contract above. Add bounded discovery, price
+semantics, detail parsing, outcome mapping, and contract-specific regressions before enabling
+it. Additional sports follow the same evidence and verification requirements.
+
+### US audience and provider links
+
+The intended audience is US-based. The current Polymarket adapter reads the international
+Gamma API; its market pages and prices must not be relabeled as Polymarket US contracts.
+[Polymarket US](https://polymarket.us/) is a separate destination, not a substitute deep link
+for a Gamma market. Its [public API](https://docs.polymarket.us/api-reference/introduction)
+uses `https://gateway.polymarket.us` and provides its own market discovery and data.
+
+US-specific contract links require a verified US market identity and corresponding US data.
+Do not replace the domain in an international market URL or assume identical slugs, quotes,
+or settlement terms. Integrating US market data is a provider-scope decision, separate from
+the optional market-type stretch goals. All integrations remain read-only.
