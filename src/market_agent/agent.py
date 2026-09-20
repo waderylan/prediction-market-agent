@@ -25,6 +25,7 @@ from market_agent.domain import CanonicalMarket, Platform
 from market_agent.domain.matching import MatchingReport, comparison_notice, match_candidates
 from market_agent.logging import log_event
 from market_agent.mcp.common import MarketDetail, SearchResults
+from market_agent.mcp.kalshi import KalshiSearchResults, SeriesResults
 
 logger = logging.getLogger(__name__)
 MAX_TOOL_CALLS = 4
@@ -45,6 +46,11 @@ fetch each contract's rules before assessing comparability. Similar headlines do
 equivalence. Show rule differences and refuse an equivalent-price comparison when uncertain.
 If a requested platform has no available tools, say it is unavailable; never silently substitute.
 Kalshi tickers and Polymarket numeric IDs are different namespaces; never swap them.
+For Kalshi discovery, first use kalshi_search_series with the event type, then
+kalshi_search_markets with a returned series_ticker and short matchup/topic query.
+Never invent or construct Kalshi tickers, including date/time/team segments. Only use
+exact market tickers from discovery, user input, or previously retrieved conversation data.
+An empty bounded search does not prove that a market does not exist.
 After both platforms' detail calls, the host supplies a deterministic matching_report. Explain its
 material differences first. Only comparison_allowed=true permits an equivalent-price comparison.
 Different contracts are contextual evidence, not an arbitrage or price gap. Ambiguous pairs require
@@ -110,7 +116,7 @@ class ChatTurn(BaseModel):
 
 
 def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | None]:
-    allowed = {"market_id", "query", "status", "limit"}
+    allowed = {"market_id", "query", "status", "limit", "series_ticker", "category", "tags"}
     return {
         key: value
         for key, value in arguments.items()
@@ -118,7 +124,9 @@ def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | Non
     }
 
 
-def _tool_summary(validated: SearchResults | MarketDetail) -> str:
+def _tool_summary(validated: SearchResults | MarketDetail | SeriesResults) -> str:
+    if isinstance(validated, SeriesResults):
+        return f"Found {len(validated.series)} candidate series."
     if isinstance(validated, SearchResults):
         count = len(validated.markets)
         if not validated.markets:
@@ -219,9 +227,17 @@ class ChatAgent:
                         if not isinstance(result, ToolMessage) or result.status == "error":
                             content = "Market tool failed. Check arguments or try again later."
                         else:
-                            schema = (
-                                SearchResults if name.endswith("_search_markets") else MarketDetail
-                            )
+                            schema: type[SearchResults | MarketDetail | SeriesResults]
+                            if name == "kalshi_search_series":
+                                schema = SeriesResults
+                            elif name == "kalshi_search_markets":
+                                schema = KalshiSearchResults
+                            else:
+                                schema = (
+                                    SearchResults
+                                    if name.endswith("_search_markets")
+                                    else MarketDetail
+                                )
                             artifact = result.artifact
                             data = (
                                 artifact["structured_content"]
@@ -233,6 +249,8 @@ class ChatAgent:
                                 validated.markets
                                 if isinstance(validated, SearchResults)
                                 else [validated]
+                                if isinstance(validated, MarketDetail)
+                                else []
                             )
                             if any(m.platform.value != name.split("_", 1)[0] for m in markets):
                                 raise ValueError("Market platform mismatch")

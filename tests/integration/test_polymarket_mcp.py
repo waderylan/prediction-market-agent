@@ -40,8 +40,17 @@ def protocol(load_fixture):
                 payload["description"] = "r" * 20000
             if mode == "oversized":
                 payload["question"] = "t" * 501
+            if mode == "nan":
+                payload["bestBid"] = "NaN"
+            if mode == "unresolved":
+                payload.update(closed=True, outcomePrices='["0", "0"]')
+            if mode == "teams":
+                payload["outcomes"] = '["Padres", "Marlins"]'
             if mode == "many":
-                payload["events"][0]["markets"] *= 30
+                original = payload["events"][0]["markets"][0]
+                payload["events"][0]["markets"] = [
+                    {**original, "id": str(561229 + i)} for i in range(30)
+                ]
             return httpx.Response(200, json=payload)
 
         async with httpx.AsyncClient(
@@ -102,7 +111,7 @@ async def test_invalid_identifier(protocol, identifier):
 
 
 @pytest.mark.parametrize(
-    "mode", ["timeout", "404", "429", "503", "json", "missing", "malformed", "oversized"]
+    "mode", ["timeout", "404", "429", "503", "json", "missing", "malformed", "oversized", "nan"]
 )
 async def test_controlled_errors_and_session_survives(protocol, mode):
     async with protocol(mode) as (session, _):
@@ -110,6 +119,18 @@ async def test_controlled_errors_and_session_survives(protocol, mode):
         assert result.isError
         assert "private upstream detail" not in str(result)
         assert len((await session.list_tools()).tools) == 2
+
+
+@pytest.mark.parametrize("mode", ["teams", "unresolved"])
+async def test_quote_and_settlement_semantics(protocol, mode):
+    async with protocol(mode) as (session, _):
+        result = await session.call_tool("polymarket_get_market", {"market_id": "561229"})
+        assert not result.isError
+        if mode == "teams":
+            assert result.structuredContent["yes_bid"] is None
+            assert result.structuredContent["yes_ask"] is None
+        else:
+            assert result.structuredContent["status"] == "closed"
 
 
 async def test_empty_bounded_and_truncated(protocol):

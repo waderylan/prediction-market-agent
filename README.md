@@ -103,7 +103,16 @@ It needs no exchange or LLM credentials. Only public read-only Gamma endpoints a
 - `polymarket_search_markets(query, status="open", limit=5)`: at most 10 candidate summaries.
 - `polymarket_get_market(market_id)`: current prices and bounded resolution rules for a numeric ID.
 - Prices are decimal strings, missing fields are null, and truncated rules are explicitly labeled.
-- Search covers a bounded first page; empty results are not proof of market absence.
+- Search covers at most three pages, stops at the requested unique-result limit, and ranks
+  matching contract questions ahead of sibling markets within each page. Open searches filter
+  events upstream; duplicate contracts/pages do not consume the result budget.
+- Empty results are not proof of market absence. Historical searches request all event states.
+- Resolved status requires explicit Gamma resolution metadata; zero/one prices are insufficient.
+  YES bid/ask remain null for team-named or reversed outcomes to avoid mislabeling quotes.
+
+The [Gamma search API](https://docs.polymarket.com/api-reference/search/search-markets-events-and-profiles)
+supports pagination and filters. The reduced `optimized` response is deliberately disabled:
+live inspection found it omits numeric Gamma IDs and `acceptingOrders`, which this contract needs.
 
 Protocol tests: `uv run pytest tests/integration/test_polymarket_mcp.py`.
 Public subprocess check: set `RUN_LIVE_SMOKE=1`, then run
@@ -116,11 +125,22 @@ for dependency compatibility, transport, lifecycle, bounds, and verification res
 ## Kalshi MCP and Platform Selection
 
 Start the independent server with `uv run python -m market_agent.mcp.kalshi`.
-It exposes `kalshi_search_markets(query, status="open", limit=5)` and
-`kalshi_get_market(market_id)` using a full uppercase market ticker such as
-`KXPRESPERSON-28-JVAN`. Search accepts open, closed, resolved, or null status.
-It scans at most three event pages and retrieves at most ten candidate events. Discovery is
-incomplete; a known ticker supports a direct detail lookup. No account credentials are needed.
+First call `kalshi_search_series(query, category=None, tags=None, limit=5)` with an event type
+such as `professional baseball game`. Pass a returned ticker into
+`kalshi_search_markets(query, status="open", limit=5, series_ticker=None)` with a short matchup
+such as `Miami Padres`. Series category filters are exact and case-sensitive (e.g. `Sports`).
+The server normalizes Padres/Marlins to San Diego/Miami, retains the original query in results,
+and requires multi-token coverage to reject unrelated matches such as Miami Vice.
+Use `kalshi_get_market(market_id)` with an exact market ticker returned by discovery or supplied
+by the user. Never construct tickers: game IDs can contain required time segments.
+
+Search accepts open, closed, resolved, or null status. It scans at most three event pages and
+expands at most ten candidate events. Series filtering happens upstream, and nested markets
+avoid separate event-detail requests on filtered searches. Pagination cycles and duplicate
+events/markets are bounded. Discovery remains incomplete; empty results do not prove absence,
+and older historical markets may be omitted. No account credentials are needed.
+API contracts: [Get Series List](https://docs.kalshi.com/api-reference/market/get-series-list)
+and [Get Events](https://docs.kalshi.com/api-reference/events/get-events).
 
 The packaged [server manifest](src/market_agent/mcp/servers.json) declares two separate stdio
 processes; runtime uses the current Python interpreter. Each turn discovers both servers,

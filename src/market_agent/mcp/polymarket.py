@@ -44,14 +44,21 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
         limit: Limit = 5,
     ) -> SearchResults:
         """Find Polymarket contracts by short topic/name, not a full question. Defaults to open
-        markets; use null status to include historical markets. Returns up to 10 first-page
+        markets; use null status to include historical markets. Returns up to 10 unique
         candidates with decimal prices and IDs. Search is not exhaustive; try a shorter topic
         if empty. Fetch a candidate by ID for resolution rules before interpreting its odds.
+        Scans up to three pages, stopping when enough candidates are found. Resolved requires
+        explicit provider resolution metadata; a zero or one price does not prove settlement.
         """
         async with controlled_errors("Polymarket"):
             assert active_client is not None
             markets = await active_client.search_markets(query, status=status, limit=limit)
-            return SearchResults(markets=[project(market) for market in markets[:limit]])
+            return SearchResults(
+                markets=[project(market) for market in markets[:limit]],
+                coverage=f"Bounded search of up to {active_client.max_search_pages} pages; "
+                "stops when enough unique candidates are found. "
+                "Empty results do not prove absence.",
+            )
 
     @server.tool(annotations=annotations)
     async def polymarket_get_market(market_id: MarketId) -> MarketDetail:
@@ -59,6 +66,8 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
         event ID, or token ID). Returns current snapshot prices, rules, source and retrieval
         time. Null means unavailable; truncated rules are incomplete. Market price is not
         an independent probability forecast. No trading or account access.
+        YES bid/ask are available only for standard Yes/No outcome ordering. Team-named or
+        reversed outcomes have null YES bid/ask; do not infer a YES mapping for them.
         """
         async with controlled_errors("Polymarket"):
             assert active_client is not None

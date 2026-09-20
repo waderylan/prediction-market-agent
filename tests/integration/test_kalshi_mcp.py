@@ -31,6 +31,11 @@ def kalshi_protocol(load_fixture):
             if mode == "missing":
                 return httpx.Response(200, json={"market": {}})
             name = "market_success"
+            if request.url.path.endswith("/series"):
+                return httpx.Response(
+                    200,
+                    json={"series": [{"ticker": "KXPRESPERSON", "title": "Presidential election"}]},
+                )
             if "/series/" in request.url.path:
                 name = "series_success"
             elif request.url.path.endswith("/events"):
@@ -60,8 +65,9 @@ def kalshi_protocol(load_fixture):
 async def test_kalshi_discovery_and_tools(kalshi_protocol):
     async with kalshi_protocol() as (session, calls):
         tools = {t.name: t for t in (await session.list_tools()).tools}
-        assert set(tools) == {"kalshi_search_markets", "kalshi_get_market"}
+        assert set(tools) == {"kalshi_search_series", "kalshi_search_markets", "kalshi_get_market"}
         for name, args in [
+            ("kalshi_search_series", {"query": "presidential election"}),
             ("kalshi_search_markets", {"query": "Vance presidential election", "limit": 2}),
             ("kalshi_get_market", {"market_id": "KXPRESPERSON-28-JVAN"}),
         ]:
@@ -69,7 +75,7 @@ async def test_kalshi_discovery_and_tools(kalshi_protocol):
             assert not result.isError
             validate(result.structuredContent, tools[name].outputSchema)
             assert "provider_data" not in result.model_dump_json()
-        assert len(calls) == 3  # events, market, series
+        assert len(calls) == 4  # series catalog, events, market, series detail
 
 
 @pytest.mark.parametrize(
@@ -79,6 +85,11 @@ async def test_kalshi_discovery_and_tools(kalshi_protocol):
         ("kalshi_search_markets", {"query": "x", "limit": 11}),
         ("kalshi_search_markets", {"query": "x", "status": "paused"}),
         ("kalshi_search_markets", {"query": "x", "limit": True}),
+        ("kalshi_search_markets", {"query": "x", "series_ticker": "../x"}),
+        ("kalshi_search_series", {"query": " "}),
+        ("kalshi_search_series", {"query": "x", "category": " "}),
+        ("kalshi_search_series", {"query": "x", "tags": ["Baseball"]}),
+        ("kalshi_search_series", {"query": "x", "limit": 11}),
         ("kalshi_get_market", {"market_id": "../x"}),
         ("kalshi_get_market", {"market_id": "lower-case"}),
         ("kalshi_get_market", {"market_id": "X" * 101}),
@@ -97,18 +108,44 @@ async def test_kalshi_errors(kalshi_protocol, mode):
         result = await session.call_tool("kalshi_get_market", {"market_id": "KXTEST-1"})
         assert result.isError
         assert "private diagnostic" not in str(result)
-        assert len((await session.list_tools()).tools) == 2
+        assert len((await session.list_tools()).tools) == 3
 
 
 async def test_kalshi_empty_and_bound(kalshi_protocol):
     async with kalshi_protocol("empty") as (session, _):
         result = await session.call_tool("kalshi_search_markets", {"query": "unknown"})
         assert result.structuredContent["markets"] == []
-        assert "three-page" in result.structuredContent["coverage"]
+        assert "3-page" in result.structuredContent["coverage"]
     async with kalshi_protocol("long") as (session, _):
         result = await session.call_tool("kalshi_get_market", {"market_id": "KXPRESPERSON-28-JVAN"})
         assert result.structuredContent["rules_truncated"]
         assert len(result.structuredContent["rules"]) == 12000
+
+
+async def test_agent_series_to_markets_to_details(kalshi_protocol):
+    @asynccontextmanager
+    async def connect():
+        async with kalshi_protocol() as (session, _):
+            yield await load_mcp_tools(session)
+
+    model = ScriptedModel(
+        replies=[
+            tool_call("kalshi_search_series", {"query": "presidential election"}, "1"),
+            tool_call(
+                "kalshi_search_markets",
+                {"query": "Vance presidential election", "series_ticker": "KXPRESPERSON"},
+                "2",
+            ),
+            tool_call("kalshi_get_market", {"market_id": "KXPRESPERSON-28-JVAN"}, "3"),
+            AIMessage("Done"),
+        ]
+    )
+    assert await ChatAgent(model, connect).chat("Find the Kalshi contract", "series") == "Done"
+    messages = [m for m in model.observed[-1] if isinstance(m, ToolMessage)]
+    assert len(messages) == 3
+    assert all(m.status == "success" for m in messages)
+    assert json.loads(messages[0].content)["series"][0]["ticker"] == "KXPRESPERSON"
+    assert json.loads(messages[1].content)["series_ticker"] == "KXPRESPERSON"
 
 
 @pytest.mark.parametrize("platforms", [[], ["polymarket"], ["kalshi"], ["polymarket", "kalshi"]])

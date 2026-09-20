@@ -14,6 +14,17 @@ from market_agent.providers.exceptions import MarketMissingDataError, MarketVali
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 _STOP_WORDS = {"a", "an", "and", "in", "is", "of", "on", "the", "to", "will"}
+_STOP_WORDS |= {"vs", "versus"}
+# Deliberately limited to unambiguous team nicknames; never infer ticker components.
+_TEAM_ALIASES = {"padres": "san diego", "marlins": "miami"}
+
+
+def normalize_query(query: str) -> str:
+    normalized = query.casefold()
+    for alias, city in _TEAM_ALIASES.items():
+        # Also collapse full names ("San Diego Padres") into the canonical city.
+        normalized = re.sub(rf"\b(?:{city}\s+)?{alias}\b", city, normalized)
+    return " ".join(_TOKEN_PATTERN.findall(normalized))
 
 
 class KalshiClient(AsyncMarketClient):
@@ -27,26 +38,84 @@ class KalshiClient(AsyncMarketClient):
         self.max_search_pages = max_search_pages
         super().__init__(base_url="https://external-api.kalshi.com/trade-api/v2", **kwargs)
 
+    async def search_series(
+        self,
+        query: str,
+        *,
+        category: str | None = None,
+        tags: str | None = None,
+        limit: int = 10,
+    ) -> tuple[dict[str, Any], ...]:
+        """Rank the series catalog, with provider-side category/tag filtering."""
+        if not query.strip() or not 1 <= limit <= 50:
+            raise ValueError("query must be nonempty and limit between 1 and 50")
+        params = {}
+        for key, value in (("category", category), ("tags", tags)):
+            if value is not None:
+                if not value.strip():
+                    raise ValueError(f"{key} cannot be empty")
+                params[key] = value.strip()
+        root = _as_dict(await self._request_json("/series", params=params), "series response")
+        values = root.get("series")
+        if not isinstance(values, list):
+            raise MarketValidationError(self.provider, "series response series must be a list")
+        ranked = []
+        seen = set()
+        for value in values:
+            series = _as_dict(value, "series")
+            ticker = _required_str(series, "ticker")
+            title = _required_str(series, "title")
+            score = _relevance(
+                query,
+                " ".join(
+                    str(series.get(key, "")) for key in ("ticker", "title", "category", "tags")
+                ),
+            )
+            if score and ticker not in seen:
+                seen.add(ticker)
+                ranked.append(
+                    (
+                        score + _relevance(query, title),
+                        {
+                            "ticker": ticker,
+                            "title": title,
+                            "category": _optional_str(series.get("category")),
+                        },
+                    )
+                )
+        ranked.sort(key=lambda item: (-item[0], item[1]["ticker"]))
+        return tuple(item for _, item in ranked[:limit])
+
     async def search_markets(
         self,
         query: str,
         *,
         status: MarketStatus | None = MarketStatus.OPEN,
         limit: int = 10,
+        series_ticker: str | None = None,
     ) -> tuple[CanonicalMarket, ...]:
         query = query.strip()
         if not query:
             raise ValueError("query cannot be empty")
         if not 1 <= limit <= 50:
             raise ValueError("limit must be between 1 and 50")
+        if series_ticker is not None and not re.fullmatch(
+            r"[A-Z0-9][A-Z0-9._-]{0,99}", series_ticker
+        ):
+            raise ValueError("invalid series_ticker")
+        query = normalize_query(query)
 
         cursor: str | None = None
+        seen_cursors: set[str] = set()
+        seen_events: set[str] = set()
         ranked_events: list[tuple[int, dict[str, Any]]] = []
         for _ in range(self.max_search_pages):
             params: dict[str, str | int] = {
                 "limit": 200,
-                "with_nested_markets": "false",
+                "with_nested_markets": "true" if series_ticker else "false",
             }
+            if series_ticker:
+                params["series_ticker"] = series_ticker
             provider_filter = _status_filter(status)
             if provider_filter is not None:
                 params["status"] = provider_filter
@@ -54,21 +123,37 @@ class KalshiClient(AsyncMarketClient):
                 params["cursor"] = cursor
             payload = await self._request_json("/events", params=params)
             root = _as_dict(payload, "events response")
-            events = root.get("events", [])
+            events = root.get("events")
             if not isinstance(events, list):
                 raise MarketValidationError(self.provider, "events response events must be a list")
             for event_value in events:
                 event = _as_dict(event_value, "event")
-                score = _relevance(query, _event_text(event))
+                event_id = _required_str(event, "event_ticker")
+                if event_id in seen_events:
+                    continue
+                seen_events.add(event_id)
+                text = _event_text(event)
+                nested = event.get("markets")
+                if isinstance(nested, list):
+                    text += " " + " ".join(
+                        _market_text(_as_dict(m, "event market")) for m in nested
+                    )
+                score = _relevance(query, text)
                 if score > 0:
-                    ranked_events.append((score, event))
+                    ranked_events.append(
+                        (score + _relevance(query, str(event.get("title", ""))), event)
+                    )
+            if root.get("cursor") is not None and not isinstance(root["cursor"], str):
+                raise MarketValidationError(self.provider, "cursor must be a string")
             cursor = _optional_str(root.get("cursor"))
-            if cursor is None:
+            if cursor is None or cursor in seen_cursors:
                 break
+            seen_cursors.add(cursor)
 
         ranked_events.sort(key=lambda item: item[0], reverse=True)
         retrieved_at = datetime.now(UTC)
         ranked_markets: list[tuple[int, CanonicalMarket]] = []
+        seen_markets: set[str] = set()
         for event_score, event in ranked_events[: min(limit * 2, 10)]:
             markets = event.get("markets")
             if not isinstance(markets, list):
@@ -80,8 +165,11 @@ class KalshiClient(AsyncMarketClient):
             for market_value in markets:
                 market = _as_dict(market_value, "event market")
                 parsed = _parse_market(market, retrieved_at=retrieved_at)
-                if status is not None and parsed.status != status:
+                if (status is not None and parsed.status != status) or (
+                    parsed.market_id in seen_markets
+                ):
                     continue
+                seen_markets.add(parsed.market_id)
                 market_score = event_score + _relevance(query, _market_text(market))
                 ranked_markets.append((market_score, parsed))
 
@@ -192,7 +280,11 @@ def _status(value: str | None) -> MarketStatus:
 
 
 def _status_filter(status: MarketStatus | None) -> str | None:
-    if status is None or status is MarketStatus.UNKNOWN or status is MarketStatus.ARCHIVED:
+    if status is None or status in {
+        MarketStatus.UNKNOWN,
+        MarketStatus.ARCHIVED,
+        MarketStatus.PAUSED,
+    }:
         return None
     if status is MarketStatus.RESOLVED:
         return "settled"
@@ -229,7 +321,19 @@ def _market_text(market: dict[str, Any]) -> str:
 def _relevance(query: str, candidate: str) -> int:
     query_tokens = set(_TOKEN_PATTERN.findall(query.casefold())) - _STOP_WORDS
     candidate_tokens = set(_TOKEN_PATTERN.findall(candidate.casefold()))
-    return len(query_tokens & candidate_tokens)
+    overlap = len(query_tokens & candidate_tokens)
+    # Require at least 60% coverage and two terms for multi-token queries.
+    if not query_tokens or overlap < min(2, len(query_tokens)):
+        return 0
+    if overlap / len(query_tokens) < 0.6:
+        return 0
+    phrase = " ".join(_TOKEN_PATTERN.findall(query.casefold()))
+    normalized_candidate = " ".join(_TOKEN_PATTERN.findall(candidate.casefold()))
+    # A multi-word city must not outweigh the other requested participant.
+    for city in _TEAM_ALIASES.values():
+        if f" {city} " in f" {phrase} " and f" {city} " not in f" {normalized_candidate} ":
+            return 0
+    return overlap * 10 + (20 if f" {phrase} " in f" {normalized_candidate} " else 0)
 
 
 def _as_dict(value: Any, label: str) -> dict[str, Any]:

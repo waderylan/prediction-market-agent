@@ -26,6 +26,15 @@ async def test_public_mcp_stdio():
             "polymarket_search_markets", {"query": "Vance", "limit": 2}
         )
         assert not search.isError
+        candidates = search.structuredContent["markets"]
+        assert len({m["market_id"] for m in candidates}) == len(candidates)
+        assert all(m["status"] == "open" for m in candidates)
+        if candidates:
+            discovered = await session.call_tool(
+                "polymarket_get_market", {"market_id": candidates[0]["market_id"]}
+            )
+            assert not discovered.isError
+            assert discovered.structuredContent["market_id"] == candidates[0]["market_id"]
         detail = await session.call_tool("polymarket_get_market", {"market_id": "561229"})
         assert not detail.isError
         assert detail.structuredContent["market_id"] == "561229"
