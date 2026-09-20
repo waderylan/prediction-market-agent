@@ -58,7 +58,8 @@ async def test_kalshi_series_discovery_stdio_live():
         assert not result.isError
         assert result.structuredContent["query"] == "Miami Padres"
         # Date-independent smoke: exact September 19 discovery is covered by fixtures.
-        for market in result.structuredContent["markets"][:1]:
+        for game in result.structuredContent["games"][:1]:
+            market = game["contracts"][0]
             detail = await session.call_tool(
                 "kalshi_get_market", {"market_id": market["market_id"]}
             )

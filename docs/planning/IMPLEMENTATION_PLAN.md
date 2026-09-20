@@ -7,7 +7,8 @@ memory, two public read-only MCP servers, canonical contract parsing, and a cons
 deterministic matcher. Sports discovery and server result models support MLB, NFL,
 and NCAA Division I game winners.
 
-The provider/MCP layers own sports discovery. The repository has no sports-aware equivalence
+The provider/MCP layers own game-first sports discovery, local date/range filtering, lifecycle
+status, quote freshness, continuation, and explicit settlement. The repository has no sports-aware equivalence
 matcher, forecast subsystem, research server, saved-research database, or Cloud Run deployment.
 
 | Area | Status | Source of truth |
@@ -48,9 +49,10 @@ Keep model-driven tool selection and the current MCP client interface.
 Acceptance criteria:
 
 - Prefer direct team/matchup search for sports; use series discovery only when it adds precision.
-- Consume clarification choices and event alternatives without inventing identifiers.
+- Consume clarification choices and localized game alternatives without inventing identifiers.
 - Ask the user to select the game when a singular request matches multiple event IDs.
-- Display named outcome prices and explain snapshot versus last-trade semantics.
+- Display named outcome prices, `quote_as_of`, stale warnings, and explicit settlement rather
+  than treating terminal last trades as results.
 - Use the matching report before a cross-platform price comparison.
 - Verify real-model tool selection, multi-step calls, memory follow-ups, and platform-specific
   requests. Scripted model tests alone are insufficient for semantic-selection claims.

@@ -185,6 +185,7 @@ class KalshiClient(AsyncMarketClient):
         market = _as_dict(root.get("market"), "market response market")
         if _required_str(market, "ticker") != market_id:
             raise MarketValidationError(self.provider, "market identifier does not match request")
+        retrieved_at = datetime.now(UTC)
         from market_agent.providers.sports_search import (
             KALSHI_SERIES,
             kalshi_event,
@@ -215,10 +216,11 @@ class KalshiClient(AsyncMarketClient):
                 event, objects(event_root.get("milestones", []), "kalshi", "milestones")
             )
             parsed = _parse_market(
-                market, retrieved_at=datetime.now(UTC), resolution_source=_resolution_source(event)
+                market, retrieved_at=retrieved_at, resolution_source=_resolution_source(event)
             )
             if sports and winner_market(market, sports.raw_title):
                 parsed.provider_data["sports"] = sports.model_dump(mode="json")
+                parsed.provider_data["series_ticker"] = event.get("series_ticker")
             return parsed
         resolution_source: str | None = None
         series_ticker = _optional_str(market.get("series_ticker"))
@@ -229,7 +231,7 @@ class KalshiClient(AsyncMarketClient):
             resolution_source = _resolution_source(series)
         return _parse_market(
             market,
-            retrieved_at=datetime.now(UTC),
+            retrieved_at=retrieved_at,
             resolution_source=resolution_source,
         )
 
@@ -265,6 +267,15 @@ def _parse_market(
     ]
     rules = "\n\n".join(rules_parts) or None
     provider_status = _optional_str(market.get("status"))
+    result = _optional_str(market.get("result"))
+    settlement_value = _optional_decimal(
+        market.get("settlement_value_dollars"), "settlement_value_dollars"
+    )
+    winning_outcome = None
+    if result and result.casefold() == "yes":
+        winning_outcome = outcome_title or "Yes"
+    elif result and result.casefold() == "no":
+        winning_outcome = f"Not {outcome_title}" if outcome_title else "No"
     source_url = f"https://external-api.kalshi.com/trade-api/v2/markets/{quote(market_id, safe='')}"
     try:
         return CanonicalMarket(
@@ -320,7 +331,10 @@ def _parse_market(
                 "latest_expiration_time": market.get("latest_expiration_time"),
                 "series_ticker": _optional_str(market.get("series_ticker")),
                 "provider_status": provider_status,
-                "result": _optional_str(market.get("result")),
+                "result": result,
+                "settlement_value": str(settlement_value) if settlement_value is not None else None,
+                "winning_outcome": winning_outcome,
+                "resolved_at": market.get("settlement_ts"),
                 "last_price": market.get("last_price_dollars"),
             },
         )

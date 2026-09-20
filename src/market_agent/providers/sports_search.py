@@ -1,7 +1,8 @@
 """Bounded sports discovery inside the existing read-only provider servers."""
 
 import json
-from datetime import UTC, date, datetime
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -32,6 +33,24 @@ KALSHI_SERIES: dict[str, tuple[League, str]] = {
     "KXNCAAFCSGAME": ("ncaa_football", "College Football FCS Game"),
 }
 POLY_TAGS: dict[str, League] = {"mlb": "mlb", "nfl": "nfl", "cfb": "ncaa_football"}
+
+
+def continuation_token(provider: str, state: dict[str, Any]) -> str:
+    payload = json.dumps({"provider": provider, **state}, separators=(",", ":"), sort_keys=True)
+    return urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+
+
+def continuation_state(token: str | None, provider: str) -> dict[str, Any]:
+    if token is None:
+        return {}
+    try:
+        padding = "=" * (-len(token) % 4)
+        value = json.loads(urlsafe_b64decode(token + padding))
+    except (ValueError, TypeError) as error:
+        raise ValueError("invalid continuation cursor") from error
+    if not isinstance(value, dict) or value.pop("provider", None) != provider:
+        raise ValueError("continuation cursor belongs to a different provider")
+    return value
 
 
 def winner_market(market: dict[str, Any], event_title: str) -> bool:
@@ -158,8 +177,17 @@ async def search_kalshi(
     status: MarketStatus | None,
     limit: int,
     series_ticker: str | None,
-    event_date: date | None,
+    date_range: tuple[datetime | None, datetime | None] | None = None,
+    event_date: date | None = None,
+    continuation: str | None = None,
+    next_game_only: bool = False,
+    most_recent_game_only: bool = False,
 ) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
+    if date_range is None:
+        date_range = (
+            datetime.combine(event_date, time.min, UTC) if event_date else None,
+            datetime.combine(event_date, time.min, UTC) + timedelta(days=1) if event_date else None,
+        )
     scope = [k for k, (league, _) in KALSHI_SERIES.items() if league == query.league]
     if series_ticker:
         if series_ticker not in scope:
@@ -177,11 +205,25 @@ async def search_kalshi(
     coverage = DiscoveryCoverage(
         scope="Full-game winners; historical nested markets may be omitted."
     )
-    cursors: dict[str, str | None] = dict.fromkeys(scope)
+    state = continuation_state(continuation, "kalshi")
+    expected_scope = {
+        "teams": sorted(team.kalshi_id for team in query.teams),
+        "status": status.value if status else None,
+        "date_range": [value.isoformat() if value else None for value in date_range],
+    }
+    if state and any(state.get(key) != value for key, value in expected_scope.items()):
+        raise ValueError("continuation cursor does not match this sports query")
+    saved_cursors = state.get("cursors", {})
+    if not isinstance(saved_cursors, dict) or any(
+        key not in scope or not isinstance(value, str) for key, value in saved_cursors.items()
+    ):
+        raise ValueError("continuation cursor does not match this sports scope")
+    cursors: dict[str, str | None] = {key: saved_cursors.get(key) for key in scope}
     exhausted: set[str] = set()
     seen_cursors: set[tuple[str, str]] = set()
     seen_events: set[str] = set()
     results: dict[str, CanonicalMarket] = {}
+    retrieved_at = datetime.now(UTC)
     # One shared page budget across NCAA scopes; round-robin avoids starving FCS.
     for page in range(client.max_search_pages):
         available = [s for s in scope if s not in exhausted]
@@ -215,7 +257,7 @@ async def search_kalshi(
             raw_markets = objects(event.get("markets"), "kalshi", "markets")
             coverage.markets_scanned += len(raw_markets)
             sports = kalshi_event(event, milestones)
-            if sports is None or not event_matches(sports, query, event_date):
+            if sports is None or not event_matches(sports, query, date_range):
                 continue
             for market in raw_markets:
                 if (
@@ -225,7 +267,7 @@ async def search_kalshi(
                     continue
                 parsed = parse_kalshi(
                     market,
-                    retrieved_at=datetime.now(UTC),
+                    retrieved_at=retrieved_at,
                     resolution_source=_resolution_source(event),
                 )
                 if status is not None and parsed.status != status:
@@ -235,6 +277,7 @@ async def search_kalshi(
                         "provider_data": {
                             **parsed.provider_data,
                             **sports_payload(sports, market),
+                            "series_ticker": ticker,
                             "requested_outcome": any(
                                 t.kalshi_name == market.get("yes_sub_title") for t in query.teams
                             ),
@@ -259,9 +302,23 @@ async def search_kalshi(
         for s, c in cursors.items()
         if s not in exhausted
     ]
+    if coverage.continuation:
+        coverage.next_cursor = continuation_token(
+            "kalshi",
+            {
+                "cursors": {key: value for key, value in cursors.items() if value},
+                **expected_scope,
+            },
+        )
     if coverage.stop_reason == "not_started":
         coverage.stop_reason = "page_budget" if coverage.has_more else "provider_exhausted"
-    return finish(results, coverage, limit)
+    return finish(
+        results,
+        coverage,
+        limit,
+        next_game_only=next_game_only,
+        most_recent_game_only=most_recent_game_only,
+    )
 
 
 def poly_event(
@@ -319,14 +376,24 @@ async def search_polymarket(
     *,
     status: MarketStatus | None,
     limit: int,
-    event_date: date | None,
+    date_range: tuple[datetime | None, datetime | None] | None = None,
+    event_date: date | None = None,
+    continuation: str | None = None,
+    next_game_only: bool = False,
+    most_recent_game_only: bool = False,
 ) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
+    if date_range is None:
+        date_range = (
+            datetime.combine(event_date, time.min, UTC) if event_date else None,
+            datetime.combine(event_date, time.min, UTC) + timedelta(days=1) if event_date else None,
+        )
     coverage = DiscoveryCoverage(
         scope="Full-game moneyline; exact participants within provider-ranked event search.",
         total_meaning="Provider public-search totalResults before local contract/team filters.",
     )
     results: dict[str, CanonicalMarket] = {}
     seen: set[str] = set()
+    retrieved_at = datetime.now(UTC)
     # College game titles use school names, while full mascot names mostly find futures.
     # Scope by the verified league tag slug before requiring ALL participants locally.
     search_team = query.teams[0]
@@ -345,9 +412,28 @@ async def search_polymarket(
         ]
         search_query = min(nicknames, key=len) if nicknames else search_team.name
     tag = next(k for k, league in POLY_TAGS.items() if league == query.league)
-    catalog_series: str | None = None
-    catalog_offset = 0
-    for page in range(1, client.max_search_pages + 1):
+    state = continuation_state(continuation, "polymarket")
+    if state and (state.get("tag") != tag or state.get("query") != search_query):
+        raise ValueError("continuation cursor does not match this sports query")
+    mode = state.get("mode", "search")
+    if mode not in {"search", "catalog"}:
+        raise ValueError("invalid continuation cursor")
+    page_start = state.get("page", 1)
+    catalog_series = state.get("series") if mode == "catalog" else None
+    catalog_offset = state.get("offset", 0)
+    if (
+        type(page_start) is not int
+        or page_start < 1
+        or (
+            catalog_series is not None
+            and (not isinstance(catalog_series, str) or not catalog_series.isdigit())
+        )
+        or type(catalog_offset) is not int
+        or catalog_offset < 0
+    ):
+        raise ValueError("invalid continuation cursor")
+    for request_index in range(client.max_search_pages):
+        page = page_start + request_index
         if catalog_series is not None:
             params: dict[str, str | int] = {
                 "series_id": catalog_series,
@@ -415,9 +501,9 @@ async def search_polymarket(
                 if status is not None and poly_status(market) != status:
                     continue
                 sports = poly_event(event, market, query.league)
-                if sports is None or not event_matches(sports, query, event_date):
+                if sports is None or not event_matches(sports, query, date_range):
                     continue
-                parsed = parse_poly(market, event_id=event_id, retrieved_at=datetime.now(UTC))
+                parsed = parse_poly(market, event_id=event_id, retrieved_at=retrieved_at)
                 parsed = parsed.model_copy(
                     update={
                         "provider_data": {
@@ -427,6 +513,12 @@ async def search_polymarket(
                         }
                     }
                 )
+                client.remember_sports_context(
+                    parsed.market_id,
+                    event_id=event_id,
+                    sports=sports.model_dump(mode="json"),
+                    event_slug=event.get("slug") if isinstance(event.get("slug"), str) else None,
+                )
                 retain(results, parsed)
         coverage.continuation = (
             [{"series_id": catalog_series, "offset": catalog_offset}]
@@ -435,8 +527,31 @@ async def search_polymarket(
             if more
             else []
         )
+        coverage.next_cursor = (
+            continuation_token(
+                "polymarket",
+                {
+                    "mode": "catalog",
+                    "series": catalog_series,
+                    "offset": catalog_offset,
+                    "tag": tag,
+                    "query": search_query,
+                },
+            )
+            if more and catalog_series
+            else continuation_token(
+                "polymarket",
+                {"mode": "search", "page": page + 1, "tag": tag, "query": search_query},
+            )
+            if more
+            else None
+        )
         if not more:
-            if not results and catalog_series is None and page < client.max_search_pages:
+            if (
+                not results
+                and catalog_series is None
+                and request_index + 1 < client.max_search_pages
+            ):
                 metadata = objects(
                     await client._request_json("/sports"), "polymarket", "sports metadata"
                 )
@@ -454,17 +569,30 @@ async def search_polymarket(
             coverage.stop_reason = "repeated_or_empty_page"
             break
         # Rank all qualifying contracts on this page before early completion.
-        if len(results) >= limit:
+        if len({market.event_id for market in results.values()}) >= limit:
             coverage.stop_reason = "result_limit"
             break
     if coverage.stop_reason == "not_started":
         coverage.stop_reason = "page_budget"
-    return finish(results, coverage, limit)
+    return finish(
+        results,
+        coverage,
+        limit,
+        next_game_only=next_game_only,
+        most_recent_game_only=most_recent_game_only,
+    )
 
 
 def finish(
-    results: dict[str, CanonicalMarket], coverage: DiscoveryCoverage, limit: int
+    results: dict[str, CanonicalMarket],
+    coverage: DiscoveryCoverage,
+    limit: int,
+    *,
+    next_game_only: bool = False,
+    most_recent_game_only: bool = False,
 ) -> tuple[list[CanonicalMarket], DiscoveryCoverage]:
+    if next_game_only and most_recent_game_only:
+        raise ValueError("next_game_only and most_recent_game_only are mutually exclusive")
     coverage.candidates_matched = len(results)
     events = {m.event_id: m.provider_data["sports"] for m in results.values()}
     coverage.candidate_event_count = len(events)
@@ -476,17 +604,40 @@ def finish(
         )[:10]
     ]
     coverage.truncated = (
-        bool(coverage.has_more) or bool(coverage.continuation) or len(results) > limit
+        bool(coverage.has_more) or bool(coverage.continuation) or len(events) > limit
     )
     # All candidates already satisfy exact identity/type. Stable chronological
     # order retains doubleheaders as separate event IDs, never merges them.
+    event_order = sorted(
+        events,
+        key=lambda event_id: (events[event_id]["scheduled_start"] or "9999", event_id or ""),
+    )
+    now = datetime.now(UTC)
+    if next_game_only:
+        event_order = [
+            event_id
+            for event_id in event_order
+            if events[event_id]["scheduled_start"]
+            and datetime.fromisoformat(events[event_id]["scheduled_start"].replace("Z", "+00:00"))
+            >= now
+        ][:1]
+    elif most_recent_game_only:
+        event_order = [
+            event_id
+            for event_id in reversed(event_order)
+            if events[event_id]["scheduled_start"]
+            and datetime.fromisoformat(events[event_id]["scheduled_start"].replace("Z", "+00:00"))
+            <= now
+        ][:1]
+    else:
+        event_order = event_order[:limit]
+    selected = set(event_order)
     ranked = sorted(
-        results.values(),
-        key=lambda m: (
-            m.provider_data["sports"]["scheduled_start"] or "9999",
-            m.event_id or "",
-            not m.provider_data.get("requested_outcome", False),
-            m.market_id,
+        (market for market in results.values() if market.event_id in selected),
+        key=lambda market: (
+            event_order.index(market.event_id),
+            not market.provider_data.get("requested_outcome", False),
+            market.market_id,
         ),
     )
-    return ranked[:limit], coverage
+    return ranked, coverage

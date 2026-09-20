@@ -11,16 +11,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from market_agent.domain import MarketStatus
 from market_agent.mcp.common import (
+    Continuation,
     Limit,
     MarketDetail,
     Query,
     SearchResults,
     controlled_errors,
+    group_games,
     project,
 )
 from market_agent.providers import KalshiClient
 from market_agent.providers.kalshi import normalize_query
-from market_agent.providers.sports import League, resolve_query
+from market_agent.providers.sports import League, date_bounds, resolve_query
 from market_agent.providers.sports_search import KALSHI_SERIES, search_kalshi
 
 Ticker = Annotated[str, Field(strict=True, pattern=r"^[A-Z0-9][A-Z0-9._-]{0,99}$")]
@@ -92,16 +94,25 @@ def create_server(client: KalshiClient | None = None) -> FastMCP[Any]:
         series_ticker: Ticker | None = None,
         league: League | None = None,
         event_date: date | None = None,
+        local_date: date | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        timezone: Query = "UTC",
+        next_game_only: bool = False,
+        most_recent_game_only: bool = False,
+        continuation: Continuation | None = None,
     ) -> KalshiSearchResults:
         """Find sports game winners by team or matchup, e.g. Yankees, Padres, Chiefs vs Bills.
         Sports automatically resolve verified league/series metadata; no series call needed.
         Optional league: mlb, nfl, ncaa_football. NCAA covers Division I FBS/FCS.
         Ambiguous cities/abbreviations return clarification choices; ask the user, never guess.
-        event_date is scheduled UTC date, not trading close. Doubleheaders remain separate:
-        ask for game time/event ID when multiple games match. Only full-game winners supported;
+        local_date/date ranges use an IANA timezone such as America/Los_Angeles; event_date is
+        retained as an exact-date alias. next_game_only and most_recent_game_only select one game.
+        limit counts games, not contracts. Doubleheaders remain separate. Only full-game winners;
         no spreads, totals, props or futures. series_ticker remains an optional precision filter.
         Generic non-sports topics retain bounded catalog search and optional series discovery.
-        Empty results do not prove absence. Defaults open; resolved means settled; null all states.
+        Pass discovery.next_cursor as continuation for the next bounded page. Empty results do
+        not prove absence. Defaults open; resolved means settled; null includes all states.
         Only use exact returned MARKET tickers for details; never construct or guess tickers.
         Never substitute Polymarket for a Kalshi request.
         """
@@ -123,25 +134,40 @@ def create_server(client: KalshiClient | None = None) -> FastMCP[Any]:
                     coverage="Clarification required; no upstream market search performed.",
                 )
             if sports_query.league:
+                start, end, zone = date_bounds(
+                    event_date=event_date,
+                    local_date=local_date,
+                    date_from=date_from,
+                    date_to=date_to,
+                    timezone=timezone,
+                )
                 sports_markets, discovery = await search_kalshi(
                     active_client,
                     sports_query,
                     status=MarketStatus(status) if status else None,
                     limit=limit,
                     series_ticker=series_ticker,
-                    event_date=event_date,
+                    date_range=(start, end),
+                    continuation=continuation,
+                    next_game_only=next_game_only,
+                    most_recent_game_only=most_recent_game_only,
                 )
                 return KalshiSearchResults(
                     query=query,
                     normalized_query=" vs ".join(t.name for t in sports_query.teams),
                     series_ticker=series_ticker,
-                    markets=[project(m) for m in sports_markets],
+                    markets=[],
+                    games=group_games(sports_markets, timezone=zone.key),
                     discovery=discovery,
                     coverage="Bounded sports discovery; empty results do not prove absence. "
                     "Multiple event IDs require date/time clarification before selecting a game.",
                 )
-            if event_date is not None:
-                raise ValueError("event_date requires a supported sports query")
+            if any((event_date, local_date, date_from, date_to, continuation)) or (
+                next_game_only or most_recent_game_only or timezone != "UTC"
+            ):
+                raise ValueError(
+                    "sports date, selection, and continuation inputs require a sports query"
+                )
             markets = await active_client.search_markets(
                 query,
                 status=MarketStatus(status) if status else None,

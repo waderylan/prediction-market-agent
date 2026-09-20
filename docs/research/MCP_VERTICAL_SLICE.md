@@ -55,9 +55,14 @@ provider discovery path. A reviewed packaged team catalog supports canonical nam
 provider-specific labels. League and contract scope filter the scan before returned-limit
 truncation. Clarification can finish locally without an API call.
 
-Sports models and coverage counters are part of the shared MCP projection. The
-agent imports those models, so additive fields survive host validation without an agent
-implementation change. Integration tests exercise this exact path.
+Sports search projects provider contracts into game-first results. Each game groups its outcome
+contracts and carries localized kickoff labels, lifecycle status, consumer links, quote freshness,
+and explicit settlement when available. Exact local dates, inclusive date ranges, next/recent
+selectors, and opaque continuation cursors stay inside the existing two search tools. The agent
+validates both generic `markets[]` and sports `games[].contracts[]` paths.
+The Polymarket client retains verified search event context for 15 minutes in a bounded cache
+because Gamma market detail can omit its event array; contract quotes still come from the fresh
+detail response.
 
 [Sports MCP design](SPORTS_MCP.md) explains catalog provenance, series selection, Gamma
 fallback, output fields, and budgets. [Provider contracts](MARKET_API_FEASIBILITY.md)

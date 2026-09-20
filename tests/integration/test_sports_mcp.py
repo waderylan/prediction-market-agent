@@ -95,7 +95,7 @@ async def connection(provider, mode="success"):
             market = payload["events"][0]["markets"][0].copy()
             if provider == "kalshi":
                 return httpx.Response(200, json={"market": market})
-            market["events"] = [{k: v for k, v in payload["events"][0].items() if k != "markets"}]
+            # Gamma currently omits event metadata from some market-detail responses.
             return httpx.Response(200, json=market)
         return httpx.Response(200, json=payload)
 
@@ -119,7 +119,17 @@ async def test_sports_schema_and_call(provider):
         assert properties["limit"]["minimum"] == 1
         assert properties["limit"]["maximum"] == 10
         assert properties["limit"]["type"] == "integer"
-        assert "league" in properties and "event_date" in properties
+        assert {
+            "league",
+            "event_date",
+            "local_date",
+            "date_from",
+            "date_to",
+            "timezone",
+            "next_game_only",
+            "most_recent_game_only",
+            "continuation",
+        } <= properties.keys()
         bad = await session.call_tool(name, {"query": "Yankees", "limit": 20})
         assert bad.isError and not calls
         unclear = await session.call_tool(name, {"query": "Giants"})
@@ -128,9 +138,15 @@ async def test_sports_schema_and_call(provider):
         result = await session.call_tool(name, {"query": "Yankees vs Padres", "limit": 2})
         assert not result.isError
         validate(result.structuredContent, tools[name].outputSchema)
-        market = result.structuredContent["markets"][0]
+        assert result.structuredContent["markets"] == []
+        game = result.structuredContent["games"][0]
+        market = game["contracts"][0]
+        assert game["local_date"] == "2026-09-20"
+        assert game["label"].endswith("UTC")
         assert market["sports"]["league"] == "mlb"
         assert market["outcome_quotes"][0]["price"] == "0.42"
+        assert market["quote_as_of"] == market["retrieved_at"]
+        assert market["market_url"].startswith(f"https://{provider}.com/")
         detail_name = provider + "_get_market"
         detail = await session.call_tool(detail_name, {"market_id": market["market_id"]})
         assert not detail.isError
@@ -167,5 +183,5 @@ async def test_existing_agent_consumes_sports_search_and_detail(provider):
     assert response == "Verified labeled sports prices"
     messages = [m for m in model.observed[-1] if isinstance(m, ToolMessage)]
     assert len(messages) == 2 and all(m.status == "success" for m in messages)
-    assert json.loads(messages[0].content)["markets"][0]["sports"]["league"] == "mlb"
+    assert json.loads(messages[0].content)["games"][0]["league"] == "mlb"
     assert json.loads(messages[1].content)["outcome_quotes"][0]["price"] == "0.42"

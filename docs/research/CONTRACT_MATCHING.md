@@ -34,8 +34,9 @@ sports-specific interpretation of normal settlement timing.
 ## Sports boundary
 
 Sports MCP results provide league, canonical and raw participants, provider event identity,
-scheduled start, full-game market type, and explicit outcome prices. They always declare
-sports comparison eligibility unverified.
+scheduled start, full-game market type, explicit outcome prices, and settlement evidence. They
+declare comparison eligibility `insufficient_evidence` with the specific reason: discovery
+verifies event/type identity but does not establish equivalent settlement rules.
 
 The current matching engine does not yet use all those fields. It requires YES/NO outcomes,
 so a named-team Polymarket contract cannot be promoted to equivalence with a Kalshi contract.

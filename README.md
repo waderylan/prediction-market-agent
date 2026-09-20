@@ -18,10 +18,11 @@ Shared cities and ambiguous abbreviations produce clarification choices.
 | Two independent MCP servers | Kalshi and Polymarket, public GET requests, real stdio discovery and calls |
 | Sports discovery | MLB, NFL, NCAA Division I FBS/FCS; full-game winners only |
 | Team identity | Exact aliases from a reviewed provider catalog; same-city teams stay distinct |
-| Candidate selection | Both requested opponents must match; separate event IDs preserve doubleheaders |
-| Prices | Outcome labels and decimal prices; snapshots, last trades, and derived complements stay distinct |
+| Candidate selection | Results group both outcome contracts by game; separate event IDs preserve doubleheaders |
+| Dates | Exact local dates, ranges, next/most-recent selection, and IANA timezones |
+| Prices | One `quote_as_of` clock, stale flags, and distinct snapshots, trades, bids, and complements |
 | Coverage | Actual pages/events/contracts scanned, truncation, continuation evidence, and scoped totals |
-| Contract detail | Rules, separate timing fields, API provenance, available human-facing links |
+| Contract detail | Rules, game/close/resolution clocks, consumer links, and explicit settlement results |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
 | Comparison boundary | Deterministic contract checks run before synthesis; sports equivalence is not implemented |
 
@@ -82,23 +83,30 @@ Interactive HTTP documentation is at `/docs`.
 
 | Tool | Inputs |
 |---|---|
-| `kalshi_search_markets` | `query`, `status="open"`, `limit=5`, optional `league`, `event_date`, `series_ticker` |
+| `kalshi_search_markets` | `query`, `status="open"`, game `limit=5`; optional league, local date/range, timezone, next/recent selector, continuation, series |
 | `kalshi_search_series` | `query`, optional exact `category` and `tags`, `limit=5` |
 | `kalshi_get_market` | Exact returned uppercase `market_id` |
-| `polymarket_search_markets` | `query`, `status="open"`, `limit=5`, optional `league`, `event_date` |
+| `polymarket_search_markets` | `query`, `status="open"`, game `limit=5`; optional league, local date/range, timezone, next/recent selector, continuation |
 | `polymarket_get_market` | Exact returned numeric Gamma `market_id` |
 
 - Limits are strict integers from 1 through 10 in the client-visible MCP schema.
 - League values are `mlb`, `nfl`, and `ncaa_football`.
-- `event_date` is an ISO scheduled **UTC** date, independent of trading close.
+- `local_date`, `date_from`, and `date_to` are scheduled calendar dates in `timezone`
+  (an IANA name such as `America/Los_Angeles`). `event_date` remains an exact-date alias.
+- `next_game_only` and `most_recent_game_only` are mutually exclusive. Sports `limit` counts
+  games; each `games[]` entry contains its returned `contracts[]`.
 - Sports discovery accepts full-game winners; it does not substitute a spread, total,
   partial-game winner, player prop, season series, or future.
 - Clarification results include `clarification` and `choices`; they do not trigger upstream requests.
-- Multiple matching event IDs appear in `discovery.matching_events`. Select the intended
-  game before interpreting one price; two games on the same day remain separate.
+- Every game has a localized kickoff label and `pregame`, `live`, `awaiting_resolution`, or
+  `settled` state. Two games on the same day remain separate.
+- Pass `discovery.next_cursor` back as `continuation` to read the next bounded page.
 - Explicit series discovery is an optional precision control, not a prerequisite for an
   ordinary sports query.
-- Fetch details before interpreting settlement rules. A displayed price is not a forecast.
+- `quote_as_of` is the observation time for returned quotes. `provider_updated_at` remains
+  provider record metadata; `quote_is_stale` and its reason surface stale/non-trading data.
+- Fetch details before interpreting settlement rules. Resolved details expose
+  `settlement_value`, `winning_outcome`, and `resolved_at`; prices are not settlement evidence.
 - Empty bounded discovery is not proof of absence. Polymarket automatically checks its league
   catalog when exhausted text search yields no qualifying game and page budget remains.
 

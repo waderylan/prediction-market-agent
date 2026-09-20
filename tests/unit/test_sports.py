@@ -3,15 +3,15 @@
 import asyncio
 import copy
 import json
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pytest
 
 from market_agent.domain import MarketStatus
-from market_agent.mcp.common import project
+from market_agent.mcp.common import group_games, project
 from market_agent.providers import KalshiClient, MarketValidationError, PolymarketClient
-from market_agent.providers.sports import participant, resolve_query, teams
+from market_agent.providers.sports import date_bounds, participant, resolve_query, teams
 from market_agent.providers.sports_search import (
     KALSHI_SERIES,
     kalshi_event,
@@ -209,7 +209,7 @@ async def test_kalshi_automatic_series_wrong_opponents_siblings_and_doubleheader
     assert summary.outcome_quotes[1].price_kind == "derived_complement"
     assert summary.outcome_quotes[1].label == "Not New York Y"
     assert summary.last_trade_at is None and summary.price_observed_at is None
-    assert summary.market_url is None
+    assert summary.market_url == ("https://kalshi.com/markets/kxmlbgame/x/kxmlbgame-opaque-1")
     assert summary.rules.endswith("Postponements within two days count.")
 
 
@@ -586,3 +586,274 @@ def test_malformed_nested_metadata_is_typed(provider):
         event["tags"] = [{"slug": []}]
         with pytest.raises(MarketValidationError):
             poly_event(event, event["markets"][0])
+
+
+def test_local_calendar_date_uses_requested_timezone():
+    start, end, zone = date_bounds(local_date=date(2026, 9, 19), timezone="America/Los_Angeles")
+    assert zone.key == "America/Los_Angeles"
+    assert start == datetime(2026, 9, 19, 7, tzinfo=UTC)
+    assert end == datetime(2026, 9, 20, 7, tzinfo=UTC)
+    with pytest.raises(ValueError, match="IANA"):
+        date_bounds(local_date=date(2026, 9, 19), timezone="Pacific/Nowhere")
+    with pytest.raises(ValueError, match="date range"):
+        date_bounds(local_date=date(2026, 9, 19), date_from=date(2026, 9, 18))
+
+
+async def test_limit_counts_games_and_groups_both_kalshi_contracts():
+    first, first_milestone = kalshi_fixture()
+    second, second_milestone = kalshi_fixture("KXMLBGAME-OPAQUE-2")
+    second_milestone["start_date"] = "2026-09-21T00:10:00Z"
+
+    def handler(request):
+        if "/series/" in request.url.path:
+            return httpx.Response(
+                200,
+                json={"series": {"ticker": "KXMLBGAME", "title": KALSHI_SERIES["KXMLBGAME"][1]}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "events": [second, first],
+                "milestones": [first_milestone, second_milestone],
+                "cursor": "",
+            },
+        )
+
+    async with http_client(handler, "kalshi") as http:
+        markets, coverage = await search_kalshi(
+            KalshiClient(http_client=http),
+            resolve_query("Yankees vs Padres"),
+            status=MarketStatus.OPEN,
+            limit=1,
+            series_ticker=None,
+            event_date=None,
+        )
+    assert len(markets) == 2
+    assert {market.event_id for market in markets} == {first["event_ticker"]}
+    assert coverage.candidate_event_count == 2 and coverage.truncated
+    games = group_games(markets, timezone="America/Los_Angeles")
+    assert len(games) == 1 and len(games[0].contracts) == 2
+    assert games[0].local_date == "2026-09-19"
+    assert "PDT" in games[0].label
+
+
+async def test_continuation_cursor_can_be_passed_back_to_kalshi_search():
+    event, milestone = kalshi_fixture()
+    event_cursors = []
+
+    def handler(request):
+        if "/series/" in request.url.path:
+            return httpx.Response(
+                200,
+                json={"series": {"ticker": "KXMLBGAME", "title": KALSHI_SERIES["KXMLBGAME"][1]}},
+            )
+        event_cursors.append(request.url.params.get("cursor"))
+        return httpx.Response(
+            200,
+            json={"events": [event], "milestones": [milestone], "cursor": "next-page"},
+        )
+
+    async with http_client(handler, "kalshi") as http:
+        client = KalshiClient(http_client=http, max_search_pages=1)
+        _, first = await search_kalshi(
+            client,
+            resolve_query("Yankees"),
+            status=MarketStatus.OPEN,
+            limit=1,
+            series_ticker=None,
+            event_date=None,
+        )
+        assert first.next_cursor
+        await search_kalshi(
+            client,
+            resolve_query("Yankees"),
+            status=MarketStatus.OPEN,
+            limit=1,
+            series_ticker=None,
+            event_date=None,
+            continuation=first.next_cursor,
+        )
+    assert event_cursors == [None, "next-page"]
+
+
+def test_settlement_and_quote_freshness_are_explicit():
+    from market_agent.providers.kalshi import _parse_market
+
+    event, _ = kalshi_fixture()
+    market = event["markets"][0]
+    market.update(
+        status="finalized",
+        result="yes",
+        settlement_value_dollars="1.0000",
+        settlement_ts="2026-09-20T05:00:00Z",
+        updated_time="2026-09-20T05:00:00Z",
+        series_ticker="KXMLBGAME",
+    )
+    canonical = _parse_market(
+        market,
+        retrieved_at=datetime(2026, 9, 21, 6, tzinfo=UTC),
+    ).model_copy(
+        update={
+            "provider_data": {
+                **_parse_market(
+                    market, retrieved_at=datetime(2026, 9, 21, 6, tzinfo=UTC)
+                ).provider_data,
+                "sports": kalshi_event(event, []).model_dump(mode="json"),
+            }
+        }
+    )
+    summary = project(canonical, detail=True)
+    assert summary.settlement_value == 1
+    assert summary.winning_outcome == "New York Y"
+    assert summary.resolved_at == datetime(2026, 9, 20, 5, tzinfo=UTC)
+    assert summary.quote_as_of == canonical.retrieved_at
+    assert summary.quote_is_stale
+
+
+def test_open_quote_flags_old_provider_metadata():
+    from market_agent.providers.kalshi import _parse_market
+
+    event, _ = kalshi_fixture()
+    market = event["markets"][0]
+    market["updated_time"] = "2026-09-01T00:00:00Z"
+    summary = project(_parse_market(market, retrieved_at=datetime(2026, 9, 19, tzinfo=UTC)))
+    assert summary.quote_as_of == datetime(2026, 9, 19, tzinfo=UTC)
+    assert summary.quote_is_stale
+    assert "24 hours" in summary.quote_stale_reason
+
+
+def test_invalid_expected_resolution_is_omitted_with_warning():
+    from market_agent.providers.kalshi import _parse_market
+
+    event, milestone = kalshi_fixture()
+    event["markets"][0]["expected_expiration_time"] = "2026-09-19T23:00:00Z"
+    canonical = _parse_market(event["markets"][0], retrieved_at=datetime(2026, 9, 19, tzinfo=UTC))
+    canonical = canonical.model_copy(
+        update={
+            "provider_data": {
+                **canonical.provider_data,
+                "sports": kalshi_event(event, [milestone]).model_dump(mode="json"),
+            }
+        }
+    )
+    summary = project(canonical)
+    assert summary.expected_resolution_time is None
+    assert "preceded" in summary.timing_warning
+
+
+def test_game_lifecycle_moves_from_pregame_to_awaiting_resolution():
+    from market_agent.providers.kalshi import _parse_market
+
+    event, milestone = kalshi_fixture()
+    sports = kalshi_event(event, [milestone])
+    market = event["markets"][0]
+    before = _parse_market(market, retrieved_at=datetime(2026, 9, 19, 23, tzinfo=UTC))
+    after = _parse_market(market, retrieved_at=datetime(2026, 9, 20, 7, tzinfo=UTC))
+    before = before.model_copy(
+        update={"provider_data": {**before.provider_data, "sports": sports.model_dump(mode="json")}}
+    )
+    after = after.model_copy(
+        update={"provider_data": {**after.provider_data, "sports": sports.model_dump(mode="json")}}
+    )
+    assert group_games([before], timezone="UTC")[0].live_status == "pregame"
+    assert group_games([after], timezone="UTC")[0].live_status == "awaiting_resolution"
+
+
+async def test_polymarket_continuation_resumes_the_reported_page():
+    requested_pages = []
+
+    def handler(request):
+        requested_pages.append(int(request.url.params["page"]))
+        page = requested_pages[-1]
+        return httpx.Response(
+            200,
+            json={
+                "events": [poly_fixture(str(page), str(200 + page))],
+                "pagination": {"hasMore": True, "totalResults": 20},
+            },
+        )
+
+    async with http_client(handler, "polymarket") as http:
+        client = PolymarketClient(http_client=http, max_search_pages=1)
+        _, first = await search_polymarket(
+            client,
+            resolve_query("Yankees"),
+            status=MarketStatus.OPEN,
+            limit=1,
+            event_date=None,
+        )
+        assert first.next_cursor
+        await search_polymarket(
+            client,
+            resolve_query("Yankees"),
+            status=MarketStatus.OPEN,
+            limit=1,
+            event_date=None,
+            continuation=first.next_cursor,
+        )
+    assert requested_pages == [1, 2]
+
+
+async def test_next_and_most_recent_game_selection():
+    now = datetime.now(UTC).replace(microsecond=0)
+    past, past_milestone = kalshi_fixture("KXMLBGAME-PAST")
+    future, future_milestone = kalshi_fixture("KXMLBGAME-FUTURE")
+    past_milestone["start_date"] = (now - timedelta(days=1)).isoformat()
+    future_milestone["start_date"] = (now + timedelta(days=1)).isoformat()
+
+    def handler(request):
+        if "/series/" in request.url.path:
+            return httpx.Response(
+                200,
+                json={"series": {"ticker": "KXMLBGAME", "title": KALSHI_SERIES["KXMLBGAME"][1]}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "events": [future, past],
+                "milestones": [future_milestone, past_milestone],
+                "cursor": "",
+            },
+        )
+
+    async with http_client(handler, "kalshi") as http:
+        client = KalshiClient(http_client=http)
+        upcoming, _ = await search_kalshi(
+            client,
+            resolve_query("Yankees"),
+            status=MarketStatus.OPEN,
+            limit=5,
+            series_ticker=None,
+            event_date=None,
+            next_game_only=True,
+        )
+        recent, _ = await search_kalshi(
+            client,
+            resolve_query("Yankees"),
+            status=MarketStatus.OPEN,
+            limit=5,
+            series_ticker=None,
+            event_date=None,
+            most_recent_game_only=True,
+        )
+    assert {market.event_id for market in upcoming} == {future["event_ticker"]}
+    assert {market.event_id for market in recent} == {past["event_ticker"]}
+
+
+def test_polymarket_resolution_uses_explicit_metadata_not_trade_price():
+    from market_agent.providers.polymarket import _parse_market
+
+    event = poly_fixture()
+    market = event["markets"][0]
+    market.update(
+        active=False,
+        closed=True,
+        umaResolutionStatus="resolved",
+        closedTime="2026-09-20T05:00:00Z",
+        outcomePrices='["1","0"]',
+    )
+    summary = project(_parse_market(market, event_id=event["id"], retrieved_at=datetime.now(UTC)))
+    assert summary.status == MarketStatus.RESOLVED
+    assert summary.winning_outcome == "New York Yankees"
+    assert summary.settlement_value == 1
+    assert summary.resolved_at == datetime(2026, 9, 20, 5, tzinfo=UTC)

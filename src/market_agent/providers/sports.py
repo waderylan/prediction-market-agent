@@ -2,15 +2,17 @@
 
 import json
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 League = Literal["mlb", "nfl", "ncaa_football"]
 Division = Literal["FBS", "FCS"]
+LiveStatus = Literal["pregame", "live", "awaiting_resolution", "settled"]
 
 
 def words(value: str) -> str:
@@ -196,7 +198,10 @@ class SportsEvent(BaseModel):
     line: None = None
     scheduled_start: datetime | None = None
     schedule_source: str | None = None
-    comparison_eligibility: Literal["unverified"] = "unverified"
+    comparison_eligibility: Literal["insufficient_evidence"] = "insufficient_evidence"
+    comparison_eligibility_reason: str = (
+        "Discovery verifies event identity and contract type, but not equivalent settlement rules."
+    )
 
     @field_validator("scheduled_start")
     @classmethod
@@ -218,17 +223,58 @@ class DiscoveryCoverage(BaseModel):
     truncated: bool = False
     has_more: bool | None = None
     continuation: list[dict[str, str | int]] = Field(default_factory=list)
+    next_cursor: str | None = None
     provider_total: int | None = Field(default=None, ge=0)
     total_meaning: str | None = None
     stop_reason: str = "not_started"
     scope: str = "bounded discovery; not proof of market absence"
 
 
-def event_matches(event: SportsEvent, query: SportsQuery, event_date: date | None) -> bool:
+def date_bounds(
+    *,
+    event_date: date | None = None,
+    local_date: date | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    timezone: str = "UTC",
+) -> tuple[datetime | None, datetime | None, ZoneInfo]:
+    """Build an inclusive local-calendar filter as a half-open UTC interval."""
+    try:
+        zone = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise ValueError("timezone must be a valid IANA timezone") from error
+    exact = local_date or event_date
+    if event_date and local_date and event_date != local_date:
+        raise ValueError("event_date and local_date conflict")
+    if exact and (date_from or date_to):
+        raise ValueError("use an exact date or a date range, not both")
+    start_date = exact or date_from
+    end_date = exact or date_to
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("date_from must be on or before date_to")
+    start = datetime.combine(start_date, time.min, zone).astimezone(UTC) if start_date else None
+    end = (
+        datetime.combine(date.fromordinal(end_date.toordinal() + 1), time.min, zone).astimezone(UTC)
+        if end_date
+        else None
+    )
+    return start, end, zone
+
+
+def event_matches(
+    event: SportsEvent,
+    query: SportsQuery,
+    date_range: tuple[datetime | None, datetime | None],
+) -> bool:
     if not all(t.name in event.participants for t in query.teams):
         return False
-    return event_date is None or (
-        event.scheduled_start is not None and event.scheduled_start.date() == event_date
+    start, end = date_range
+    if start is None and end is None:
+        return True
+    if event.scheduled_start is None:
+        return False
+    return (start is None or event.scheduled_start >= start) and (
+        end is None or event.scheduled_start < end
     )
 
 

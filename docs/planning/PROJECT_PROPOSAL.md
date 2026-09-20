@@ -15,9 +15,11 @@ The Kalshi and Polymarket MCP servers accept ordinary team names and matchups, i
 when exact aliases permit it, and return full-game winner candidates. The user does not need
 to know a series ticker. Ambiguous names produce clarification choices.
 
-Each candidate preserves provider identity and raw labels alongside canonical participants,
-scheduled game time when available, labeled price semantics, and bounded discovery coverage.
-A detail call supplies settlement rules. The FastAPI/LangGraph application invokes
+Each result groups outcome contracts by game and preserves provider identity and raw labels
+alongside canonical participants, localized kickoff, game lifecycle, quote freshness, and bounded
+discovery coverage. Exact local dates, ranges, next/recent selection, and continuation cursors keep
+common searches direct. A detail call supplies settlement rules and explicit resolution. The
+FastAPI/LangGraph application invokes
 both servers through real MCP and retains session context.
 
 Representative requests:
@@ -26,7 +28,7 @@ Representative requests:
 - Find Polymarket Chiefs vs Bills contracts.
 - Find Ohio State vs Michigan with league `ncaa_football`.
 - Read the rules for this returned market ID.
-- Which game does that price refer to, and when was the data retrieved?
+- Which game does that price refer to, when was the quote observed, and is it stale?
 
 Results describe discovered contracts, not a claim that a particular game is currently listed.
 Multiple event IDs require selection before discussing a singular game.

@@ -10,16 +10,18 @@ from mcp.types import ToolAnnotations
 
 from market_agent.domain import MarketStatus
 from market_agent.mcp.common import (
+    Continuation,
     Limit,
     MarketDetail,
     MarketId,
     Query,
     SearchResults,
     controlled_errors,
+    group_games,
     project,
 )
 from market_agent.providers import PolymarketClient
-from market_agent.providers.sports import League, resolve_query
+from market_agent.providers.sports import League, date_bounds, resolve_query
 from market_agent.providers.sports_search import search_polymarket
 
 
@@ -47,12 +49,22 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
         limit: Limit = 5,
         league: League | None = None,
         event_date: date | None = None,
+        local_date: date | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        timezone: Query = "UTC",
+        next_game_only: bool = False,
+        most_recent_game_only: bool = False,
+        continuation: Continuation | None = None,
     ) -> SearchResults:
         """Find sports full-game winners by team/matchup (Yankees, Padres, Chiefs vs Bills).
         League resolves from exact verified aliases; optionally set mlb, nfl, ncaa_football.
         NCAA covers Division I FBS/FCS. Ambiguous names return clarification choices: ask the
-        user. event_date means scheduled UTC date. Doubleheaders keep separate event IDs;
-        ask for game time/event ID before selecting. Spreads/totals/props/futures are excluded
+        user. local_date/date ranges use an IANA timezone such as America/Los_Angeles;
+        event_date remains an exact-date alias. next_game_only and most_recent_game_only select
+        one game. limit counts games, not contracts. Doubleheaders keep separate event IDs.
+        Pass discovery.next_cursor as continuation for the next bounded page.
+        Spreads/totals/props/futures are excluded
         from sports discovery. Named outcomes carry labeled snapshot prices, not YES prices.
         Generic topics retain bounded free-text discovery. Defaults to open
         markets; use null status to include historical markets. Returns up to 10 unique
@@ -72,17 +84,36 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
                     coverage="Clarification required; no upstream market search performed.",
                 )
             if sports_query.league:
+                start, end, zone = date_bounds(
+                    event_date=event_date,
+                    local_date=local_date,
+                    date_from=date_from,
+                    date_to=date_to,
+                    timezone=timezone,
+                )
                 sports_markets, discovery = await search_polymarket(
-                    active_client, sports_query, status=status, limit=limit, event_date=event_date
+                    active_client,
+                    sports_query,
+                    status=status,
+                    limit=limit,
+                    date_range=(start, end),
+                    continuation=continuation,
+                    next_game_only=next_game_only,
+                    most_recent_game_only=most_recent_game_only,
                 )
                 return SearchResults(
-                    markets=[project(m) for m in sports_markets],
+                    markets=[],
+                    games=group_games(sports_markets, timezone=zone.key),
                     discovery=discovery,
                     coverage="Bounded sports discovery; empty results do not prove absence. "
                     "Multiple event IDs require date/time clarification before selecting a game.",
                 )
-            if event_date is not None:
-                raise ValueError("event_date requires a supported sports query")
+            if any((event_date, local_date, date_from, date_to, continuation)) or (
+                next_game_only or most_recent_game_only or timezone != "UTC"
+            ):
+                raise ValueError(
+                    "sports date, selection, and continuation inputs require a sports query"
+                )
             markets = await active_client.search_markets(query, status=status, limit=limit)
             return SearchResults(
                 markets=[project(market) for market in markets[:limit]],

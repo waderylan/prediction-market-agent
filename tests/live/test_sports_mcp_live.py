@@ -39,18 +39,28 @@ async def test_sports_stdio_live(provider):
             payload = result.structuredContent
             validate(payload, tools[search_name].outputSchema)
             assert payload["discovery"]["pages_scanned"] <= 3
-            assert len(payload["markets"]) <= 2
+            assert payload["markets"] == []
+            assert len(payload["games"]) <= 2
             print(
                 provider,
                 league,
                 "returned",
-                len(payload["markets"]),
+                len(payload["games"]),
                 "pages",
                 payload["discovery"]["pages_scanned"],
                 "stop",
                 payload["discovery"]["stop_reason"],
             )
-            for market in payload["markets"][:1]:
+            for game in payload["games"][:1]:
+                assert game["league"] == league
+                assert game["local_date"]
+                assert game["live_status"] in {
+                    "pregame",
+                    "live",
+                    "awaiting_resolution",
+                    "settled",
+                }
+                market = game["contracts"][0]
                 assert market["sports"]["league"] == league
                 assert market["sports"]["market_type"] == "game_winner"
                 assert market["outcome_quotes"]

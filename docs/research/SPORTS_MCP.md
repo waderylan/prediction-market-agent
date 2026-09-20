@@ -34,15 +34,22 @@ explicitly typed fields. Raw provider payloads are not sent to the model.
 
 ## Query resolution
 
-Both search tools accept a team or matchup, optional league, and optional scheduled UTC date.
+Both search tools accept a team or matchup, optional league, local calendar filters, game
+selectors, and an opaque continuation cursor.
 
 ```json
 {"query": "Yankees vs Padres", "limit": 5}
 {"query": "Giants", "league": "nfl"}
-{"query": "Ohio State vs Michigan", "league": "ncaa_football", "event_date": "2026-11-28"}
+{"query": "Padres", "local_date": "2026-09-19", "timezone": "America/Los_Angeles"}
+{"query": "Ohio State", "league": "ncaa_football", "date_from": "2026-09-14", "date_to": "2026-09-20"}
+{"query": "Ravens", "next_game_only": true, "timezone": "America/New_York"}
 ```
 
-The date above illustrates input syntax, not an assertion that a game or market exists.
+The dates above illustrate input syntax, not an assertion that a game or market exists.
+
+`local_date`, `date_from`, and `date_to` are inclusive scheduled calendar dates in `timezone`,
+which must be an IANA name. `event_date` is an exact-date alias. Exact dates and ranges cannot be
+combined. `next_game_only` and `most_recent_game_only` are mutually exclusive.
 
 Resolution follows these rules:
 
@@ -57,7 +64,7 @@ Resolution follows these rules:
 6. Treat common college ambiguities explicitly. `OSU`, bare `USC`, and unqualified college
    `Miami` require clarification. Full provider-backed names resolve them.
 7. Reject unrecognized remaining opponent, date, or contract-type terms. The server never drops
-   `vs Mystery` and returns the known team's unrelated games. Use `event_date` for dates.
+   `vs Mystery` and returns the known team's unrelated games. Use typed date inputs for dates.
 8. Preserve unsupported non-sports queries for the generic discovery path.
 
 There is no edit-distance search or nickname-only cross-provider join. Short abbreviations are
@@ -207,16 +214,29 @@ A sports result includes a `sports` object:
 | `line` | Null: no spread or total is supported |
 | `scheduled_start` | Timezone-aware scheduled game time, when available |
 | `schedule_source` | Field supplying the schedule |
-| `comparison_eligibility` | Always `unverified`; discovery cannot certify equivalence |
+| `comparison_eligibility` | `insufficient_evidence`; discovery cannot certify equivalent settlement rules |
+| `comparison_eligibility_reason` | Concrete evidence boundary for downstream explanation |
 
 `market_id`, `event_id`, `title`, and `raw_title` also remain available at contract level.
 Different provider event IDs are never merged merely because the participants match.
 Two doubleheader games remain two events even when both fall on the same UTC date.
 
-`discovery.matching_events` lists up to ten distinct qualifying events independently of the
-contract result limit. `candidate_event_count` reports the full count within the scan.
-`selection_required` signals that a singular-game interpretation needs event/time selection;
-a user asking for a list can simply inspect the alternatives.
+Sports search returns `games[]`, not a flat list of team contracts. Each game contains its event
+identity, participants, UTC scheduled start, requested-timezone date and kickoff, a readable
+date/time label, lifecycle state, consumer URL, and `contracts[]`. The limit counts games. A
+Kalshi game normally contains both team contracts; a Polymarket game normally contains one
+named-outcome contract.
+
+`pregame` means kickoff is in the future. `live` means the observation falls inside the bounded
+expected live window (five hours for MLB and four and a half hours for football) while a contract
+remains active. `awaiting_resolution` means that window ended without confirmed settlement.
+`settled` requires every returned contract to carry explicit resolved status. This phase model
+prevents an exchange's still-open flag from claiming that a completed game is live.
+
+`discovery.matching_events` lists up to ten qualifying events within the scan.
+`candidate_event_count` reports the full count within that scan, and `selection_required`
+signals that a singular request needs game selection. Each `games[]` entry supplies the local
+label needed to make that selection.
 
 ## Prices, clocks, and links
 
@@ -236,9 +256,12 @@ A Kalshi NO label is `Not <participant>`, not the opponent's name: cancellation 
 settlement can prevent that logical substitution. Named Polymarket outcomes do not acquire
 fabricated YES/NO prices or bid/ask assignments. No additional order-book requests are made.
 
-`retrieved_at` is local retrieval time. `provider_updated_at` is object-update metadata,
-not a quote or trade observation clock. `price_observed_at` and `last_trade_at` remain null
-when those specific clocks are unavailable.
+`quote_as_of` is the authoritative observation time for every quote in one search response;
+all contracts in that response share it. `retrieved_at` remains the underlying retrieval time.
+`provider_updated_at` is retained as provider record metadata, not relabeled as a trade clock.
+`quote_is_stale` is true for non-trading contracts and when open-provider record metadata is
+more than 24 hours old; `quote_stale_reason` explains the flag. `price_observed_at` and
+`last_trade_at` remain null when the provider supplies no such clock.
 
 | Time field | Source and interpretation |
 |---|---|
@@ -248,13 +271,24 @@ when those specific clocks are unavailable.
 | `resolution_deadline` | Kalshi latest expiration, otherwise supplied expiration; Gamma null |
 
 A game beginning before trading closes is normal. Conflicting explicit game-start fields or
-conflicting identities fail validation; normal settlement timing does not create a warning.
+conflicting identities fail validation; normal settlement timing does not create a warning. An
+`expected_resolution_time` earlier than scheduled start is omitted with `timing_warning` rather
+than presented as valid.
 Detail retrieval uses the exact event ID to recover Kalshi milestone metadata.
+Polymarket detail reuses verified search event metadata from a bounded 15-minute, 256-entry
+in-process cache when Gamma omits the event array. The detail quote still comes from a fresh
+market request; expired or absent context remains null instead of reconstructing an event ID.
 
 `source_url` retains its compatible API provenance meaning; `api_url` makes that meaning
 explicit. Polymarket `market_url` uses the documented human-facing `/market/{slug}` route
-with the returned slug. Kalshi human links stay null when a reliable page URL is unavailable;
-API URLs are never presented as exchange webpages. Link discovery must not invent slugs.
+with the returned slug. Kalshi `market_url` uses the exchange's indexed
+`/markets/{series}/x/{event}` route with provider-returned series and event identities. API URLs
+are never presented as exchange webpages, and neither link path invents a slug or identifier.
+
+Resolved details expose settlement independently from prices. Kalshi maps `result`,
+`settlement_value_dollars`, and `settlement_ts`. Polymarket requires explicit resolved metadata,
+then identifies the single winning named outcome only when the terminal outcome vector is
+unambiguous. The public fields are `settlement_value`, `winning_outcome`, and `resolved_at`.
 
 ## Coverage and operating budgets
 
@@ -267,6 +301,7 @@ API URLs are never presented as exchange webpages. Link discovery must not inven
 | `truncated` | More/possibly more provider data or local candidates exist |
 | `has_more` | Provider continuation evidence; null when an offset feed cannot say |
 | `continuation` | Provider cursor/page/offset evidence, not an automatic exhaustive request |
+| `next_cursor` | Opaque cursor accepted by the search tool's `continuation` input |
 | `provider_total` | Gamma public-search total before local contract filters; null if unavailable |
 | `total_meaning` | Explains that total's scope |
 | `stop_reason` | Exhaustion, result limit, page budget, or repeated/empty-page guard |
@@ -281,7 +316,7 @@ not prove universal market absence.
 | Kalshi sports search | 3 data pages + 1 series check; 2 series checks for dual NCAA scope |
 | Polymarket sports search | 3 data pages total + at most 1 metadata request for fallback |
 | Kalshi sports detail | 1 market + 1 exact-event/milestone request |
-| Polymarket detail | 1 market request with embedded event metadata |
+| Polymarket detail | 1 market request; embedded or recent verified search event metadata |
 
 Each logical HTTP request allows at most two retries. HTTP attempts have a ten-second
 timeout and bounded backoff. The MCP tool has a thirty-second wall-clock budget, including
@@ -293,8 +328,9 @@ Generic Polymarket search retains its three-page early-completion path. The rich
 `discovery` counters describe sports discovery; generic searches expose their existing
 textual coverage statement.
 
-The MCP limit remains 1–10 contracts. There is no exhaustive mode, polling service, account
-connection, order endpoint, or additional MCP comparison tool.
+The sports MCP limit remains 1–10 games. Generic search retains its contract limit. There is no
+exhaustive mode, polling service, account connection, order endpoint, or additional MCP
+comparison tool.
 
 ## Expansion contract
 

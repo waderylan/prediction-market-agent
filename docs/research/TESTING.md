@@ -20,7 +20,7 @@ No test requires a particular game to be open.
 
 | Tests | Contract being verified |
 |---|---|
-| `unit/test_sports.py` | Exact aliases, common names, same-city teams, college ambiguity, wrong opponents, sibling exclusion, doubleheaders, coverage, budgets, cancellation, malformed data, quote semantics |
+| `unit/test_sports.py` | Exact aliases, local dates/ranges, selectors, grouping, continuation, lifecycle, settlement, coverage, cancellation, malformed data, quote semantics |
 | `integration/test_sports_mcp.py` | Actual tools/list schemas and tools/call results, invalid limit rejection, clarification without HTTP, safe errors, agent schema consumption |
 | `live/test_sports_mcp_live.py` | Independent stdio processes, current public API compatibility, searches across MLB/NFL/NCAA, detail retrieval when a candidate exists |
 | Provider unit tests | Parsing, status, identity, arrays, retries, transport and HTTP errors |
@@ -36,11 +36,19 @@ The sports suite specifically verifies:
   clarification instead of silent substitution.
 - A wrong opponent, unrelated sibling, spread, total, or future cannot fill a sports result limit.
 - Doubleheaders keep separate event IDs and expose event alternatives.
+- Local dates cross UTC boundaries correctly; invalid IANA zones and conflicting date inputs fail.
+- A sports limit counts games, each game groups its returned outcome contracts, and next/recent
+  selectors choose by scheduled start.
+- Opaque continuation cursors resume Kalshi cursor and Polymarket page traversal directly.
 - Kalshi NCAA scopes share one page budget; pagination cycles stop.
 - Polymarket can recover a game through league metadata/catalog fallback after empty text search.
 - Gamma search totals retain their actual meaning even when fallback finds a contract.
 - Named-team snapshot prices differ from last trades; YES quotes are not assigned to named outcomes.
 - Scheduled start remains separate from later trading close and resolution timing.
+- Lifecycle moves through pregame, live, awaiting resolution, and settled without treating an
+  exchange's open flag as proof that a completed game is live.
+- Search contracts share one `quote_as_of`; stale flags, consumer links, explicit settlement,
+  and invalid expected-resolution timing are verified independently from displayed prices.
 - Conflicting identities, timestamps, duplicate event ownership, and nonfinite prices fail.
 - External cancellation propagates; provider failures remain controlled tool errors.
 - The agent receives the sports schema through real MCP and validates it.
@@ -92,8 +100,9 @@ and alias data, not market identifiers or runtime support for another schema val
 
 ## Protocol and data invariants
 
-The MCP schemas declare strict integer limits from 1 through 10. A rejected
-`limit=20` request demonstrates enforcement, not absence of constraints.
+The MCP schemas declare strict integer limits from 1 through 10. A sports limit counts games;
+generic search limits contracts. A rejected `limit=20` request demonstrates enforcement, not
+absence of constraints.
 
 The code uses bounded pagination, duplicate guards, explicit Polymarket settlement
 metadata, finite-price checks, correct null YES quotes for named/reversed outcomes, and

@@ -2,7 +2,8 @@
 
 import json
 import re
-from datetime import UTC, datetime
+from collections import OrderedDict
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import quote
@@ -23,7 +24,37 @@ class PolymarketClient(AsyncMarketClient):
         if type(max_search_pages) is not int or not 1 <= max_search_pages <= 10:
             raise ValueError("max_search_pages must be between 1 and 10")
         self.max_search_pages = max_search_pages
+        self._sports_context: OrderedDict[str, tuple[datetime, str, dict[str, Any], str | None]] = (
+            OrderedDict()
+        )
         super().__init__(base_url="https://gamma-api.polymarket.com", **kwargs)
+
+    def remember_sports_context(
+        self,
+        market_id: str,
+        *,
+        event_id: str,
+        sports: dict[str, Any],
+        event_slug: str | None,
+    ) -> None:
+        """Retain bounded event identity when Gamma detail omits its event array."""
+        self._sports_context[market_id] = (datetime.now(UTC), event_id, sports, event_slug)
+        self._sports_context.move_to_end(market_id)
+        while len(self._sports_context) > 256:
+            self._sports_context.popitem(last=False)
+
+    def _recent_sports_context(
+        self, market_id: str
+    ) -> tuple[str, dict[str, Any], str | None] | None:
+        value = self._sports_context.get(market_id)
+        if value is None:
+            return None
+        observed_at, event_id, sports, event_slug = value
+        if datetime.now(UTC) - observed_at > timedelta(minutes=15):
+            del self._sports_context[market_id]
+            return None
+        self._sports_context.move_to_end(market_id)
+        return event_id, sports, event_slug
 
     async def search_markets(
         self,
@@ -125,6 +156,11 @@ class PolymarketClient(AsyncMarketClient):
             if sports:
                 parsed.provider_data["sports"] = sports.model_dump(mode="json")
             parsed.provider_data["event_slug"] = events[0].get("slug")
+        elif context := self._recent_sports_context(market_id):
+            event_id, cached_sports, event_slug = context
+            parsed = parsed.model_copy(update={"event_id": event_id})
+            parsed.provider_data["sports"] = cached_sports
+            parsed.provider_data["event_slug"] = event_slug
         return parsed
 
 
@@ -164,6 +200,16 @@ def _parse_market(
     slug = _optional_str(market.get("slug"))
     source_url = f"https://gamma-api.polymarket.com/markets/{quote(market_id, safe='')}"
     resolution_source = _optional_str(market.get("resolutionSource"))
+    resolved = (_optional_str(market.get("umaResolutionStatus")) or "").casefold() == "resolved"
+    winning_outcome = None
+    if resolved and prices:
+        winners = [
+            label
+            for label, value in zip(outcomes, prices, strict=True)
+            if _optional_decimal(value, "outcomePrices") == Decimal("1")
+        ]
+        if len(winners) == 1:
+            winning_outcome = winners[0]
 
     try:
         return CanonicalMarket(
@@ -218,6 +264,9 @@ def _parse_market(
                 "accepting_orders": market.get("acceptingOrders"),
                 "last_trade_price": market.get("lastTradePrice"),
                 "uma_resolution_status": market.get("umaResolutionStatus"),
+                "settlement_value": "1" if winning_outcome else None,
+                "winning_outcome": winning_outcome,
+                "resolved_at": market.get("closedTime") if resolved else None,
             },
         )
     except ValidationError as error:

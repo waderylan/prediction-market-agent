@@ -17,7 +17,7 @@ credentials. No account, order, trade-submission, or authenticated portfolio end
 | Polymarket Gamma | `/public-search` | League-scoped sports or generic topic search |
 | Polymarket Gamma | `/sports` | Runtime league-series metadata for discovery fallback |
 | Polymarket Gamma | `/events?series_id=...` | Bounded league-catalog fallback |
-| Polymarket Gamma | `/markets/{id}` | Contract detail and embedded event metadata |
+| Polymarket Gamma | `/markets/{id}` | Contract detail; event metadata when Gamma includes it |
 
 Base URLs are `https://external-api.kalshi.com/trade-api/v2` and
 `https://gamma-api.polymarket.com`.
@@ -46,6 +46,8 @@ Base URLs are `https://external-api.kalshi.com/trade-api/v2` and
   status again. Results describe that upstream scope, not a universal listing audit.
 - HTTP response identity is validated; a market ID cannot silently become another market,
   and sports discovery rejects conflicting event ownership.
+- Gamma can omit `events` from sports market detail. The client retains verified search context
+  for 15 minutes in a bounded 256-entry cache; it never fabricates a missing event identity.
 
 ## Field semantics
 
@@ -62,15 +64,19 @@ Base URLs are `https://external-api.kalshi.com/trade-api/v2` and
 | `expected_resolution_time` | `expected_expiration_time` | Null |
 | `resolution_deadline` | `latest_expiration_time`, otherwise `expiration_time` | Null |
 | `provider_updated_at` | `updated_time` | `updatedAt` |
+| `quote_as_of` | Shared server observation time | Shared server observation time |
+| settlement | `settlement_value_dollars`, `result`, `settlement_ts` | Explicit resolution plus unambiguous terminal outcome vector and `closedTime` |
 | `price_observed_at/last_trade_at` | Null without those specific clocks | Null without those specific clocks |
 | `rules` | Primary and secondary rule text | Description |
 | `api_url/source_url` | Market API endpoint | Market API endpoint |
-| `market_url` | Null without reliable human-link evidence | Documented market route plus returned slug |
+| `market_url` | Indexed series/event route plus returned identities | Documented market route plus returned slug |
 
-Object-update time is not last-trade time. Trading close is not scheduled game start.
+Object-update time is not last-trade time. `quote_as_of` records when this server observed the
+response, and stale flags keep old/non-trading data visible. Trading close is not scheduled game start.
 A NO complement is not necessarily the opponent's win. Missing data remains null.
-The server does not fetch order books because this product does not require depth or
-execution-price calculations.
+The server does not infer settlement from a 99-cent or 1-cent trade. Settlement fields require
+provider resolution evidence. The server does not fetch order books because this product does
+not require depth or execution-price calculations.
 
 ## Identity metadata and maintenance
 
