@@ -926,3 +926,21 @@ def test_polymarket_resolution_uses_explicit_metadata_not_trade_price():
     assert summary.winning_outcome == "New York Yankees"
     assert summary.settlement_value == 1
     assert summary.resolved_at == datetime(2026, 9, 20, 5, tzinfo=UTC)
+
+
+def test_polymarket_resolution_normalizes_short_utc_offset():
+    from market_agent.providers.polymarket import _parse_market
+
+    event = poly_fixture()
+    market = event["markets"][0]
+    market.update(
+        active=False,
+        closed=True,
+        umaResolutionStatus="resolved",
+        closedTime="2025-09-21 09:02:18+00",
+        outcomePrices='["1","0"]',
+    )
+
+    summary = project(_parse_market(market, event_id=event["id"], retrieved_at=datetime.now(UTC)))
+
+    assert summary.resolved_at == datetime(2025, 9, 21, 9, 2, 18, tzinfo=UTC)

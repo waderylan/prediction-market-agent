@@ -91,6 +91,16 @@ async def connection(provider, mode="success"):
             dirty_event["markets"][0]["id"] = "dirty-market"
             dirty_event["markets"][0]["outcomes"] = "not-json"
             payload["events"].insert(0, dirty_event)
+    if mode == "short_resolved_offset" and provider == "polymarket":
+        market = payload["events"][0]["markets"][0]
+        market.update(
+            active=False,
+            acceptingOrders=False,
+            closed=True,
+            umaResolutionStatus="resolved",
+            closedTime="2025-09-21 09:02:18+00",
+            outcomePrices='["1","0"]',
+        )
 
     def handler(request):
         calls.append(request)
@@ -261,6 +271,18 @@ async def test_dirty_record_returns_partial_mcp_result_with_warning(provider):
         discovery = result.structuredContent["discovery"]
         assert discovery["discarded_record_count"] == 1
         assert discovery["warnings"][0]["code"] == "discarded_provider_record"
+
+
+async def test_resolved_polymarket_short_offset_survives_full_mcp_projection():
+    async with connection("polymarket", "short_resolved_offset") as (session, _):
+        result = await session.call_tool(
+            "polymarket_search_markets",
+            {"query": "Yankees", "status": "resolved", "limit": 1},
+        )
+
+        assert not result.isError
+        contract = result.structuredContent["games"][0]["contracts"][0]
+        assert contract["resolved_at"] == "2025-09-21T09:02:18Z"
 
 
 @pytest.mark.parametrize("provider", ["kalshi", "polymarket"])

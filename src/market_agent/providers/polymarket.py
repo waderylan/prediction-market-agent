@@ -203,6 +203,7 @@ def _parse_market(
     source_url = f"https://gamma-api.polymarket.com/markets/{quote(market_id, safe='')}"
     resolution_source = _optional_str(market.get("resolutionSource"))
     resolved = (_optional_str(market.get("umaResolutionStatus")) or "").casefold() == "resolved"
+    resolved_at = _optional_datetime(market.get("closedTime"), "closedTime") if resolved else None
     winning_outcome = None
     if resolved and prices:
         winners = [
@@ -268,7 +269,7 @@ def _parse_market(
                 "uma_resolution_status": market.get("umaResolutionStatus"),
                 "settlement_value": "1" if winning_outcome else None,
                 "winning_outcome": winning_outcome,
-                "resolved_at": market.get("closedTime") if resolved else None,
+                "resolved_at": resolved_at.isoformat() if resolved_at else None,
             },
         )
     except ValidationError as error:
