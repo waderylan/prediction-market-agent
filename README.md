@@ -3,9 +3,7 @@
 A read-only CSCI 599 course project for sports prediction-market research on Kalshi and
 Polymarket. Initial support covers MLB, NFL, and NCAA Division I football game winners.
 Three application MCP servers provide market discovery on each platform plus current game state
-from ESPN, with an exact-identity MLB StatsAPI fallback. A fourth standalone Jev MCP server exposes
-the existing contract reviewer for direct inspection from Codex. None place orders or access
-accounts.
+from ESPN, with an exact-identity MLB StatsAPI fallback. None place orders or access accounts.
 
 Start with `kalshi_search_markets(query="Yankees")` or
 `polymarket_search_markets(query="Chiefs vs Bills")`. No exchange taxonomy or constructed
@@ -31,19 +29,17 @@ then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
 | Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
 | Comparison boundary | Typed event, named-outcome, and settlement checks run before synthesis for supported full-game winners |
-| Semantic review | Optional Jev node reviews at most three complete sports pairs; safe mode reviews ambiguity, while an experimental flag can force review after same-event validation |
-| Jev inspection MCP | One read-only `jev_review_contracts` tool accepts unchanged market-detail results and exposes the same matcher/reviewer to Codex |
+| Comparison policy | Deterministic identity plus core settlement checks; unsupported or differing full rules cannot authorize price comparison |
 
 External evidence research, forecasting, a saved-forecast ledger, and Cloud Run deployment are
 **future work**. The matcher establishes equivalence when complete supplied full-game-winner
-identity, named-outcome mapping, authority, and settlement terms pass every deterministic check.
-By default, Jev reviews only semantic ambiguity that survives those checks. Explicit identity or
-settlement conflicts are rejected before Jev. Experimental `JEV_FORCE_REVIEW=true` sends complete
-same-event pairs to Jev even when settlement checks found a conflict, while different-event and
-incomplete-evidence checks still stop review. Low-confidence or unavailable forced reviews become
-ambiguous. Sports-state data is optional corroboration, not proof of contract equivalence or
-settlement.
+identity, named-outcome mapping, game-winner type, postponement/cancellation terms, and exact full
+rules agree. Missing or differently worded rules remain ambiguous unless a core settlement conflict
+already proves the contracts different. Sports-state data is optional corroboration, not proof of
+contract equivalence or settlement.
 A sporting result does not establish prediction-market settlement, even when the game is final.
+The [Milestone 8A evaluation](docs/research/MATCHING_VALUE_EVALUATION.md) found no safe equivalent
+pair in its real-market sample. It removed Jev and reduced matching to this deterministic subset.
 
 The product can expand to additional sports and contract types, including spreads, totals,
 props, and futures. These require verified provider mappings, typed models, settlement
@@ -64,34 +60,22 @@ Copy-Item .env.example .env
 ```
 
 Keep credentials in the ignored `.env`. The three market/state MCP servers need no exchange or
-LLM credentials. The Jev inspection server requires `JEV_ENABLED=true` and
-`AI_GATEWAY_API_KEY`:
+LLM credentials:
 
 ```powershell
 uv run python -m market_agent.mcp.kalshi
 uv run python -m market_agent.mcp.polymarket
 uv run python -m market_agent.mcp.sports_state
-uv run python -m market_agent.mcp.jev
 ```
 
 These commands speak MCP on stdin/stdout; use an MCP client rather than an HTTP browser.
-The packaged [server manifest](src/market_agent/mcp/servers.json) configures the three application
-processes. The Jev inspection server is intentionally separate because the application already
-runs Jev through a deterministic graph node; exposing the same tool to that model would create a
-duplicate route. External MCP clients such as Codex can configure
-`python -m market_agent.mcp.jev` directly.
+The packaged [server manifest](src/market_agent/mcp/servers.json) configures all three processes.
 
 For the conversational application, configure `OPENAI_API_KEY` and run:
 
 ```powershell
 uv run python main.py
 ```
-
-Jev review is disabled by default. To enable it, set `JEV_ENABLED=true` and configure
-`AI_GATEWAY_API_KEY`. That credential is used only with the hard-coded `typesafe-ai/jev` model
-through Vercel AI Gateway. Keep both values in the ignored `.env`; `.env.example` contains only
-placeholders. Set `JEV_FORCE_REVIEW=true` only for Milestone 8A evaluation; it intentionally lets
-thresholded Jev output replace deterministic settlement-semantic verdicts, but never event identity.
 
 The application binds to `0.0.0.0:$PORT` (default 8080). Its assignment endpoint is:
 
@@ -118,13 +102,6 @@ Interactive HTTP documentation is at `/docs`.
 | `polymarket_get_market` | Exact returned numeric Gamma `market_id` |
 | `sports_state_find_games` | `query`, required `league` and IANA `timezone`; optional exact `local_date`, game `limit=5`, `compact=false` |
 | `sports_state_get_game_state` | Exact opaque `game_ref` copied unchanged from discovery |
-| `jev_review_contracts` | Complete unchanged `polymarket_contract` and `kalshi_contract` objects returned by their detail tools |
-
-For direct Codex inspection, call both market detail tools first, then pass both complete structured
-results unchanged to `jev_review_contracts`. The result contains the deterministic assessment, the
-final assessment, and whether Jev was called. It does not fetch markets, compare prices, or bypass
-different-event, missing-rule, or truncated-rule safety stops. In default mode deterministic
-settlement conflicts veto Jev; `JEV_FORCE_REVIEW=true` makes those conflicts reviewable.
 
 - Limits are strict integers from 1 through 10 in the client-visible MCP schema.
 - League values are `mlb`, `nfl`, and `ncaa_football`.
@@ -239,10 +216,6 @@ Real-model checks are separate: configure a backend, set `RUN_LIVE_AGENT=1`, and
 `tests/live/test_chat_live.py`. Scripted-model tests establish schema consumption and control
 flow, not model selection quality.
 
-The opt-in Jev label evaluation requires `AI_GATEWAY_API_KEY`, sets `RUN_LIVE_JEV=1`, and runs
-`tests/live/test_jev_live.py`. It sends contract terms only: no prices, scores, results, or sports
-state. See [Testing](docs/research/TESTING.md) for the measured Milestone 8 results.
-
 ## Container and deployment
 
 ```powershell
@@ -251,8 +224,7 @@ docker run --rm -p 8080:8080 --env-file .env market-agent:local
 ```
 
 The multi-stage image installs locked runtime dependencies and runs as UID 10001.
-It includes the three application MCP servers plus the optional Jev inspection server and requires
-no Node runtime. For Docker Desktop with
+It includes the three application MCP servers and requires no Node runtime. For Docker Desktop with
 the host test gateway, override `OPENAI_BASE_URL=http://host.docker.internal:8091/v1`
 and use a local placeholder API key.
 
@@ -265,7 +237,7 @@ into an image.
 
 Public market, ESPN, and MLB StatsAPI calls use no account credentials in this implementation.
 The game-state providers are free but supply no availability guarantee. LLM usage, Cloud Run,
-builds, image storage, Jev gateway calls, and future external research can incur provider charges.
+builds, image storage, and future external research can incur provider charges.
 There is no continuous polling or background research. No latency or bandwidth improvement is
 claimed without measurement.
 
@@ -280,10 +252,7 @@ flowchart LR
     G <--> L[Configured cloud LLM or local test gateway]
     G <--> M[InMemorySaver by session_id]
     G --> C[Deterministic contract check]
-    C -->|default ambiguity or forced complete pair| J[Jev semantic review]
-    J -->|typed verdict or safe fallback| G
-    X[Codex MCP client] -->|unchanged market details| JM[Jev inspection MCP]
-    JM -->|same matcher and reviewer| C
+    C -->|typed verdict or safe ambiguity| G
     G --> A[MCP client adapter]
     A <-->|stdio tools/list, tools/call, results| K[Kalshi MCP]
     A <-->|separate stdio session and results| P[Polymarket MCP]

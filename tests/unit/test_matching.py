@@ -353,7 +353,7 @@ def test_sports_settlement_conflict_is_related_context_not_equivalent():
     assert not pair.comparison_allowed
 
 
-def test_live_authority_formatting_matches_domains_and_real_rule_conflict_is_decisive():
+def test_live_rule_conflict_is_decisive():
     pair = assess_pair(
         sports_market(
             "polymarket",
@@ -367,51 +367,22 @@ def test_live_authority_formatting_matches_domains_and_real_rule_conflict_is_dec
         ),
     )
 
-    assert check(pair, "resolution_authority").state == "match"
     assert check(pair, "postponement_window").state == "different"
-    assert check(pair, "tie_treatment").state == "match"
     assert pair.verdict == "different"
 
 
-def test_overlapping_authority_sets_are_ambiguous_not_a_false_conflict():
-    pair = assess_pair(
-        sports_market(
-            "polymarket",
-            resolution_source="https://www.mlb.com/",
-        ),
-        sports_market(
-            "kalshi",
-            resolution_source=(
-                "ESPN (https://www.espn.com); Fox Sports (https://www.foxsports.com); "
-                "the Governing League (https://www.mlb.com/)"
-            ),
-        ),
-    )
+def test_sports_contract_boundary_contains_only_proven_required_dimensions():
+    pair = assess_pair(sports_market("polymarket"), sports_market("kalshi"))
 
-    authority = check(pair, "resolution_authority")
-    assert authority.state == "unknown"
-    assert "overlap" in authority.reason
-    assert pair.verdict == "ambiguous"
-
-
-def test_only_exclusive_disjoint_authorities_are_deterministically_different():
-    ambiguous = assess_pair(
-        sports_market("polymarket", resolution_source="https://source-a.example/results"),
-        sports_market("kalshi", resolution_source="https://source-b.example/results"),
-    )
-    conflicting = assess_pair(
-        sports_market(
-            "polymarket", resolution_source="Resolves solely by https://source-a.example/results"
-        ),
-        sports_market(
-            "kalshi", resolution_source="Resolves only by https://source-b.example/results"
-        ),
-    )
-
-    assert check(ambiguous, "resolution_authority").state == "unknown"
-    assert ambiguous.verdict == "ambiguous"
-    assert check(conflicting, "resolution_authority").state == "different"
-    assert conflicting.verdict == "different"
+    assert pair.contract_equivalence is not None
+    assert {item.dimension for item in pair.contract_equivalence.checks if item.required} == {
+        "named_outcome_mapping",
+        "line_or_threshold",
+        "postponement_window",
+        "cancellation_payout",
+        "full_rules",
+    }
+    assert "semantic_review" not in pair.model_dump()
 
 
 def test_fair_price_cancellation_conflicts_with_fifty_fifty():
@@ -428,7 +399,7 @@ def test_fair_price_cancellation_conflicts_with_fifty_fifty():
     assert check(pair, "cancellation_payout").right == "fair_value"
 
 
-def test_missing_sports_settlement_evidence_is_ambiguous_and_routes_to_future_review():
+def test_missing_sports_settlement_evidence_remains_ambiguous():
     pair = assess_pair(
         sports_market("polymarket"),
         sports_market("kalshi", rules="Full game winner.", resolution_source=None),
@@ -437,7 +408,6 @@ def test_missing_sports_settlement_evidence_is_ambiguous_and_routes_to_future_re
     assert pair.verdict == "ambiguous"
     assert pair.review_required
     assert not pair.comparison_allowed
-    assert pair.semantic_review_route == "main_model_fallback"
     assert pair.contract_equivalence is not None
     assert any(c.state == "unknown" for c in pair.contract_equivalence.checks)
 

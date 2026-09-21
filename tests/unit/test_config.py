@@ -33,34 +33,3 @@ def test_valid_configuration_loads(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert settings.port == 9000
     assert settings.openai_api_key.get_secret_value() == "test-openai-placeholder"
-
-
-@pytest.mark.unit
-def test_jev_requires_its_dedicated_gateway_key_when_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-placeholder")
-    monkeypatch.setenv("JEV_ENABLED", "true")
-    monkeypatch.setenv("AI_GATEWAY_API_KEY", "")
-
-    with pytest.raises(ConfigurationError) as caught:
-        load_settings()
-
-    assert "Invalid application configuration" in str(caught.value)
-
-
-@pytest.mark.unit
-def test_jev_configuration_is_typed_and_optional(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-placeholder")
-    monkeypatch.setenv("JEV_ENABLED", "true")
-    monkeypatch.setenv("AI_GATEWAY_API_KEY", "test-jev-placeholder")
-    monkeypatch.setenv("JEV_EQUIVALENT_THRESHOLD", "0.95")
-    monkeypatch.setenv("JEV_FORCE_REVIEW", "true")
-
-    settings = load_settings()
-
-    assert settings.jev_enabled
-    assert settings.ai_gateway_api_key is not None
-    assert settings.ai_gateway_api_key.get_secret_value() == "test-jev-placeholder"
-    assert settings.jev_equivalent_threshold == 0.95
-    assert settings.jev_force_review

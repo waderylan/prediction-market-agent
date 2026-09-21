@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import Field, HttpUrl, SecretStr, ValidationError, model_validator
+from pydantic import Field, HttpUrl, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,27 +22,11 @@ class Settings(BaseSettings):
 
     openai_api_key: SecretStr
     tavily_api_key: SecretStr | None = None
-    ai_gateway_api_key: SecretStr | None = None
     openai_model: str = "gpt-5"
     llm_timeout_seconds: float = Field(default=60, ge=1, le=180)
     openai_base_url: HttpUrl = HttpUrl("https://api.openai.com/v1")
-    jev_enabled: bool = False
-    jev_force_review: bool = False
-    jev_timeout_seconds: float = Field(default=3, ge=0.5, le=10)
-    jev_equivalent_threshold: float = Field(default=0.9, ge=0, le=1)
-    jev_different_threshold: float = Field(default=0.75, ge=0, le=1)
-    jev_confidence_threshold: float = Field(default=0.6, ge=0, le=1)
     log_level: str = "INFO"
     port: int = Field(default=8080, ge=1, le=65535)
-
-    @model_validator(mode="after")
-    def jev_key_required_when_enabled(self) -> "Settings":
-        if self.jev_enabled and (
-            self.ai_gateway_api_key is None
-            or not self.ai_gateway_api_key.get_secret_value().strip()
-        ):
-            raise ValueError("AI_GATEWAY_API_KEY is required when JEV_ENABLED is true")
-        return self
 
 
 def _format_validation_error(error: ValidationError) -> str:

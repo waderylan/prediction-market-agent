@@ -30,7 +30,6 @@ from market_agent.domain.matching import (
     comparison_notice,
     match_candidates,
 )
-from market_agent.jev import SemanticReviewer
 from market_agent.logging import log_event
 from market_agent.mcp.common import MarketDetail, SearchResults
 from market_agent.mcp.kalshi import KalshiSearchResults, SeriesResults
@@ -89,13 +88,9 @@ exact market tickers from discovery, user input, or previously retrieved convers
 An empty bounded search does not prove that a market does not exist.
 After both platforms' detail calls, the host supplies a deterministic matching_report. Explain its
 material differences first. Only comparison_allowed=true permits an equivalent-price comparison.
-Different contracts are contextual evidence, not an arbitrage or price gap. The host may use Jev
-on complete same-event sports pairs. The default route reviews only ambiguity that survives
-deterministic checks; an experimental forced route can instead make thresholded Jev output final
-for settlement semantics while retaining deterministic event-identity safety checks. Follow the
-report's final verdict and disclose the route. If Jev is unavailable, below threshold, or still
-ambiguous, explain unresolved checks and do not compare prices. Do not independently upgrade the
-report's verdict or equate trading close with an event cutoff.
+Different contracts are contextual evidence, not an arbitrage or price gap. Explain unresolved
+checks and do not compare prices when the report remains ambiguous. Do not independently upgrade
+the deterministic report's verdict or equate trading close with an event cutoff.
 Use prior session context for follow-ups, distinguishing earlier snapshots from fresh observations.
 Use quote_as_of only when non-null; it is an authoritative provider quote clock, while retrieved_at
 is retrieval time and must never be presented as quote time. observation_id identifies deliberate
@@ -329,37 +324,14 @@ class ChatAgent:
         connect: ToolConnection = market_tools,
         *,
         model_timeout: float = 60,
-        semantic_reviewer: SemanticReviewer | None = None,
     ) -> None:
         self.model = model
         self.connect = connect
         self.memory = InMemorySaver()
         self.model_timeout = model_timeout
-        self.semantic_reviewer = semantic_reviewer
         # Fixed-size synchronization only. Conversation state lives exclusively in LangGraph.
         self._locks = [asyncio.Lock() for _ in range(32)]
         self._capacity = asyncio.Semaphore(4)
-
-    async def _semantic_review(
-        self,
-        report: MatchingReport | None,
-        details: list[dict[str, Any]],
-    ) -> MatchingReport | None:
-        if report is None or self.semantic_reviewer is None:
-            return report
-        contracts = [ContractEvidence.model_validate(saved) for saved in details]
-        try:
-            reviewed = await self.semantic_reviewer.review(report, contracts)
-            log_event(
-                logger,
-                "semantic_review_completed",
-                verdicts=[pair.verdict for pair in reviewed.pairs],
-                jev_reviews=sum(pair.semantic_review is not None for pair in reviewed.pairs),
-            )
-            return reviewed
-        except Exception as error:
-            log_event(logger, "semantic_review_unavailable", error_type=type(error).__name__)
-            return report
 
     def _graph(
         self,
@@ -519,30 +491,6 @@ class ChatAgent:
                 "activity": activity,
             }
 
-        async def semantic_review(state: AgentState) -> dict[str, Any]:
-            if state["matching_report"] is None:
-                # LangGraph nodes must write at least one state key.
-                return {"matching_report": None}
-            report = MatchingReport.model_validate(state["matching_report"])
-            reviewed = await self._semantic_review(report, state["details"])
-            if reviewed is None:
-                return {"matching_report": state["matching_report"]}
-            report_data = reviewed.model_dump(mode="json")
-            updates: dict[str, Any] = {"matching_report": report_data}
-            for message in reversed(state["messages"]):
-                if not isinstance(message, ToolMessage) or not isinstance(message.content, str):
-                    continue
-                try:
-                    payload = json.loads(message.content)
-                except (TypeError, ValueError):
-                    continue
-                if not isinstance(payload, dict) or "matching_report" not in payload:
-                    continue
-                payload["matching_report"] = report_data
-                updates["messages"] = [message.model_copy(update={"content": json.dumps(payload)})]
-                break
-            return updates
-
         async def finish(state: AgentState) -> dict[str, Any]:
             # A final synthesis without bound tools prevents an endless model/tool cycle.
             try:
@@ -577,13 +525,11 @@ class ChatAgent:
         graph = StateGraph(AgentState)
         graph.add_node("reason", reason)
         graph.add_node("tools", invoke_tools)
-        graph.add_node("semantic_review", semantic_review)
         graph.add_node("finish", finish)
         graph.add_edge(START, "reason")
         graph.add_conditional_edges("reason", route)
-        graph.add_edge("tools", "semantic_review")
         graph.add_conditional_edges(
-            "semantic_review",
+            "tools",
             lambda state: "finish" if state["calls"] >= MAX_TOOL_CALLS else "reason",
         )
         graph.add_edge("finish", END)

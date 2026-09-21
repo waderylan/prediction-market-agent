@@ -29,9 +29,6 @@ No test requires a particular game to be open.
 | Provider unit tests | Parsing, status, identity, arrays, retries, transport and HTTP errors |
 | MCP integration tests | Discovery/detail, input/output schema validation, oversized data, lifecycle and partial server availability |
 | `unit/test_matching.py` | Generic and sports-aware deterministic matching, typed market/game identity, dangerous near-matches, conservative ambiguity |
-| `unit/test_jev.py` | Jev eligibility, bounded request/response handling, thresholds, deterministic vetoes, cache, retry, and fallback |
-| `integration/test_jev_mcp.py` | Standalone Jev tools/list and tools/call, nested detail schemas, backend reuse, platform validation, and deterministic veto |
-| `live/test_jev_live.py` | Opt-in live Jev evaluation against the committed 13-case sports-equivalence label set |
 | `integration/test_chat.py`, `integration/test_stdio.py` | Graph control flow, memory, real adapter/subprocess invocation, dependency failure |
 
 The sports suite specifically verifies:
@@ -69,8 +66,6 @@ The sports suite specifically verifies:
 - Market detail preserves typed event identity and named outcomes through the host matching path.
 - Equivalent full-game-winner fixtures pass without sports-state data; missing settlement evidence
   stays ambiguous and explicit identity, outcome, or settlement conflicts are rejected.
-- Resolution-authority URLs normalize by domain; shared or overlapping domains avoid false
-  conflicts, while only explicitly exclusive disjoint authorities reject deterministically.
 - Current NFL/MLB rule templates distinguish wait-until-complete from bounded postponement windows
   and 50/50 cancellation payouts from fair-price payouts.
 - Wrong opponents, different game numbers, start drift beyond 30 minutes, and cancellation payout
@@ -93,18 +88,6 @@ The game-state suite additionally verifies:
   combination, plus matching/conflicting state, unavailable state, and an enforced separation
   between final score, contract equivalence, and prediction-market settlement.
 
-The Jev suite additionally verifies:
-
-- Only complete ambiguous sports pairs with deterministic event matches are eligible.
-- Prices, scores, results, and sports-state observations never enter the Jev request.
-- Deterministic conflicts are never sent to Jev or overwritten by its output.
-- A maximum of three pairs is reviewed concurrently with one retry and bounded timeout/response.
-- Low-confidence, malformed, unavailable, and ambiguous responses retain deterministic ambiguity.
-- Exact inputs reuse a bounded cache, and disabled operation leaves the existing request path intact.
-- Real MCP detail results flow through the separate semantic-review graph node before synthesis.
-- The standalone inspection server starts without loading a credential during discovery, accepts
-  unchanged detail projections, and invokes the real Jev gateway only after deterministic checks.
-
 ## Public checks
 
 ```powershell
@@ -117,24 +100,12 @@ These are bounded public reads. Sports tests check all supported leagues, schema
 `limit=20` rejection, coverage bounds, and details for returned candidates.
 An empty current result is valid; exact historical/open-game identity belongs in fixtures.
 
-The Jev live check is separate because it uses the configured gateway credential:
-
-```powershell
-$env:RUN_LIVE_JEV = "1"
-uv run pytest tests/live/test_jev_live.py -s
-Remove-Item Env:RUN_LIVE_JEV
-```
-
-On 2026-09-20, repeated runs of the 13-case label set produced eight or nine automatic final
-decisions versus five for the deterministic matcher alone; every accepted decision matched its
-label. The latest run added four semantic conflicts for nine total decisions, while the equivalent
-paraphrase remained ambiguous. Observed input use was 1,019-1,203 tokens per eligible call after
-removing duplicated state. The near-threshold variation is recorded rather than hidden. This is an
-integration/evaluation observation, not a claim of general model accuracy.
-
 A real-market replay over ten prior-day NCAA games and ten current-day games from each of NFL and
 MLB produced 60 cross-platform pairs. Every pair was rejected by deterministic settlement checks,
-so Jev received zero calls. That replay establishes safe routing, not incremental Jev usefulness.
+so no cross-platform comparison was allowed. The later
+[Milestone 8A evaluation](MATCHING_VALUE_EVALUATION.md) measured deterministic, semantic, forced,
+and simple-baseline configurations on 15 complete held-out real pairs. That decision removed Jev
+and reduced matching to the proven deterministic subset.
 
 ## What each verification level establishes
 

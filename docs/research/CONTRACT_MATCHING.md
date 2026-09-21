@@ -11,7 +11,7 @@ MCP tool.
 - Market detail is retained as typed `ContractEvidence`, including sports identity, named outcome
   quotes, complete-rule status, settlement fields, and separate clocks.
 - The graph rebuilds one `MatchingReport` whenever validated market detail or already-requested
-  game state arrives, then runs the optional Jev node before cross-platform interpretation.
+  game state arrives before cross-platform interpretation.
 - A code-generated notice exposes contract eligibility and market/game identity independently of
   the model's explanation.
 
@@ -47,66 +47,29 @@ After event identity, the matcher checks:
 - Exact named affirmative-outcome mapping. The Kalshi YES participant must be one of the complete
   Polymarket named outcomes.
 - Line or threshold. The initial supported type requires no line.
-- Resolution authority and an explicit official-result requirement. Authority URLs are compared
-  by normalized source domain: equal domain sets match, overlapping sets require review, and
-  different labels alone do not prove incompatible settlement. Disjoint sources conflict only
-  when both contracts explicitly make them exclusive.
 - Postponement or rescheduling window.
 - Cancellation payout.
-- Overtime or extra-innings inclusion.
-- Tie treatment.
-- Shortened-game and abandoned-game treatment.
-- Material exclusions and the complete supplied rule text.
+- Exact complete supplied rule text.
 
 Kalshi NO is never relabeled as the opponent. A matching Kalshi YES participant only establishes
-the affirmative mapping; cancellation, tie, and other settlement checks must still pass before
+the affirmative mapping; settlement checks must still pass before
 equivalence.
 
 Supported deterministic semantic extraction is intentionally narrow. Explicit values such as a
-two-day rescheduling window, waiting until a postponed game is completed, included overtime, a
-50/50 payout, or a fair-price cancellation payout can match or conflict in code. Missing,
-truncated, or unsupported rule text stays `ambiguous`. Differently worded complete terms can enter
-the bounded Jev review described below.
+two-day rescheduling window, waiting until a postponed game is completed, a 50/50 payout, or a
+fair-price cancellation payout can match or conflict in code. Missing, truncated, or differently
+worded complete terms stay `ambiguous` unless one of those core checks already proves a conflict.
 
-## Jev semantic-review boundary
+## Milestone 8A retained boundary
 
-Jev is an optional LangGraph decision node and, by default, not a replacement for the deterministic
-matcher.
-The same backend is also available through a standalone read-only `jev_review_contracts` MCP tool
-for direct Codex inspection. The tool accepts the complete structured results from
-`polymarket_get_market` and `kalshi_get_market`, reruns deterministic checks, then returns both the
-deterministic and final assessments. It is excluded from the application MCP manifest so the main
-model cannot select a duplicate review path. `JEV_ENABLED=false` is the default. Enabling either
-path also requires an `AI_GATEWAY_API_KEY`; both hard-code the `typesafe-ai/jev` model.
+The [Milestone 8A evaluation](MATCHING_VALUE_EVALUATION.md) found no safely comparable real pair.
+The deterministic matcher and a smaller baseline both classified all 15 complete held-out pairs
+correctly, while forced Jev review downgraded three correct decisions to ambiguity and added no
+useful pair. Jev and the unproven specialized semantic parsers were removed.
 
-In default mode, a pair is eligible only when it is a supported sports pair, deterministic event
-identity is a match, contract equivalence is ambiguous, both rule texts are complete and
-untruncated, neither rule exceeds 12,000 characters, and no dimension has a deterministic conflict.
-At most three pairs are reviewed per request. Calls run concurrently, use a three-second attempt
-timeout, retry once for transport/retryable HTTP failures, reject responses over 1 MiB, and use a
-128-entry exact-request cache.
-
-Jev receives only normalized event identity, named-outcome mapping, deterministically matched and
-unresolved dimensions, complete rule text, and stated resolution authority. It does not receive
-market prices, game scores, sporting results, or sports-state evidence. Its typed output records
-the full `equivalent`/`different`/`ambiguous` distribution, provider confidence, selected
-probability, input tokens, latency, reviewed dimensions, and cache status.
-
-Automatic action is asymmetric and conservative: `equivalent` requires selected probability at
-least 0.90, `different` requires 0.75, and both require provider confidence at least 0.60.
-Ambiguous, low-confidence, malformed, timed-out, or unavailable results preserve deterministic
-ambiguity for main-model explanation. The main model cannot upgrade that result or override a
-deterministic veto.
-
-`JEV_FORCE_REVIEW=true` is an experimental Milestone 8A evaluation mode. It keeps deterministic
-same-event identity, complete/untruncated rule, size, and three-pair guards, but sends every
-eligible pair to Jev even when deterministic settlement checks already classified it. All required
-dimensions and their deterministic states are included in the bounded request. A threshold-clearing
-Jev verdict becomes the final settlement-semantics verdict; a low-confidence, ambiguous,
-unavailable, or malformed result becomes `ambiguous` instead of falling back to the deterministic
-settlement verdict. This mode does not send prices, scores, results, or sports-state data, and it
-cannot combine different games. It is disabled by default because Milestone 8A still must measure
-whether the model adds enough real-market value to justify overriding proven deterministic checks.
+The retained matcher never sends ambiguity to a model for adjudication. The primary model may
+explain the typed checks but cannot change their verdict. Exact full-rule agreement is intentionally
+strict: it accepts false rejection risk rather than creating an unmeasured false-equivalence path.
 
 ### Market-to-game identity
 
@@ -156,39 +119,23 @@ Deterministic and real-MCP scripted-agent tests cover:
 - Preserved typed identity and named outcomes through both MCP detail calls and agent synthesis.
 - Wrong opponents, different game numbers, and start drift inside/outside the 30-minute bound.
 - Cancellation payout conflicts, incomplete rules, and truncated/unsupported semantics.
-- Current Polymarket/Kalshi NFL and MLB authority formats and postponement/cancellation templates,
-  including shared-domain authorities expressed with different surrounding text.
+- Current Polymarket/Kalshi MLB, NFL, and NCAA postponement/cancellation templates.
 - Matching and conflicting market/game identity, sports-state unavailability, and final games whose
   contracts remain non-equivalent or unsettled.
 - Bounded candidate counts, duplicate IDs, generic dangerous near-matches, and independent
   code-generated notices.
-- Jev eligibility, request redaction, thresholds, distributions, cache reuse, pair limits,
-  retries, timeouts, malformed responses, default deterministic vetoes, experimental forced
-  review, disabled operation, and graph integration after real MCP detail calls.
-- Real MCP discovery/invocation of `jev_review_contracts`, strict nested detail schemas, platform
-  order rejection, deterministic no-call vetoes, and a live gateway-backed protocol call.
-
-The committed 13-case label set contains deterministic positives/conflicts, missing and truncated
-rules, semantic settlement conflicts, an equivalent paraphrase, and overlapping authorities.
-Repeated live Jev evaluations increased automatic decisions from five under Milestone 7 alone to
-eight or nine; every accepted decision matched its label and no semantic false equivalence was
-accepted. The latest run accepted four semantic conflicts for nine total decisions. The equivalent
-paraphrase remained ambiguous because it did not clear the 0.90/0.60 action thresholds. Variation
-near the difference threshold is additional evidence for the conservative fallback and Milestone
-8A retention review.
+- Exact full-rule differences remain ambiguous when the retained core parser finds no explicit
+  conflict.
 
 A separate 2026-09-20 real-slate replay used ten 2026-09-19 NCAA games plus ten NFL and ten MLB
 games on 2026-09-20. All 30 games existed on both platforms, producing 60 cross-platform pairs.
-Every pair had a deterministic settlement conflict, so all 60 were rejected before Jev and the
-Jev call count was zero. This validates the veto boundary but provides no evidence that Jev adds
-value on that real slate. The experimental forced-review flag now permits replaying that same class
-of pair through Jev for Milestone 8A measurement; it does not itself establish value. Milestone 8A
-retains the required keep/simplify/remove decision.
+Every pair had a deterministic settlement conflict, so all 60 were rejected safely.
 
-Current support remains conservative: no live semantic equivalence has cleared the automatic
-threshold, and Jev depends on an external gateway/model whose behavior, availability, and cost can
-change. Spreads, totals, partial-game markets, props, futures, pushes, and season-long identity
-still require type-specific models and tests.
+The later Milestone 8A sample covered 15 complete held-out pairs over three dates and all supported
+leagues. It found no equivalent pair and justified the simplified boundary. Spreads, totals,
+partial-game markets, props, futures, pushes, and season-long identity still require type-specific
+models and tests.
 
 See [Implementation plan](../planning/IMPLEMENTATION_PLAN.md) for milestone gates and
+[Matching value evaluation](MATCHING_VALUE_EVALUATION.md) for the retention decision and
 [Sports MCP design](SPORTS_MCP.md) for provider discovery, identity, and projection contracts.

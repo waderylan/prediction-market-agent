@@ -10,9 +10,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import product
 from typing import Literal
-from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from market_agent.domain.models import CanonicalMarket, Platform
 
@@ -113,32 +112,6 @@ class MarketGameAssessment(BaseModel):
     )
 
 
-class VerdictProbabilities(BaseModel):
-    equivalent: float = Field(ge=0, le=1)
-    different: float = Field(ge=0, le=1)
-    ambiguous: float = Field(ge=0, le=1)
-
-    @model_validator(mode="after")
-    def probabilities_sum_to_one(self) -> "VerdictProbabilities":
-        total = self.equivalent + self.different + self.ambiguous
-        if abs(total - 1.0) > 0.03:
-            raise ValueError("verdict probabilities must sum to one")
-        return self
-
-
-class SemanticReview(BaseModel):
-    provider: Literal["jev"] = "jev"
-    model: Literal["typesafe-ai/jev"] = "typesafe-ai/jev"
-    verdict: Verdict
-    probabilities: VerdictProbabilities
-    confidence: float = Field(ge=0, le=1)
-    selected_probability: float = Field(ge=0, le=1)
-    reviewed_dimensions: list[str] = Field(max_length=12)
-    input_tokens: int = Field(ge=0)
-    latency_ms: int = Field(ge=0)
-    cached: bool = False
-
-
 class PairAssessment(BaseModel):
     polymarket_id: str
     kalshi_id: str
@@ -149,9 +122,6 @@ class PairAssessment(BaseModel):
     comparison_allowed: bool
     event_identity: EventIdentityAssessment | None = None
     contract_equivalence: ContractEquivalenceAssessment | None = None
-    semantic_review_route: Literal["not_required", "jev", "main_model_fallback"] = "not_required"
-    semantic_review: SemanticReview | None = None
-    semantic_review_note: str | None = Field(default=None, max_length=300)
     scope: str = "Supplied terms only; external or omitted contract terms are not verified."
 
 
@@ -159,9 +129,7 @@ class MatchingReport(BaseModel):
     pairs: list[PairAssessment] = Field(max_length=9)
     market_to_game: list[MarketGameAssessment] = Field(default_factory=list, max_length=16)
     candidates_per_platform: int = MAX_CANDIDATES
-    review_route: str = (
-        "The main model may explain unresolved terms but cannot override deterministic rejection."
-    )
+    review_route: str = "Deterministic only; unresolved terms remain ambiguous."
 
 
 class ThresholdClause(BaseModel):
@@ -370,7 +338,7 @@ def _assess_generic_pair(
                     missing=not identical_rules,
                     reason="Identical supplied rules."
                     if identical_rules
-                    else "Outside the explicit conditional parser; semantic review required.",
+                    else "Outside the explicit conditional parser; remains ambiguous.",
                 )
             )
 
@@ -435,7 +403,7 @@ def _assess_generic_pair(
     # Compare the FULL strings, not their bounded display previews.
     if complete and not identical_rules:
         checks[-1].state = "unknown"
-        checks[-1].reason = "Full rule text differs; unparsed clauses require semantic review."
+        checks[-1].reason = "Full rule text differs; unparsed clauses remain ambiguous."
     checks.append(
         _check(
             "trading_close",
@@ -487,7 +455,6 @@ def _assess_generic_pair(
         checks=checks,
         review_required=verdict == "ambiguous",
         comparison_allowed=verdict == "equivalent",
-        semantic_review_route="main_model_fallback" if verdict == "ambiguous" else "not_required",
     )
 
 
@@ -718,81 +685,6 @@ def _payout_term(rules: str | None, trigger: str) -> str | None:
     return None
 
 
-def _inclusion_term(rules: str | None, subject: str) -> str | None:
-    text = normalize(rules)
-    clause = next(
-        (item for item in re.split(r"[.!?]\s+|\n+", text) if re.search(subject, item)),
-        None,
-    )
-    if clause is None:
-        return None
-    if re.search(r"does not count|not included|excluded|void", clause):
-        return "excluded"
-    if re.search(r"included|counts?|official (?:result|game)", clause):
-        return "included"
-    return None
-
-
-def _official_result_term(rules: str | None) -> str | None:
-    text = normalize(rules)
-    if re.search(r"preliminary (?:result|winner)", text):
-        return "preliminary_result"
-    if re.search(
-        r"official (?:league |governing body |final )?(?:result|winner|game|statistics)",
-        text,
-    ):
-        return "official_result"
-    return None
-
-
-def _authority_domains(value: str | None) -> set[str]:
-    domains = set()
-    for raw_url in re.findall(r"https?://[^\s;)]+", value or "", re.IGNORECASE):
-        hostname = urlparse(raw_url.rstrip(".,")).hostname
-        if hostname:
-            domains.add(hostname.casefold().removeprefix("www."))
-    return domains
-
-
-def _authority_check(left: ContractEvidence, right: ContractEvidence) -> DimensionCheck:
-    source_a = normalize(left.resolution_source) or None
-    source_b = normalize(right.resolution_source) or None
-    domains_a = _authority_domains(left.resolution_source)
-    domains_b = _authority_domains(right.resolution_source)
-    if source_a is None or source_b is None:
-        state: CheckState = "unknown"
-        reason = "Resolution authority is missing from at least one market detail."
-    elif source_a == source_b or (domains_a and domains_a == domains_b):
-        state = "match"
-        reason = "Resolution authorities identify the same source domains."
-    elif domains_a & domains_b:
-        state = "unknown"
-        reason = (
-            "Resolution authorities overlap but list different source sets; semantic review is "
-            "required."
-        )
-    elif (
-        domains_a
-        and domains_b
-        and re.search(r"\b(?:solely|only|exclusive(?:ly)?)\b", source_a)
-        and re.search(r"\b(?:solely|only|exclusive(?:ly)?)\b", source_b)
-    ):
-        state = "different"
-        reason = "Both contracts name exclusive, disjoint resolution authorities."
-    else:
-        state = "unknown"
-        reason = "Different authority labels do not prove incompatible settlement sources."
-    return DimensionCheck(
-        dimension="resolution_authority",
-        state=state,
-        reason=reason,
-        left=source_a,
-        right=source_b,
-        left_provenance="polymarket.market_detail.resolution_source",
-        right_provenance="kalshi.market_detail.resolution_source",
-    )
-
-
 def _sports_term_check(
     dimension: str,
     left: object,
@@ -816,7 +708,7 @@ def _sports_term_check(
             if left == right
             else "Explicit supplied settlement terms conflict."
             if mismatch == "different"
-            else "Supplied wording differs and requires semantic review."
+            else "Supplied wording differs and remains ambiguous."
         ),
         left_provenance=f"{left_market.platform.value}.market_detail.rules",
         right_provenance=f"{right_market.platform.value}.market_detail.rules",
@@ -895,14 +787,6 @@ def _sports_contract_equivalence(
 
     checks.extend(
         [
-            _authority_check(left, right),
-            _sports_term_check(
-                "official_result_requirement",
-                _official_result_term(left.rules),
-                _official_result_term(right.rules),
-                left_market=left,
-                right_market=right,
-            ),
             _sports_term_check(
                 "postponement_window",
                 _postponement_term(left.rules),
@@ -917,48 +801,7 @@ def _sports_contract_equivalence(
                 left_market=left,
                 right_market=right,
             ),
-            _sports_term_check(
-                "overtime_or_extra_innings",
-                _inclusion_term(left.rules, r"overtime|extra innings"),
-                _inclusion_term(right.rules, r"overtime|extra innings"),
-                left_market=left,
-                right_market=right,
-            ),
-            _sports_term_check(
-                "tie_treatment",
-                _payout_term(left.rules, r"\btie\b|\bdraw\b"),
-                _payout_term(right.rules, r"\btie\b|\bdraw\b"),
-                left_market=left,
-                right_market=right,
-            ),
-            _sports_term_check(
-                "shortened_game_treatment",
-                _payout_term(left.rules, r"shorten|minimum .{0,20}innings|official game"),
-                _payout_term(right.rules, r"shorten|minimum .{0,20}innings|official game"),
-                left_market=left,
-                right_market=right,
-            ),
-            _sports_term_check(
-                "abandoned_game_treatment",
-                _payout_term(left.rules, r"abandon"),
-                _payout_term(right.rules, r"abandon"),
-                left_market=left,
-                right_market=right,
-            ),
         ]
-    )
-
-    exclusions_a = _clauses(left.rules, r"except|exclud") if complete else ()
-    exclusions_b = _clauses(right.rules, r"except|exclud") if complete else ()
-    checks.append(
-        _sports_term_check(
-            "material_exclusions",
-            exclusions_a if exclusions_a else "none supplied" if complete else None,
-            exclusions_b if exclusions_b else "none supplied" if complete else None,
-            left_market=left,
-            right_market=right,
-            mismatch="unknown",
-        )
     )
     checks.append(
         _sports_term_check(
@@ -1060,7 +903,6 @@ def _assess_sports_pair(left: ContractEvidence, right: ContractEvidence) -> Pair
         comparison_allowed=verdict == "equivalent",
         event_identity=event,
         contract_equivalence=contract,
-        semantic_review_route="main_model_fallback" if verdict == "ambiguous" else "not_required",
         scope=(
             "Supplied full-game-winner identity, named outcomes, and settlement terms only; "
             "sports-state evidence cannot alter this verdict."
@@ -1241,34 +1083,14 @@ def comparison_notice(report: MatchingReport) -> str:
     lines = []
     for pair in report.pairs:
         if pair.comparison_allowed:
-            if pair.semantic_review is not None:
-                finding = (
-                    "Equivalent after Jev semantic review "
-                    f"({pair.semantic_review.selected_probability:.0%} selected probability, "
-                    f"{pair.semantic_review.confidence:.0%} confidence); external terms remain "
-                    "unverified."
-                )
-            else:
-                finding = "Equivalent supplied terms; external terms remain unverified."
+            finding = "Equivalent supplied terms; external terms remain unverified."
         elif pair.verdict == "different":
-            if pair.semantic_review is not None:
-                finding = (
-                    "Not equivalent after Jev semantic review "
-                    f"({pair.semantic_review.selected_probability:.0%} selected probability, "
-                    f"{pair.semantic_review.confidence:.0%} confidence). Treat prices as separate "
-                    "contracts."
-                )
-            else:
-                dimensions = ", ".join(
-                    c.dimension.replace("_", " ") for c in pair.checks if c.state == "different"
-                )
-                finding = f"Not equivalent: {dimensions}. Treat prices as separate contracts."
-        else:
-            finding = (
-                "Jev review remained below the action threshold; equivalence is unverified."
-                if pair.semantic_review is not None
-                else "Equivalence unverified; semantic review required before comparing prices."
+            dimensions = ", ".join(
+                c.dimension.replace("_", " ") for c in pair.checks if c.state == "different"
             )
+            finding = f"Not equivalent: {dimensions}. Treat prices as separate contracts."
+        else:
+            finding = "Equivalence unverified; do not compare prices."
         lines.append(f"- Contract check ({pair.polymarket_id} / {pair.kalshi_id}): {finding}")
     for assessment in report.market_to_game:
         finding = {
