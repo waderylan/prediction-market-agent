@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from market_agent.domain.matching import ContractEvidence
+from market_agent.mcp.common import MarketDetail
 
 DEFAULT_RULES = (
     "Winner is based on the official league result. Overtime is included. "
@@ -66,3 +67,52 @@ def contracts(case: dict[str, Any]) -> list[ContractEvidence]:
             )
         )
     return output
+
+
+def market_details(case: dict[str, Any]) -> list[MarketDetail]:
+    """Project an evaluation pair into the exact MCP detail input contract."""
+    details = []
+    for contract in contracts(case):
+        assert contract.sports is not None
+        details.append(
+            MarketDetail.model_validate(
+                {
+                    "platform": contract.platform,
+                    "market_id": contract.market_id,
+                    "event_id": contract.event_id,
+                    "title": contract.title,
+                    "status": contract.status,
+                    "yes_price": None,
+                    "no_price": None,
+                    "yes_bid": None,
+                    "yes_ask": None,
+                    "close_time": None,
+                    "source_url": str(contract.source_url),
+                    "retrieved_at": contract.retrieved_at,
+                    "quote_as_of": None,
+                    "quote_is_stale": True,
+                    "sports": {
+                        "league": contract.sports.league,
+                        "provider_event_id": contract.sports.provider_event_id,
+                        "raw_title": contract.title,
+                        "participants": contract.sports.participants,
+                        "raw_participants": contract.sports.participants,
+                        "market_type": contract.sports.market_type,
+                        "scheduled_start": contract.sports.scheduled_start,
+                    },
+                    "outcome_quotes": [
+                        {
+                            **quote.model_dump(mode="json"),
+                            "price_kind": "provider_snapshot",
+                        }
+                        for quote in contract.outcome_quotes
+                    ],
+                    "outcomes": contract.outcomes,
+                    "rules": contract.rules,
+                    "rules_truncated": contract.rules_truncated,
+                    "resolution_source": contract.resolution_source,
+                    "resolution_deadline": contract.resolution_deadline,
+                }
+            )
+        )
+    return details

@@ -70,9 +70,13 @@ the bounded Jev review described below.
 
 ## Jev semantic-review boundary
 
-Jev is an optional LangGraph decision node, not an MCP server and not a replacement for the
-deterministic matcher. `JEV_ENABLED=false` is the default. Enabling it also requires an
-`AI_GATEWAY_API_KEY`; the integration hard-codes the `typesafe-ai/jev` model.
+Jev is an optional LangGraph decision node and not a replacement for the deterministic matcher.
+The same backend is also available through a standalone read-only `jev_review_contracts` MCP tool
+for direct Codex inspection. The tool accepts the complete structured results from
+`polymarket_get_market` and `kalshi_get_market`, reruns deterministic checks, then returns both the
+deterministic and final assessments. It is excluded from the application MCP manifest so the main
+model cannot select a duplicate review path. `JEV_ENABLED=false` is the default. Enabling either
+path also requires an `AI_GATEWAY_API_KEY`; both hard-code the `typesafe-ai/jev` model.
 
 A pair is eligible only when it is a supported sports pair, deterministic event identity is a
 match, contract equivalence is ambiguous, both rule texts are complete and untruncated, neither
@@ -150,6 +154,8 @@ Deterministic and real-MCP scripted-agent tests cover:
 - Jev eligibility, request redaction, thresholds, distributions, cache reuse, pair limits,
   retries, timeouts, malformed responses, deterministic vetoes, disabled operation, and graph
   integration after real MCP detail calls.
+- Real MCP discovery/invocation of `jev_review_contracts`, strict nested detail schemas, platform
+  order rejection, deterministic no-call vetoes, and a live gateway-backed protocol call.
 
 The committed 13-case label set contains deterministic positives/conflicts, missing and truncated
 rules, semantic settlement conflicts, an equivalent paraphrase, and overlapping authorities.

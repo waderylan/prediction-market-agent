@@ -1,9 +1,11 @@
 """Opt-in Jev evaluation on the committed sports-equivalence label set."""
 
 import os
+import sys
 
 import pytest
-from jev_cases import contracts, load_cases
+from jev_cases import contracts, load_cases, market_details
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from market_agent.domain import Platform
 from market_agent.domain.matching import match_candidates
@@ -59,3 +61,35 @@ async def test_jev_semantic_policy_has_no_unsafe_automatic_decisions():
         for row in rows
         if row["final"] == "equivalent" and row["deterministic"] == "ambiguous"
     )
+
+
+async def test_jev_mcp_live_protocol_review():
+    api_key = os.environ.get("AI_GATEWAY_API_KEY")
+    if not api_key:
+        pytest.skip("set AI_GATEWAY_API_KEY")
+    case = next(item for item in load_cases() if item["name"] == "semantic_abandoned_conflict")
+    left, right = market_details(case)
+    adapter = MultiServerMCPClient(
+        {
+            "jev": {
+                "transport": "stdio",
+                "command": sys.executable,
+                "args": ["-m", "market_agent.mcp.jev"],
+            }
+        }
+    )
+    async with adapter.session("jev") as session:
+        tools = {tool.name for tool in (await session.list_tools()).tools}
+        assert tools == {"jev_review_contracts"}
+        result = await session.call_tool(
+            "jev_review_contracts",
+            {
+                "polymarket_contract": left.model_dump(mode="json"),
+                "kalshi_contract": right.model_dump(mode="json"),
+            },
+        )
+
+    assert not result.isError
+    assert result.structuredContent["deterministic_assessment"]["verdict"] == "ambiguous"
+    assert result.structuredContent["final_assessment"]["verdict"] == "different"
+    assert result.structuredContent["jev_called"] is True

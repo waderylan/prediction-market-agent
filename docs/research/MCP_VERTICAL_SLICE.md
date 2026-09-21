@@ -18,6 +18,11 @@ Kalshi, Polymarket, and sports game state. The client substitutes the running Py
 each session, discovers tools through `tools/list`, and loads them through
 `langchain-mcp-adapters`.
 
+A fourth standalone `market_agent.mcp.jev` process is available to external MCP clients such as
+Codex. Its one read-only tool accepts unchanged structured detail results from both market servers
+and reuses the deterministic matcher plus `JevReviewer`. It is deliberately absent from the
+application manifest because the graph already owns automatic Jev routing.
+
 Sessions are owned by the current request and closed together. Each server lifespan owns
 one asynchronous provider client; injected test clients remain caller-owned. A provider
 client closes its HTTP resources when the server shuts down. Stdout belongs exclusively
@@ -92,8 +97,9 @@ For supported full-game winners, that engine consumes typed sports identity and 
 quotes from both detail results. It separately evaluates market-to-market event identity,
 contract settlement equivalence, and optional market-to-game identity. Missing required evidence
 stays ambiguous, deterministic conflicts veto comparison, and differing close/resolution clocks do
-not replace scheduled-game identity. Semantic Jev review remains future work in the same pipeline,
-not a second MCP service. See [Matching](CONTRACT_MATCHING.md).
+not replace scheduled-game identity. The graph performs bounded semantic Jev review for eligible
+ambiguity; the standalone MCP surface exposes that same backend for inspection without changing the
+production route. See [Matching](CONTRACT_MATCHING.md).
 
 ## Local development and deployment
 
@@ -101,8 +107,9 @@ The local UI starts the HTTP application and an optional host Codex gateway. The
 only supplies model decisions. The application still owns memory and MCP calls.
 CLI authentication remains outside the container.
 
-The Docker image uses locked runtime dependencies, contains all three MCP modules and their
-reference data, runs as a non-root user, and reads `PORT`.
+The Docker image uses locked runtime dependencies, contains the three application MCP modules, the
+standalone Jev inspection module, and their reference data, runs as a non-root user, and reads
+`PORT`.
 Cloud Run deployment is still required. A cloud-accessible backend, one worker, and one
 instance preserve the assignment's instance-lifetime memory expectation.
 

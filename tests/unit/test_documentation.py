@@ -25,6 +25,8 @@ def test_readme_documents_verified_game_state_surface_and_three_diagrams():
     assert readme.count("```mermaid") == 3
     assert "Sports-state MCP" in readme
     assert "Game-state MCP design" in readme
+    assert "jev_review_contracts" in readme
+    assert "market_agent.mcp.jev" in readme
     assert "both Python MCP servers" not in readme
 
 
@@ -43,6 +45,7 @@ def test_project_documents_match_current_capability_and_future_boundaries():
         in plan
     )
     assert "three separate Python stdio processes" in runtime
+    assert "standalone `market_agent.mcp.jev`" in runtime
     assert "live/test_game_state_mcp_live.py" in testing
     assert "final score cannot" in matching
     assert "Contract-to-contract equivalence" in matching

@@ -79,3 +79,18 @@ async def test_sports_state_server_starts_as_independent_stdio_process():
     async with adapter.session("sports_state") as session:
         tools = {tool.name for tool in await load_mcp_tools(session)}
     assert tools == {"sports_state_find_games", "sports_state_get_game_state"}
+
+
+async def test_jev_server_starts_as_independent_stdio_process_without_loading_a_key():
+    adapter = MultiServerMCPClient(
+        {
+            "jev": {
+                "transport": "stdio",
+                "command": sys.executable,
+                "args": ["-m", "market_agent.mcp.jev"],
+            }
+        }
+    )
+    async with adapter.session("jev") as session:
+        tools = {tool.name for tool in await load_mcp_tools(session)}
+    assert tools == {"jev_review_contracts"}

@@ -60,7 +60,9 @@
   - Kalshi-only request: invoke only Kalshi tools.
   - Cross-market comparison: invoke both servers.
 - Use real MCP discovery and invocation through `tools/list` and `tools/call`.
-- Keep Jev outside MCP as a specialized LangGraph decision node.
+- Keep automatic Jev routing in a specialized LangGraph decision node. Expose the same backend
+  through a separate read-only MCP tool for direct Codex inspection, not as another agent-selected
+  application tool.
 - Use Jev only for sports contract-equivalence classification after deterministic validation,
   not game prediction, price prediction, or arithmetic.
 - Keep the service read-only with respect to prediction-market platforms.
@@ -882,6 +884,9 @@ Multi-server MCP client
 - **Status:** Complete locally; the retention decision remains Milestone 8A work.
 - A separate LangGraph node calls only `typesafe-ai/jev` through Vercel AI Gateway when the feature
   flag and credential are configured. Disabled operation follows the existing graph path.
+- A standalone `jev_review_contracts` MCP tool accepts unchanged Polymarket and Kalshi detail
+  results and exposes the same matcher/reviewer to Codex. It is excluded from the application MCP
+  manifest to prevent a duplicate model-selected review path.
 - Eligibility requires matched deterministic event identity, complete untruncated rules, ambiguous
   contract semantics, and no deterministic conflict. Review is limited to three pairs per request.
 - Requests contain normalized identity, named outcomes, rule text, authorities, and unresolved

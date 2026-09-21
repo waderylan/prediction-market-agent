@@ -30,6 +30,7 @@ No test requires a particular game to be open.
 | MCP integration tests | Discovery/detail, input/output schema validation, oversized data, lifecycle and partial server availability |
 | `unit/test_matching.py` | Generic and sports-aware deterministic matching, typed market/game identity, dangerous near-matches, conservative ambiguity |
 | `unit/test_jev.py` | Jev eligibility, bounded request/response handling, thresholds, deterministic vetoes, cache, retry, and fallback |
+| `integration/test_jev_mcp.py` | Standalone Jev tools/list and tools/call, nested detail schemas, backend reuse, platform validation, and deterministic veto |
 | `live/test_jev_live.py` | Opt-in live Jev evaluation against the committed 13-case sports-equivalence label set |
 | `integration/test_chat.py`, `integration/test_stdio.py` | Graph control flow, memory, real adapter/subprocess invocation, dependency failure |
 
@@ -101,6 +102,8 @@ The Jev suite additionally verifies:
 - Low-confidence, malformed, unavailable, and ambiguous responses retain deterministic ambiguity.
 - Exact inputs reuse a bounded cache, and disabled operation leaves the existing request path intact.
 - Real MCP detail results flow through the separate semantic-review graph node before synthesis.
+- The standalone inspection server starts without loading a credential during discovery, accepts
+  unchanged detail projections, and invokes the real Jev gateway only after deterministic checks.
 
 ## Public checks
 
