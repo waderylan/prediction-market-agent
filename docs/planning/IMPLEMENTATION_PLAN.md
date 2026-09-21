@@ -877,6 +877,57 @@ Multi-server MCP client
 - If Jev does not improve the sports evaluation set, retain the typed interface but disable
   automatic routing and use the primary LLM for ambiguous pairs.
 
+### Milestone 8A: Contract-Matching Value Evaluation and Retention Decision
+
+This is a required decision gate after Milestone 8 and before further product work. Milestones 7
+and 8 must earn their ongoing complexity with measured results; neither is retained by default
+only because it has already been implemented.
+
+#### Work
+
+- Build a manually reviewed evaluation set from real cross-platform MLB, NFL, and NCAA searches
+  across multiple dates. Record shared games, candidate contracts, actual rule compatibility,
+  actionable price differences, and cases where no safe comparison exists.
+- Establish evaluation thresholds before scoring the set. Measure classification precision and
+  recall, false-equivalence and false-rejection rates, ambiguous rate, useful-pair yield, latency,
+  model cost, maintenance burden, and explanation quality.
+- Compare at least these configurations on the same held-out examples:
+  - Milestone 7 deterministic matching without Jev.
+  - Milestone 7 followed by Milestone 8 Jev review for eligible ambiguous pairs.
+  - A simpler baseline that refuses cross-platform equivalence unless a small set of essential
+    identity and settlement facts agree.
+- Identify which Milestone 7 checks provide demonstrated safety or useful coverage and which are
+  brittle, redundant, or unused. Evaluate Jev only on ambiguity that survives those checks.
+- Produce a written keep, simplify, or remove decision for Milestone 7 and a separate decision for
+  Milestone 8. Include the measured evidence, accepted tradeoffs, and retained operating boundary.
+- Implement the decision: remove unused code, dependencies, prompts, feature flags, tests, and
+  documentation rather than leaving a disabled or unproven subsystem in the repository.
+- If either milestone is removed, preserve a safe fallback: decline unsupported cross-platform
+  equivalence instead of reverting to title similarity or unconstrained model judgment.
+
+#### Exit Criteria
+
+- The evaluation uses held-out, manually labeled real-market examples and reports raw counts as
+  well as rates; synthetic fixtures alone are insufficient.
+- Milestone 7 and Milestone 8 each have an explicit evidence-backed keep, simplify, or remove
+  decision.
+- Any retained component clears its predeclared usefulness, correctness, latency, and cost
+  thresholds and has a concrete user-visible benefit.
+- Any component that does not clear those thresholds is removed or reduced to the smallest proven
+  subset, with its dead paths and documentation removed in the same milestone.
+- The selected design passes the repository quality gate and retains the Milestone 6 boundary:
+  sports-state data is optional corroboration, never proof of equivalence or settlement.
+
+#### Pivot Point
+
+- Remove Milestone 8 if Jev does not materially improve ambiguous-case decisions over Milestone 7
+  alone after accounting for latency, cost, and new failure modes.
+- Simplify or remove Milestone 7 if real markets rarely produce comparable contracts or its
+  deterministic rules do not improve safety and useful-pair yield over the simpler baseline.
+- Remove both matching layers if cross-platform equivalence does not provide enough demonstrated
+  user value. Keep the market MCPs and platform-specific analysis, and refuse cross-platform price
+  comparisons until a better-supported approach exists.
+
 ### Milestone 9: Bounded Sports Evidence Research
 
 #### Work
