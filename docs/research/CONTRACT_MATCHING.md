@@ -47,7 +47,10 @@ After event identity, the matcher checks:
 - Exact named affirmative-outcome mapping. The Kalshi YES participant must be one of the complete
   Polymarket named outcomes.
 - Line or threshold. The initial supported type requires no line.
-- Resolution authority and an explicit official-result requirement.
+- Resolution authority and an explicit official-result requirement. Authority URLs are compared
+  by normalized source domain: equal domain sets match, overlapping sets require review, and
+  different labels alone do not prove incompatible settlement. Disjoint sources conflict only
+  when both contracts explicitly make them exclusive.
 - Postponement or rescheduling window.
 - Cancellation payout.
 - Overtime or extra-innings inclusion.
@@ -60,9 +63,10 @@ the affirmative mapping; cancellation, tie, and other settlement checks must sti
 equivalence.
 
 Supported semantic extraction is intentionally narrow. Explicit values such as a two-day
-rescheduling window, included overtime, or a void cancellation payout can match or conflict in
-code. Missing, truncated, unsupported, or differently worded rule text stays `ambiguous` for the
-future Milestone 8 semantic-review path. No Jev call is implemented in Milestone 7.
+rescheduling window, waiting until a postponed game is completed, included overtime, a 50/50
+payout, or a fair-price cancellation payout can match or conflict in code. Missing, truncated,
+unsupported, or differently worded rule text stays `ambiguous` for the future Milestone 8
+semantic-review path. No Jev call is implemented in Milestone 7.
 
 ### Market-to-game identity
 
@@ -112,6 +116,8 @@ Deterministic and real-MCP scripted-agent tests cover:
 - Preserved typed identity and named outcomes through both MCP detail calls and agent synthesis.
 - Wrong opponents, different game numbers, and start drift inside/outside the 30-minute bound.
 - Cancellation payout conflicts, incomplete rules, and truncated/unsupported semantics.
+- Current Polymarket/Kalshi NFL and MLB authority formats and postponement/cancellation templates,
+  including shared-domain authorities expressed with different surrounding text.
 - Matching and conflicting market/game identity, sports-state unavailability, and final games whose
   contracts remain non-equivalent or unsettled.
 - Bounded candidate counts, duplicate IDs, generic dangerous near-matches, and independent
@@ -122,6 +128,9 @@ that fits the typed and narrow deterministic parsers. Spreads, totals, partial-g
 futures, pushes, stat corrections, and season-long identity require type-specific models and tests.
 Semantic equivalence across differently worded but materially identical sports rules remains
 Milestone 8 work; until then, those pairs stay ambiguous rather than being guessed equivalent.
+Live 2026-09-20 replay against six shared NFL/MLB games produced 12 correctly rejected pairs:
+authority wording no longer caused a false conflict, while the exchanges' actual postponement and
+MLB cancellation terms remained decisive.
 
 See [Implementation plan](../planning/IMPLEMENTATION_PLAN.md) for milestone gates and
 [Sports MCP design](SPORTS_MCP.md) for provider discovery, identity, and projection contracts.

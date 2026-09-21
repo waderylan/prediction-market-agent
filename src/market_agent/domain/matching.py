@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import product
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
@@ -658,6 +659,12 @@ def _postponement_term(rules: str | None) -> str | None:
         amount = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
         hours = amount if match["unit"].startswith("hour") else amount * 24
         return f"reschedule_window_hours={hours}"
+    if re.search(
+        r"postpon\w*[^.!?]{0,120}(?:remain|stays?) open[^.!?]{0,80}"
+        r"(?:completed|finished)",
+        text,
+    ):
+        return "wait_until_completed"
     if re.search(r"postpon\w*[^.!?]{0,80}(?:do not count|excluded|void)", text):
         return "postponed_game_excluded"
     return None
@@ -672,8 +679,8 @@ def _payout_term(rules: str | None, trigger: str) -> str | None:
     if clause is None:
         return None
     for pattern, value in (
-        (r"50\s*[-/]?\s*50|half(?:way)?", "50_50"),
-        (r"fair value", "fair_value"),
+        (r"50\s*[-/]?\s*50|\$?0\.50.{0,30}each|half(?:way)?", "50_50"),
+        (r"fair (?:value|price)", "fair_value"),
         (r"\bvoid\b|refund", "void"),
         (r"resolves?(?: to)? yes", "yes"),
         (r"resolves?(?: to)? no", "no"),
@@ -703,9 +710,60 @@ def _official_result_term(rules: str | None) -> str | None:
     text = normalize(rules)
     if re.search(r"preliminary (?:result|winner)", text):
         return "preliminary_result"
-    if re.search(r"official (?:league |governing body )?(?:result|winner|game)", text):
+    if re.search(
+        r"official (?:league |governing body |final )?(?:result|winner|game|statistics)",
+        text,
+    ):
         return "official_result"
     return None
+
+
+def _authority_domains(value: str | None) -> set[str]:
+    domains = set()
+    for raw_url in re.findall(r"https?://[^\s;)]+", value or "", re.IGNORECASE):
+        hostname = urlparse(raw_url.rstrip(".,")).hostname
+        if hostname:
+            domains.add(hostname.casefold().removeprefix("www."))
+    return domains
+
+
+def _authority_check(left: ContractEvidence, right: ContractEvidence) -> DimensionCheck:
+    source_a = normalize(left.resolution_source) or None
+    source_b = normalize(right.resolution_source) or None
+    domains_a = _authority_domains(left.resolution_source)
+    domains_b = _authority_domains(right.resolution_source)
+    if source_a is None or source_b is None:
+        state: CheckState = "unknown"
+        reason = "Resolution authority is missing from at least one market detail."
+    elif source_a == source_b or (domains_a and domains_a == domains_b):
+        state = "match"
+        reason = "Resolution authorities identify the same source domains."
+    elif domains_a & domains_b:
+        state = "unknown"
+        reason = (
+            "Resolution authorities overlap but list different source sets; semantic review is "
+            "required."
+        )
+    elif (
+        domains_a
+        and domains_b
+        and re.search(r"\b(?:solely|only|exclusive(?:ly)?)\b", source_a)
+        and re.search(r"\b(?:solely|only|exclusive(?:ly)?)\b", source_b)
+    ):
+        state = "different"
+        reason = "Both contracts name exclusive, disjoint resolution authorities."
+    else:
+        state = "unknown"
+        reason = "Different authority labels do not prove incompatible settlement sources."
+    return DimensionCheck(
+        dimension="resolution_authority",
+        state=state,
+        reason=reason,
+        left=source_a,
+        right=source_b,
+        left_provenance="polymarket.market_detail.resolution_source",
+        right_provenance="kalshi.market_detail.resolution_source",
+    )
 
 
 def _sports_term_check(
@@ -716,7 +774,6 @@ def _sports_term_check(
     left_market: ContractEvidence,
     right_market: ContractEvidence,
     mismatch: CheckState = "different",
-    provenance_field: str = "rules",
 ) -> DimensionCheck:
     missing = left is None or right is None
     return _check(
@@ -734,8 +791,8 @@ def _sports_term_check(
             if mismatch == "different"
             else "Supplied wording differs and requires semantic review."
         ),
-        left_provenance=f"{left_market.platform.value}.market_detail.{provenance_field}",
-        right_provenance=f"{right_market.platform.value}.market_detail.{provenance_field}",
+        left_provenance=f"{left_market.platform.value}.market_detail.rules",
+        right_provenance=f"{right_market.platform.value}.market_detail.rules",
     )
 
 
@@ -811,14 +868,7 @@ def _sports_contract_equivalence(
 
     checks.extend(
         [
-            _sports_term_check(
-                "resolution_authority",
-                normalize(left.resolution_source) or None,
-                normalize(right.resolution_source) or None,
-                left_market=left,
-                right_market=right,
-                provenance_field="resolution_source",
-            ),
+            _authority_check(left, right),
             _sports_term_check(
                 "official_result_requirement",
                 _official_result_term(left.rules),

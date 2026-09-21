@@ -829,6 +829,10 @@ Multi-server MCP client
 - Trading close, expected resolution, and final resolution deadline remain separate informational
   clocks and do not identify the sporting event. Missing or unsupported required evidence stays
   ambiguous; explicit identity, outcome, or settlement conflicts remain deterministic vetoes.
+- Resolution-authority URLs are normalized by source domain. Equal sets match, overlapping sets
+  remain ambiguous, and only explicitly exclusive disjoint sources conflict. Verified live NFL
+  and MLB templates distinguish wait-until-complete from bounded postponement windows and 50/50
+  from fair-price cancellation payouts.
 - Milestone 6 game state is incorporated only when already retrieved for the user's request. Typed
   market-to-game checks expose source and observation time, and cannot alter contract equivalence
   or market settlement. Market-only equivalence works without the sports-state MCP.
@@ -836,6 +840,9 @@ Multi-server MCP client
   opponents, doubleheaders/game numbers, acceptable and unacceptable start drift, rule conflicts,
   missing evidence, sports-state conflicts/unavailability, and final games with non-equivalent or
   unsettled markets.
+- A 2026-09-20 live replay covered six shared NFL/MLB games and 12 cross-platform pairs. Authority
+  phrasing produced no false conflicts; actual postponement and MLB cancellation differences
+  remained deterministic vetoes.
 - Ambiguous sports semantics are labeled for the not-yet-integrated Milestone 8 Jev review path;
   no Jev call or Milestone 8 behavior is implemented here.
 - `../research/CONTRACT_MATCHING.md` defines the matcher boundary and evidence policy.

@@ -24,6 +24,18 @@ SPORTS_RULE = (
     "If there is a tie, the market resolves void. A shortened official game counts. "
     "If the game is abandoned, the market resolves void."
 )
+LIVE_POLY_RULE = (
+    "If Panthers wins, this market resolves to Panthers. "
+    "If the game is postponed, this market will remain open until the game has been completed. "
+    "If the game is canceled entirely or ends in a tie, this market resolves 50-50."
+)
+LIVE_KALSHI_RULE = (
+    "If Atlanta wins, this market resolves to Yes. "
+    "If the game ends in a tie, the market resolves to $0.50 for each team. "
+    "If the game is postponed but begins within 48 hours, it resolves on the official final "
+    "result. "
+    "If the game is not started within 48 hours, it resolves to a fair price."
+)
 
 
 def market(platform, **changes):
@@ -339,6 +351,81 @@ def test_sports_settlement_conflict_is_related_context_not_equivalent():
     assert pair.relationship == "related_context"
     assert check(pair, "cancellation_payout").state == "different"
     assert not pair.comparison_allowed
+
+
+def test_live_authority_formatting_matches_domains_and_real_rule_conflict_is_decisive():
+    pair = assess_pair(
+        sports_market(
+            "polymarket",
+            rules=LIVE_POLY_RULE,
+            resolution_source="https://www.nfl.com/scores",
+        ),
+        sports_market(
+            "kalshi",
+            rules=LIVE_KALSHI_RULE,
+            resolution_source="the Governing League (https://www.nfl.com/)",
+        ),
+    )
+
+    assert check(pair, "resolution_authority").state == "match"
+    assert check(pair, "postponement_window").state == "different"
+    assert check(pair, "tie_treatment").state == "match"
+    assert pair.verdict == "different"
+
+
+def test_overlapping_authority_sets_are_ambiguous_not_a_false_conflict():
+    pair = assess_pair(
+        sports_market(
+            "polymarket",
+            resolution_source="https://www.mlb.com/",
+        ),
+        sports_market(
+            "kalshi",
+            resolution_source=(
+                "ESPN (https://www.espn.com); Fox Sports (https://www.foxsports.com); "
+                "the Governing League (https://www.mlb.com/)"
+            ),
+        ),
+    )
+
+    authority = check(pair, "resolution_authority")
+    assert authority.state == "unknown"
+    assert "overlap" in authority.reason
+    assert pair.verdict == "ambiguous"
+
+
+def test_only_exclusive_disjoint_authorities_are_deterministically_different():
+    ambiguous = assess_pair(
+        sports_market("polymarket", resolution_source="https://source-a.example/results"),
+        sports_market("kalshi", resolution_source="https://source-b.example/results"),
+    )
+    conflicting = assess_pair(
+        sports_market(
+            "polymarket", resolution_source="Resolves solely by https://source-a.example/results"
+        ),
+        sports_market(
+            "kalshi", resolution_source="Resolves only by https://source-b.example/results"
+        ),
+    )
+
+    assert check(ambiguous, "resolution_authority").state == "unknown"
+    assert ambiguous.verdict == "ambiguous"
+    assert check(conflicting, "resolution_authority").state == "different"
+    assert conflicting.verdict == "different"
+
+
+def test_fair_price_cancellation_conflicts_with_fifty_fifty():
+    kalshi_rules = LIVE_KALSHI_RULE + (
+        " If the game is cancelled, the market resolves to a fair price."
+    )
+    pair = assess_pair(
+        sports_market("polymarket", rules=LIVE_POLY_RULE),
+        sports_market("kalshi", rules=kalshi_rules),
+    )
+
+    assert check(pair, "cancellation_payout").state == "different"
+    assert check(pair, "cancellation_payout").left == "50_50"
+    assert check(pair, "cancellation_payout").right == "fair_value"
 
 
 def test_missing_sports_settlement_evidence_is_ambiguous_and_routes_to_future_review():

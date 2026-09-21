@@ -66,6 +66,10 @@ The sports suite specifically verifies:
 - Market detail preserves typed event identity and named outcomes through the host matching path.
 - Equivalent full-game-winner fixtures pass without sports-state data; missing settlement evidence
   stays ambiguous and explicit identity, outcome, or settlement conflicts are rejected.
+- Resolution-authority URLs normalize by domain; shared or overlapping domains avoid false
+  conflicts, while only explicitly exclusive disjoint authorities reject deterministically.
+- Current NFL/MLB rule templates distinguish wait-until-complete from bounded postponement windows
+  and 50/50 cancellation payouts from fair-price payouts.
 - Wrong opponents, different game numbers, start drift beyond 30 minutes, and cancellation payout
   conflicts remain distinct even with similar titles.
 
