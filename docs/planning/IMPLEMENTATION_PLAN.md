@@ -949,6 +949,16 @@ only because it has already been implemented.
   result, overtime, tie, shortened-game, abandoned-game, and exclusion parsers.
 - **M8 decision:** remove. It added no correct coverage or useful pair, introduced external cost and
   nondeterminism, and reduced forced-review coverage.
+- **Why removal instead of disabling:** the normal route invoked Jev 0/15 times because retained
+  deterministic checks had already resolved every case. Forcing Jev consumed 29,254 input tokens
+  without adding a decision and changed three correct NFL rejections to ambiguity. Its 308 ms
+  median latency met the speed threshold, but speed alone did not justify an unused credential,
+  fourth MCP process, model drift, gateway failure mode, or ongoing maintenance surface.
+- **Accepted tradeoff:** the system no longer attempts model-based equivalence for differently
+  worded rules. Those pairs remain safely ambiguous and non-comparable. Reintroducing semantic
+  review requires a balanced held-out set containing real equivalent pairs, measurable additional
+  safe-match yield, and zero false equivalences over the retained deterministic baseline.
+- No Jev or AI-gateway credential is required by the resulting runtime.
 - Differently worded or incomplete full rules now remain ambiguous unless the retained core checks
   prove a conflict. The primary LLM cannot upgrade that result. Sports state remains optional
   corroboration and never proves equivalence or settlement.
