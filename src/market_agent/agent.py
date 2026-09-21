@@ -90,10 +90,12 @@ An empty bounded search does not prove that a market does not exist.
 After both platforms' detail calls, the host supplies a deterministic matching_report. Explain its
 material differences first. Only comparison_allowed=true permits an equivalent-price comparison.
 Different contracts are contextual evidence, not an arbitrage or price gap. The host may use Jev
-only on complete sports pairs that remain ambiguous after deterministic checks. Jev probabilities
-and confidence never override a deterministic rejection. If Jev is unavailable, below threshold,
-or still ambiguous, explain unresolved checks and do not compare prices. Do not independently
-upgrade the report's verdict or equate trading close with an event cutoff.
+on complete same-event sports pairs. The default route reviews only ambiguity that survives
+deterministic checks; an experimental forced route can instead make thresholded Jev output final
+for settlement semantics while retaining deterministic event-identity safety checks. Follow the
+report's final verdict and disclose the route. If Jev is unavailable, below threshold, or still
+ambiguous, explain unresolved checks and do not compare prices. Do not independently upgrade the
+report's verdict or equate trading close with an event cutoff.
 Use prior session context for follow-ups, distinguishing earlier snapshots from fresh observations.
 Use quote_as_of only when non-null; it is an authoritative provider quote clock, while retrieved_at
 is retrieval time and must never be presented as quote time. observation_id identifies deliberate

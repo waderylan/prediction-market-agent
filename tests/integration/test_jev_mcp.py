@@ -164,6 +164,34 @@ async def test_jev_mcp_preserves_deterministic_veto_without_calling_jev():
     assert calls == 0
 
 
+async def test_jev_mcp_force_review_exposes_jev_for_deterministic_conflict():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return jev_response()
+
+    left = detail("polymarket", rules="If the game is cancelled, the market resolves 50-50.")
+    right = detail("kalshi", rules="If the game is cancelled, the market resolves Yes.")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        reviewer = JevReviewer("test-key", force_review=True, http_client=http)
+        server = create_server(reviewer)
+        async with create_connected_server_and_client_session(server) as session:
+            result = await session.call_tool(
+                "jev_review_contracts",
+                {
+                    "polymarket_contract": left.model_dump(mode="json"),
+                    "kalshi_contract": right.model_dump(mode="json"),
+                },
+            )
+
+    assert not result.isError
+    assert result.structuredContent["deterministic_assessment"]["verdict"] == "different"
+    assert result.structuredContent["final_assessment"]["verdict"] == "different"
+    assert result.structuredContent["jev_called"] is True
+    assert len(requests) == 1
+
+
 async def test_jev_mcp_rejects_swapped_platform_inputs():
     server = create_server()
     async with create_connected_server_and_client_session(server) as session:

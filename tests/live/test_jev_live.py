@@ -63,11 +63,12 @@ async def test_jev_semantic_policy_has_no_unsafe_automatic_decisions():
     )
 
 
-async def test_jev_mcp_live_protocol_review():
+async def test_jev_mcp_live_protocol_review(monkeypatch: pytest.MonkeyPatch):
     api_key = os.environ.get("AI_GATEWAY_API_KEY")
     if not api_key:
         pytest.skip("set AI_GATEWAY_API_KEY")
-    case = next(item for item in load_cases() if item["name"] == "semantic_abandoned_conflict")
+    monkeypatch.setenv("JEV_FORCE_REVIEW", "true")
+    case = next(item for item in load_cases() if item["name"] == "explicit_cancellation_conflict")
     left, right = market_details(case)
     adapter = MultiServerMCPClient(
         {
@@ -90,6 +91,6 @@ async def test_jev_mcp_live_protocol_review():
         )
 
     assert not result.isError
-    assert result.structuredContent["deterministic_assessment"]["verdict"] == "ambiguous"
+    assert result.structuredContent["deterministic_assessment"]["verdict"] == "different"
     assert result.structuredContent["final_assessment"]["verdict"] == "different"
     assert result.structuredContent["jev_called"] is True

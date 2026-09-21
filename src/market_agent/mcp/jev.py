@@ -28,6 +28,7 @@ class _JevMcpSettings(BaseSettings):
 
     ai_gateway_api_key: SecretStr | None = None
     jev_enabled: bool = False
+    jev_force_review: bool = False
     jev_timeout_seconds: float = Field(default=3, ge=0.5, le=10)
     jev_equivalent_threshold: float = Field(default=0.9, ge=0, le=1)
     jev_different_threshold: float = Field(default=0.75, ge=0, le=1)
@@ -95,6 +96,7 @@ def create_server(reviewer: SemanticReviewer | None = None) -> FastMCP[Any]:
                 equivalent_threshold=settings.jev_equivalent_threshold,
                 different_threshold=settings.jev_different_threshold,
                 confidence_threshold=settings.jev_confidence_threshold,
+                force_review=settings.jev_force_review,
             )
             return active_reviewer
 
@@ -117,10 +119,12 @@ def create_server(reviewer: SemanticReviewer | None = None) -> FastMCP[Any]:
         """Review whether two supplied full-game-winner contracts have equivalent payout terms.
         First call polymarket_get_market and kalshi_get_market, then copy their complete structured
         results unchanged into the corresponding arguments. The server reruns deterministic event,
-        outcome, and settlement checks before Jev. Deterministic conflicts always veto Jev;
-        incomplete or truncated evidence stays ambiguous. Jev receives contract identity and rules
-        only, never prices, scores, game state, or results. This tool does not predict a winner,
-        establish settlement, compare prices, or recommend a position.
+        outcome, and settlement checks before Jev. By default, deterministic conflicts veto Jev.
+        With JEV_FORCE_REVIEW=true, Jev reviews complete same-event pairs and becomes the final
+        thresholded settlement-semantics classifier. Different events and incomplete or truncated
+        evidence remain safety stops. Jev receives contract identity and rules only, never prices,
+        scores, game state, or results. This tool does not predict a winner, establish settlement,
+        compare prices, or recommend a position.
         """
         if polymarket_contract.platform != Platform.POLYMARKET:
             raise _tool_error(
@@ -141,12 +145,6 @@ def create_server(reviewer: SemanticReviewer | None = None) -> FastMCP[Any]:
             raise _tool_error(
                 "unsupported_pair",
                 "The supplied details did not produce exactly one cross-platform pair.",
-            )
-        if deterministic.pairs[0].verdict != "ambiguous":
-            return JevMcpResult(
-                deterministic_assessment=deterministic.pairs[0],
-                final_assessment=deterministic.pairs[0],
-                jev_called=False,
             )
         semantic_reviewer = await get_reviewer()
         try:

@@ -55,6 +55,7 @@ def test_jev_configuration_is_typed_and_optional(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("JEV_ENABLED", "true")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "test-jev-placeholder")
     monkeypatch.setenv("JEV_EQUIVALENT_THRESHOLD", "0.95")
+    monkeypatch.setenv("JEV_FORCE_REVIEW", "true")
 
     settings = load_settings()
 
@@ -62,3 +63,4 @@ def test_jev_configuration_is_typed_and_optional(monkeypatch: pytest.MonkeyPatch
     assert settings.ai_gateway_api_key is not None
     assert settings.ai_gateway_api_key.get_secret_value() == "test-jev-placeholder"
     assert settings.jev_equivalent_threshold == 0.95
+    assert settings.jev_force_review

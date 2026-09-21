@@ -177,6 +177,72 @@ async def test_deterministic_conflict_vetoes_jev():
     assert calls == 0
 
 
+async def test_force_review_calls_jev_and_can_override_deterministic_conflict():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return response()
+
+    contracts = [
+        market(
+            "polymarket",
+            "p1",
+            rules="If the game is cancelled, the market resolves 50-50.",
+        ),
+        market(
+            "kalshi",
+            "k1",
+            rules="If the game is cancelled, the market resolves Yes.",
+        ),
+    ]
+    deterministic = match_candidates(contracts[:1], contracts[1:])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        reviewer = JevReviewer("test-key", force_review=True, http_client=http)
+        reviewed = await reviewer.review(deterministic, contracts)
+
+    pair = reviewed.pairs[0]
+    assert deterministic.pairs[0].verdict == "different"
+    assert pair.verdict == "equivalent"
+    assert pair.comparison_allowed and not pair.review_required
+    assert pair.semantic_review is not None
+    assert pair.semantic_review_route == "jev"
+    assert len(requests) == 1
+    state = json.loads(requests[0].content)["state"]
+    assert state["review_mode"] == "forced"
+    assert any(
+        dimension["deterministic_state"] == "different"
+        for dimension in state["dimensions_to_review"]
+    )
+
+
+async def test_force_review_failure_does_not_fall_back_to_deterministic_settlement_verdict():
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503)
+
+    contracts = [
+        market("polymarket", "p1", rules="A cancellation resolves 50-50."),
+        market("kalshi", "k1", rules="A cancellation resolves Yes."),
+    ]
+    deterministic = match_candidates(contracts[:1], contracts[1:])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        reviewer = JevReviewer(
+            "test-key", force_review=True, retry_backoff_seconds=0, http_client=http
+        )
+        reviewed = await reviewer.review(deterministic, contracts)
+
+    pair = reviewed.pairs[0]
+    assert deterministic.pairs[0].verdict == "different"
+    assert pair.verdict == "ambiguous"
+    assert pair.review_required and not pair.comparison_allowed
+    assert pair.semantic_review_route == "main_model_fallback"
+    assert calls == 2
+
+
 async def test_low_confidence_result_retains_ambiguity():
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(

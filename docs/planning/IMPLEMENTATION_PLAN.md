@@ -63,8 +63,9 @@
 - Keep automatic Jev routing in a specialized LangGraph decision node. Expose the same backend
   through a separate read-only MCP tool for direct Codex inspection, not as another agent-selected
   application tool.
-- Use Jev only for sports contract-equivalence classification after deterministic validation,
-  not game prediction, price prediction, or arithmetic.
+- Use Jev only for sports contract-equivalence classification after deterministic event validation,
+  not game prediction, price prediction, or arithmetic. Default operation also requires settlement
+  ambiguity; experimental forced review exists only for Milestone 8A measurement.
 - Keep the service read-only with respect to prediction-market platforms.
 - Never place trades or require exchange-account credentials.
 
@@ -116,8 +117,9 @@ Multi-server MCP client
 - Market servers share Python domain types where useful, but they do not call each other.
 - Each server has unique tool names to avoid collisions after tool aggregation.
 - Tavily remains a separate MCP integration.
-- Jev receives normalized sports event identity, outcome mapping, and settlement rules only
-  after deterministic conflicts are rejected.
+- Jev receives normalized sports event identity, outcome mapping, and settlement rules only. The
+  default route rejects deterministic settlement conflicts first; experimental forced review sends
+  them for Milestone 8A measurement while preserving the deterministic audit.
 - The primary LLM remains responsible for tool selection, ambiguous-case review, and final synthesis.
 
 ## 5. Tool Surface
@@ -869,7 +871,8 @@ Multi-server MCP client
 
 - Jev improves or usefully accelerates sports contract classification on the labeled fixture set.
 - Low-confidence and unavailable-model cases fall back cleanly.
-- Deterministic conflicts always veto equivalence regardless of Jev output.
+- Deterministic conflicts always veto equivalence regardless of Jev output in the default safe
+  operating mode.
 - Jev never predicts a game, performs arithmetic, recommends a position, or produces the final
   forecast.
 - The entire request still succeeds when Jev is disabled.
@@ -889,6 +892,11 @@ Multi-server MCP client
   manifest to prevent a duplicate model-selected review path.
 - Eligibility requires matched deterministic event identity, complete untruncated rules, ambiguous
   contract semantics, and no deterministic conflict. Review is limited to three pairs per request.
+- An experimental, default-off `JEV_FORCE_REVIEW` flag was added for Milestone 8A measurement. It
+  retains event-identity and complete-evidence guards but sends deterministic settlement conflicts
+  to Jev and uses threshold-clearing Jev output as the final semantic verdict. Failures and
+  below-threshold outputs become ambiguous rather than falling back to a deterministic settlement
+  verdict.
 - Requests contain normalized identity, named outcomes, rule text, authorities, and unresolved
   dimensions only. Prices, scores, results, and Milestone 6 sports-state evidence are excluded.
 - The reviewer returns a typed probability distribution and confidence, uses a three-second
@@ -923,6 +931,8 @@ only because it has already been implemented.
 - Compare at least these configurations on the same held-out examples:
   - Milestone 7 deterministic matching without Jev.
   - Milestone 7 followed by Milestone 8 Jev review for eligible ambiguous pairs.
+  - Milestone 7 followed by forced Jev review for every complete same-event pair, with deterministic
+    settlement output retained separately for audit.
   - A simpler baseline that refuses cross-platform equivalence unless a small set of essential
     identity and settlement facts agree.
 - Identify which Milestone 7 checks provide demonstrated safety or useful coverage and which are

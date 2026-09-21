@@ -96,10 +96,12 @@ A code-generated notice also keeps comparison eligibility visible independently 
 For supported full-game winners, that engine consumes typed sports identity and named outcome
 quotes from both detail results. It separately evaluates market-to-market event identity,
 contract settlement equivalence, and optional market-to-game identity. Missing required evidence
-stays ambiguous, deterministic conflicts veto comparison, and differing close/resolution clocks do
-not replace scheduled-game identity. The graph performs bounded semantic Jev review for eligible
-ambiguity; the standalone MCP surface exposes that same backend for inspection without changing the
-production route. See [Matching](CONTRACT_MATCHING.md).
+stays ambiguous, deterministic conflicts veto comparison by default, and differing close/resolution
+clocks do not replace scheduled-game identity. The graph performs bounded semantic Jev review for
+eligible ambiguity; the standalone MCP surface exposes that same backend for inspection. The
+experimental `JEV_FORCE_REVIEW=true` setting expands both routes to complete same-event pairs for
+Milestone 8A evaluation without bypassing event-identity or evidence-completeness guards. See
+[Matching](CONTRACT_MATCHING.md).
 
 ## Local development and deployment
 

@@ -70,7 +70,8 @@ the bounded Jev review described below.
 
 ## Jev semantic-review boundary
 
-Jev is an optional LangGraph decision node and not a replacement for the deterministic matcher.
+Jev is an optional LangGraph decision node and, by default, not a replacement for the deterministic
+matcher.
 The same backend is also available through a standalone read-only `jev_review_contracts` MCP tool
 for direct Codex inspection. The tool accepts the complete structured results from
 `polymarket_get_market` and `kalshi_get_market`, reruns deterministic checks, then returns both the
@@ -78,12 +79,12 @@ deterministic and final assessments. It is excluded from the application MCP man
 model cannot select a duplicate review path. `JEV_ENABLED=false` is the default. Enabling either
 path also requires an `AI_GATEWAY_API_KEY`; both hard-code the `typesafe-ai/jev` model.
 
-A pair is eligible only when it is a supported sports pair, deterministic event identity is a
-match, contract equivalence is ambiguous, both rule texts are complete and untruncated, neither
-rule exceeds 12,000 characters, and no dimension has a deterministic conflict. At most three
-pairs are reviewed per request. Calls run concurrently, use a three-second attempt timeout, retry
-once for transport/retryable HTTP failures, reject responses over 1 MiB, and use a 128-entry
-exact-request cache.
+In default mode, a pair is eligible only when it is a supported sports pair, deterministic event
+identity is a match, contract equivalence is ambiguous, both rule texts are complete and
+untruncated, neither rule exceeds 12,000 characters, and no dimension has a deterministic conflict.
+At most three pairs are reviewed per request. Calls run concurrently, use a three-second attempt
+timeout, retry once for transport/retryable HTTP failures, reject responses over 1 MiB, and use a
+128-entry exact-request cache.
 
 Jev receives only normalized event identity, named-outcome mapping, deterministically matched and
 unresolved dimensions, complete rule text, and stated resolution authority. It does not receive
@@ -96,6 +97,16 @@ least 0.90, `different` requires 0.75, and both require provider confidence at l
 Ambiguous, low-confidence, malformed, timed-out, or unavailable results preserve deterministic
 ambiguity for main-model explanation. The main model cannot upgrade that result or override a
 deterministic veto.
+
+`JEV_FORCE_REVIEW=true` is an experimental Milestone 8A evaluation mode. It keeps deterministic
+same-event identity, complete/untruncated rule, size, and three-pair guards, but sends every
+eligible pair to Jev even when deterministic settlement checks already classified it. All required
+dimensions and their deterministic states are included in the bounded request. A threshold-clearing
+Jev verdict becomes the final settlement-semantics verdict; a low-confidence, ambiguous,
+unavailable, or malformed result becomes `ambiguous` instead of falling back to the deterministic
+settlement verdict. This mode does not send prices, scores, results, or sports-state data, and it
+cannot combine different games. It is disabled by default because Milestone 8A still must measure
+whether the model adds enough real-market value to justify overriding proven deterministic checks.
 
 ### Market-to-game identity
 
@@ -152,8 +163,8 @@ Deterministic and real-MCP scripted-agent tests cover:
 - Bounded candidate counts, duplicate IDs, generic dangerous near-matches, and independent
   code-generated notices.
 - Jev eligibility, request redaction, thresholds, distributions, cache reuse, pair limits,
-  retries, timeouts, malformed responses, deterministic vetoes, disabled operation, and graph
-  integration after real MCP detail calls.
+  retries, timeouts, malformed responses, default deterministic vetoes, experimental forced
+  review, disabled operation, and graph integration after real MCP detail calls.
 - Real MCP discovery/invocation of `jev_review_contracts`, strict nested detail schemas, platform
   order rejection, deterministic no-call vetoes, and a live gateway-backed protocol call.
 
@@ -170,7 +181,9 @@ A separate 2026-09-20 real-slate replay used ten 2026-09-19 NCAA games plus ten 
 games on 2026-09-20. All 30 games existed on both platforms, producing 60 cross-platform pairs.
 Every pair had a deterministic settlement conflict, so all 60 were rejected before Jev and the
 Jev call count was zero. This validates the veto boundary but provides no evidence that Jev adds
-value on that real slate. Milestone 8A retains the required keep/simplify/remove decision.
+value on that real slate. The experimental forced-review flag now permits replaying that same class
+of pair through Jev for Milestone 8A measurement; it does not itself establish value. Milestone 8A
+retains the required keep/simplify/remove decision.
 
 Current support remains conservative: no live semantic equivalence has cleared the automatic
 threshold, and Jev depends on an external gateway/model whose behavior, availability, and cost can

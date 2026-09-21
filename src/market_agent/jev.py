@@ -32,8 +32,8 @@ EQUIVALENCE_QUESTION: dict[str, Any] = {
     "type": "choice",
     "instructions": (
         "Classify whether buying the named team outcome in these two full-game winner contracts "
-        "has identical payout semantics. Use only the supplied evidence and only resolve the "
-        "listed unknown dimensions. Check official-result authority, postponement and "
+        "has identical payout semantics. Use only the supplied evidence and review every "
+        "listed dimension. Check official-result authority, postponement and "
         "cancellation, overtime, ties, shortened and abandoned games, and exclusions. Never "
         "infer an omitted rule or use prices, scores, or game results."
     ),
@@ -105,15 +105,22 @@ def _review_state(
     left: ContractEvidence,
     right: ContractEvidence,
     pair: PairAssessment,
+    *,
+    force_review: bool,
 ) -> dict[str, Any]:
     assert left.sports is not None and right.sports is not None
     assert pair.event_identity is not None and pair.event_identity.verdict == "match"
-    unknown = [check for check in pair.checks if check.required and check.state == "unknown"]
+    review_checks = [
+        check
+        for check in pair.checks
+        if check.required and (force_review or check.state == "unknown")
+    ]
     matched = [
         check.dimension for check in pair.checks if check.required and check.state == "match"
     ]
     return {
         "task": "sports_contract_equivalence",
+        "review_mode": "forced" if force_review else "ambiguity_only",
         "policy": (
             "Classify supplied contract meaning only. Sporting results and market prices are not "
             "evidence of contract equivalence or settlement."
@@ -144,13 +151,14 @@ def _review_state(
             ),
         },
         "deterministically_matched_dimensions": matched,
-        "unresolved_dimensions": [
+        "dimensions_to_review": [
             {
                 "dimension": check.dimension,
                 "polymarket": check.left,
                 "kalshi": check.right,
+                "deterministic_state": check.state,
             }
-            for check in unknown
+            for check in review_checks
         ],
         "contracts": {
             "polymarket": {
@@ -169,23 +177,31 @@ def _eligible(
     left: ContractEvidence | None,
     right: ContractEvidence | None,
     pair: PairAssessment,
+    *,
+    force_review: bool,
 ) -> bool:
-    return bool(
+    common_requirements = bool(
         left is not None
         and right is not None
         and left.sports is not None
         and right.sports is not None
-        and pair.verdict == "ambiguous"
         and pair.event_identity is not None
         and pair.event_identity.verdict == "match"
         and pair.contract_equivalence is not None
-        and pair.contract_equivalence.verdict == "ambiguous"
         and left.rules
         and right.rules
         and not left.rules_truncated
         and not right.rules_truncated
         and len(left.rules) <= MAX_RULE_CHARS
         and len(right.rules) <= MAX_RULE_CHARS
+    )
+    if force_review:
+        return common_requirements
+    return bool(
+        common_requirements
+        and pair.verdict == "ambiguous"
+        and pair.contract_equivalence is not None
+        and pair.contract_equivalence.verdict == "ambiguous"
         and not any(check.state == "different" for check in pair.checks)
     )
 
@@ -197,6 +213,7 @@ def _apply_review(
     equivalent_threshold: float,
     different_threshold: float,
     confidence_threshold: float,
+    force_review: bool,
 ) -> PairAssessment:
     threshold = equivalent_threshold if review.verdict == "equivalent" else different_threshold
     accepted = (
@@ -205,16 +222,25 @@ def _apply_review(
         and review.confidence >= confidence_threshold
     )
     if not accepted:
-        return pair.model_copy(
-            update={
-                "semantic_review": review,
-                "semantic_review_route": "main_model_fallback",
-                "semantic_review_note": (
-                    "Jev returned a bounded decision below the configured action threshold; "
-                    "deterministic ambiguity is retained."
-                ),
-            }
-        )
+        update: dict[str, Any] = {
+            "semantic_review": review,
+            "semantic_review_route": "main_model_fallback",
+            "semantic_review_note": (
+                "Forced Jev review did not clear the configured action threshold; the final "
+                "verdict is ambiguous."
+                if force_review
+                else "Jev returned a bounded decision below the configured action threshold; "
+                "deterministic ambiguity is retained."
+            ),
+        }
+        if force_review:
+            update.update(
+                verdict="ambiguous",
+                relationship="related_context",
+                review_required=True,
+                comparison_allowed=False,
+            )
+        return pair.model_copy(update=update)
     verdict = review.verdict
     return pair.model_copy(
         update={
@@ -225,8 +251,11 @@ def _apply_review(
             "semantic_review": review,
             "semantic_review_route": "jev",
             "semantic_review_note": (
-                "Jev resolved only semantic ambiguity that remained after deterministic identity "
-                "and conflict checks."
+                "Experimental forced review used Jev as the final settlement-semantics "
+                "classifier after deterministic event identity matched."
+                if force_review
+                else "Jev resolved only semantic ambiguity that remained after deterministic "
+                "identity and conflict checks."
             ),
         }
     )
@@ -243,6 +272,7 @@ class JevReviewer:
         equivalent_threshold: float = 0.9,
         different_threshold: float = 0.75,
         confidence_threshold: float = 0.6,
+        force_review: bool = False,
         retry_backoff_seconds: float = 0.1,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -257,6 +287,7 @@ class JevReviewer:
         self.equivalent_threshold = equivalent_threshold
         self.different_threshold = different_threshold
         self.confidence_threshold = confidence_threshold
+        self.force_review = force_review
         self.retry_backoff_seconds = retry_backoff_seconds
         self._cache: OrderedDict[str, SemanticReview] = OrderedDict()
         self._owns_client = http_client is None
@@ -344,7 +375,7 @@ class JevReviewer:
         for index, pair in enumerate(pairs):
             left = by_key.get((Platform.POLYMARKET, pair.polymarket_id))
             right = by_key.get((Platform.KALSHI, pair.kalshi_id))
-            if _eligible(left, right, pair):
+            if _eligible(left, right, pair, force_review=self.force_review):
                 assert left is not None and right is not None
                 if len(work) < MAX_REVIEW_PAIRS:
                     work.append((index, pair, left, right))
@@ -357,7 +388,11 @@ class JevReviewer:
                             )
                         }
                     )
-            elif pair.verdict == "ambiguous":
+            elif pair.verdict == "ambiguous" or (
+                self.force_review
+                and pair.event_identity is not None
+                and pair.event_identity.verdict == "match"
+            ):
                 pairs[index] = pair.model_copy(
                     update={
                         "semantic_review_note": (
@@ -369,11 +404,11 @@ class JevReviewer:
 
         calls = [
             self._call(
-                _review_state(left, right, pair),
+                _review_state(left, right, pair, force_review=self.force_review),
                 [
                     check.dimension
                     for check in pair.checks
-                    if check.required and check.state == "unknown"
+                    if check.required and (self.force_review or check.state == "unknown")
                 ],
             )
             for _, pair, left, right in work
@@ -383,14 +418,24 @@ class JevReviewer:
             if isinstance(result, asyncio.CancelledError):
                 raise result
             if isinstance(result, BaseException):
-                pairs[index] = pair.model_copy(
-                    update={
-                        "semantic_review_note": (
-                            "Jev was unavailable after bounded retry; deterministic ambiguity is "
-                            "retained."
-                        )
-                    }
-                )
+                update: dict[str, Any] = {
+                    "semantic_review_note": (
+                        "Forced Jev review was unavailable after bounded retry; the final verdict "
+                        "is ambiguous."
+                        if self.force_review
+                        else "Jev was unavailable after bounded retry; deterministic ambiguity is "
+                        "retained."
+                    )
+                }
+                if self.force_review:
+                    update.update(
+                        verdict="ambiguous",
+                        relationship="related_context",
+                        review_required=True,
+                        comparison_allowed=False,
+                        semantic_review_route="main_model_fallback",
+                    )
+                pairs[index] = pair.model_copy(update=update)
                 continue
             pairs[index] = _apply_review(
                 pair,
@@ -398,14 +443,19 @@ class JevReviewer:
                 equivalent_threshold=self.equivalent_threshold,
                 different_threshold=self.different_threshold,
                 confidence_threshold=self.confidence_threshold,
+                force_review=self.force_review,
             )
         return report.model_copy(
             update={
                 "pairs": pairs,
                 "review_route": (
-                    "Jev reviews at most three complete ambiguous sports pairs. Deterministic "
-                    "conflicts veto review; low-confidence or unavailable results retain "
-                    "ambiguity for main-model explanation."
+                    "Experimental forced mode sends at most three complete same-event sports "
+                    "pairs to Jev and uses a thresholded Jev decision for settlement semantics. "
+                    "Different events and incomplete evidence remain deterministic safety stops."
+                    if self.force_review
+                    else "Jev reviews at most three complete ambiguous sports pairs. "
+                    "Deterministic conflicts veto review; low-confidence or unavailable results "
+                    "retain ambiguity for main-model explanation."
                 ),
             }
         )

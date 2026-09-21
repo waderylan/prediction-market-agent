@@ -31,14 +31,16 @@ then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
 | Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
 | Comparison boundary | Typed event, named-outcome, and settlement checks run before synthesis for supported full-game winners |
-| Semantic review | Optional Jev node reviews at most three complete sports pairs that remain ambiguous after deterministic checks |
+| Semantic review | Optional Jev node reviews at most three complete sports pairs; safe mode reviews ambiguity, while an experimental flag can force review after same-event validation |
 | Jev inspection MCP | One read-only `jev_review_contracts` tool accepts unchanged market-detail results and exposes the same matcher/reviewer to Codex |
 
 External evidence research, forecasting, a saved-forecast ledger, and Cloud Run deployment are
 **future work**. The matcher establishes equivalence when complete supplied full-game-winner
 identity, named-outcome mapping, authority, and settlement terms pass every deterministic check.
-When enabled, Jev can review only semantic ambiguity that survives those checks. Explicit identity
-or settlement conflicts are rejected before Jev, and low-confidence or unavailable Jev results stay
+By default, Jev reviews only semantic ambiguity that survives those checks. Explicit identity or
+settlement conflicts are rejected before Jev. Experimental `JEV_FORCE_REVIEW=true` sends complete
+same-event pairs to Jev even when settlement checks found a conflict, while different-event and
+incomplete-evidence checks still stop review. Low-confidence or unavailable forced reviews become
 ambiguous. Sports-state data is optional corroboration, not proof of contract equivalence or
 settlement.
 A sporting result does not establish prediction-market settlement, even when the game is final.
@@ -88,7 +90,8 @@ uv run python main.py
 Jev review is disabled by default. To enable it, set `JEV_ENABLED=true` and configure
 `AI_GATEWAY_API_KEY`. That credential is used only with the hard-coded `typesafe-ai/jev` model
 through Vercel AI Gateway. Keep both values in the ignored `.env`; `.env.example` contains only
-placeholders.
+placeholders. Set `JEV_FORCE_REVIEW=true` only for Milestone 8A evaluation; it intentionally lets
+thresholded Jev output replace deterministic settlement-semantic verdicts, but never event identity.
 
 The application binds to `0.0.0.0:$PORT` (default 8080). Its assignment endpoint is:
 
@@ -120,7 +123,8 @@ Interactive HTTP documentation is at `/docs`.
 For direct Codex inspection, call both market detail tools first, then pass both complete structured
 results unchanged to `jev_review_contracts`. The result contains the deterministic assessment, the
 final assessment, and whether Jev was called. It does not fetch markets, compare prices, or bypass
-deterministic vetoes.
+different-event, missing-rule, or truncated-rule safety stops. In default mode deterministic
+settlement conflicts veto Jev; `JEV_FORCE_REVIEW=true` makes those conflicts reviewable.
 
 - Limits are strict integers from 1 through 10 in the client-visible MCP schema.
 - League values are `mlb`, `nfl`, and `ncaa_football`.
@@ -276,7 +280,7 @@ flowchart LR
     G <--> L[Configured cloud LLM or local test gateway]
     G <--> M[InMemorySaver by session_id]
     G --> C[Deterministic contract check]
-    C -->|eligible ambiguity only| J[Jev semantic review]
+    C -->|default ambiguity or forced complete pair| J[Jev semantic review]
     J -->|typed verdict or safe fallback| G
     X[Codex MCP client] -->|unchanged market details| JM[Jev inspection MCP]
     JM -->|same matcher and reviewer| C

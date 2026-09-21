@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=60, ge=1, le=180)
     openai_base_url: HttpUrl = HttpUrl("https://api.openai.com/v1")
     jev_enabled: bool = False
+    jev_force_review: bool = False
     jev_timeout_seconds: float = Field(default=3, ge=0.5, le=10)
     jev_equivalent_threshold: float = Field(default=0.9, ge=0, le=1)
     jev_different_threshold: float = Field(default=0.75, ge=0, le=1)

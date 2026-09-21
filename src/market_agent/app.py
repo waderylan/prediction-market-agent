@@ -59,6 +59,7 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
                     equivalent_threshold=settings.jev_equivalent_threshold,
                     different_threshold=settings.jev_different_threshold,
                     confidence_threshold=settings.jev_confidence_threshold,
+                    force_review=settings.jev_force_review,
                 )
                 if settings.jev_enabled and settings.ai_gateway_api_key is not None
                 else None
