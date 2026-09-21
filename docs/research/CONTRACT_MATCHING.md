@@ -2,75 +2,126 @@
 
 ## Implemented pipeline
 
-The application uses one deterministic matching pipeline:
+The application uses one bounded deterministic matching pipeline; it does not expose a comparison
+MCP tool.
 
-- `assess_pair` compares supplied canonical contract terms.
-- `match_candidates` deduplicates IDs, considers at most three candidates per platform,
-  and evaluates at most nine pairs without network or model calls.
-- The graph collects validated detail snapshots within the current turn and supplies
-  `matching_report` to the model before cross-platform interpretation.
-- A code-generated eligibility notice accompanies the final response independently of
+- `assess_pair` compares one Polymarket detail result with one Kalshi detail result.
+- `match_candidates` deduplicates IDs, considers at most three candidates per platform, and
+  evaluates at most nine pairs without network or model calls.
+- Market detail is retained as typed `ContractEvidence`, including sports identity, named outcome
+  quotes, complete-rule status, settlement fields, and separate clocks.
+- The graph rebuilds one `MatchingReport` whenever validated market detail or already-requested
+  game state arrives, and supplies it before cross-platform interpretation.
+- A code-generated notice exposes contract eligibility and market/game identity independently of
   the model's explanation.
 
-The current verdicts are equivalent supplied terms, different, and ambiguous. Related
-contracts remain contextual evidence. The model cannot upgrade a deterministic rejection.
+The pair verdicts remain `equivalent`, `different`, and `ambiguous`. `equivalent` means the complete
+supplied terms passed the supported deterministic checks; it does not certify unseen external
+documents. Related contracts remain contextual evidence. The model cannot upgrade a deterministic
+rejection.
 
-## Current evidence model
+## Three separate checks
 
-The parser recognizes explicit conditional subjects, YES/NO outcomes, polarity, numeric
-thresholds, units, inclusive/exclusive comparisons, explicit timezone-aware event timestamps,
-timing operators, selected settlement triggers, authority, cancellation clauses, exclusions,
-and full-rule text.
+### Market-to-market event identity
 
-Its numeric conditional parser is not a sports settlement parser. Unsupported wording, absent authority,
-truncated rules, and unknown timing semantics remain unresolved. Equality of a short title
-or a rule prefix is insufficient. Positive equivalence is scoped to the supplied terms;
-unseen external documents are not certified.
+For supported full-game winners, the matcher compares:
 
-The generic matcher tracks trading close separately from an event cutoff, but it can still
-report differing close/resolution metadata as unresolved. That generic behavior is not a
-sports-specific interpretation of normal settlement timing.
+- League and season. Season is provider-supplied when available; otherwise it is derived from the
+  scheduled start using the MLB or football season calendar.
+- Both canonical participants, independent of home/away ordering.
+- Each contract's internal provider event ID against its typed sports event ID. Kalshi and
+  Polymarket IDs remain separate namespaces and are not expected to be equal.
+- Scheduled starts after UTC normalization. Drift through 30 minutes is accepted as provider
+  schedule variance; larger drift is a deterministic conflict.
+- The `game_winner` market type.
+- Game number when either provider supplies it. Different numbers conflict; one missing number is
+  insufficient evidence; neither supplied leaves participant/start identity decisive.
 
-## Sports boundary
+Missing required identity is `insufficient_evidence`; an explicit conflict is `different`.
+Doubleheaders therefore remain distinct by start and game number rather than title similarity.
 
-Sports MCP results provide league, canonical and raw participants, provider event identity,
-scheduled start, full-game market type, explicit outcome prices, and settlement evidence. They
-declare comparison eligibility `insufficient_evidence` with the specific reason: discovery
-verifies event/type identity but does not establish equivalent settlement rules.
+### Contract-to-contract equivalence
 
-The current matching engine does not yet use all those fields. It requires YES/NO outcomes,
-so a named-team Polymarket contract cannot be promoted to equivalence with a Kalshi contract.
-An apparent price difference is not an established arbitrage or comparable probability gap.
+After event identity, the matcher checks:
 
-The sports-state MCP is separate evidence. Its host-side identity report checks league, both
-participants, and scheduled start before a current score/situation can be discussed with a market.
-That match does not establish outcome mapping, rule equivalence, cancellation treatment, or
-settlement. A final score cannot upgrade a market pair or declare either contract resolved.
+- Exact named affirmative-outcome mapping. The Kalshi YES participant must be one of the complete
+  Polymarket named outcomes.
+- Line or threshold. The initial supported type requires no line.
+- Resolution authority and an explicit official-result requirement.
+- Postponement or rescheduling window.
+- Cancellation payout.
+- Overtime or extra-innings inclusion.
+- Tie treatment.
+- Shortened-game and abandoned-game treatment.
+- Material exclusions and the complete supplied rule text.
 
-## Planned sports extension
+Kalshi NO is never relabeled as the opponent. A matching Kalshi YES participant only establishes
+the affirmative mapping; cancellation, tie, and other settlement checks must still pass before
+equivalence.
 
-Extend the matcher and report rather than implementing a separate MCP comparison tool.
+Supported semantic extraction is intentionally narrow. Explicit values such as a two-day
+rescheduling window, included overtime, or a void cancellation payout can match or conflict in
+code. Missing, truncated, unsupported, or differently worded rule text stays `ambiguous` for the
+future Milestone 8 semantic-review path. No Jev call is implemented in Milestone 7.
 
-| Dimension | Required treatment |
-|---|---|
-| Event identity | Both participants, league, scheduled date/time, game number when known, provider evidence |
-| Contract type | Match the same explicitly supported type and period; begin with full-game winners and add type-specific checks for later spreads, totals, props, and futures |
-| Outcome mapping | Exact named-team mapping; do not equate Kalshi NO with the opponent without rules evidence |
-| Postponement | Compare allowed rescheduling windows and original-versus-current game identity |
-| Cancellation | Compare void, fair-value, 50/50, or other payout terms explicitly |
-| Overtime/ties | Compare inclusion and tie settlement under the relevant league |
-| Shortened games | Compare official-result and minimum-completion conditions |
-| Authority | Compare governing-body result requirements and fallback sources |
-| Clocks | Separate scheduled start, trading close, expected resolution, and final deadline |
-| Final relationship | Equivalent, related, incompatible, or insufficient evidence |
+### Market-to-game identity
 
-A later trading close is not itself a conflict with an earlier game start. Genuine identity
-or rule conflicts should remain decisive. A semantic helper may explain unresolved terms,
-but deterministic conflicts and missing evidence must remain visible.
+Sports-state evidence is incorporated only when the user request already required a game-state
+tool call. Each typed `MarketGameAssessment` includes:
 
-Additional contract types require their own outcome, line, subject, and settlement checks.
-A shared game does not make a winner, spread, total, or player prop equivalent. Futures
-require competition and season identity rather than assuming a single-game schedule.
+- Market platform and ID.
+- Opaque game reference, source, observation time, and sporting lifecycle.
+- Dimension checks for league, both participants, scheduled-start drift, and provider-backed
+  identifiers.
+- An overall `match`, `different`, or `insufficient_evidence` verdict and `use_together` flag.
 
-See [Remaining work](../planning/IMPLEMENTATION_PLAN.md) for acceptance criteria and
-[Sports MCP design](SPORTS_MCP.md) for the data already available to that extension.
+This assessment covers sporting-event identity only. It cannot alter the contract pair verdict,
+establish payout semantics, or mark a market settled. A final score cannot upgrade an
+ambiguous/different pair, and a completed sporting lifecycle cannot mark a market settled; only
+explicit market settlement fields establish market settlement. Sports-state unavailability does
+not prevent market-to-market matching.
+
+## Clock policy
+
+The report keeps these clocks independent:
+
+- Scheduled sporting-event start.
+- Trading close.
+- Expected resolution time.
+- Final resolution deadline.
+
+Only scheduled start participates in event identity. Different trading or resolution clocks are
+reported with provenance but do not by themselves make the sporting event different or block an
+otherwise complete sports equivalence decision.
+
+## Generic compatibility
+
+The earlier narrow generic matcher remains available for non-sports contracts. It recognizes
+explicit conditional subjects, YES/NO outcomes, polarity, numeric thresholds, units,
+inclusive/exclusive comparisons, timezone-aware event timestamps, timing operators, selected
+settlement triggers, authority, cancellation clauses, exclusions, and full-rule text.
+
+Its numeric conditional parser is not used as a substitute for sports settlement parsing. An
+equal title, rule prefix, shared game, or related market is never sufficient by itself.
+
+## Verification and limitations
+
+Deterministic and real-MCP scripted-agent tests cover:
+
+- A complete equivalent sports pair without sports-state data.
+- Preserved typed identity and named outcomes through both MCP detail calls and agent synthesis.
+- Wrong opponents, different game numbers, and start drift inside/outside the 30-minute bound.
+- Cancellation payout conflicts, incomplete rules, and truncated/unsupported semantics.
+- Matching and conflicting market/game identity, sports-state unavailability, and final games whose
+  contracts remain non-equivalent or unsettled.
+- Bounded candidate counts, duplicate IDs, generic dangerous near-matches, and independent
+  code-generated notices.
+
+Current support remains limited to MLB, NFL, and NCAA Division I full-game winners with evidence
+that fits the typed and narrow deterministic parsers. Spreads, totals, partial-game markets, props,
+futures, pushes, stat corrections, and season-long identity require type-specific models and tests.
+Semantic equivalence across differently worded but materially identical sports rules remains
+Milestone 8 work; until then, those pairs stay ambiguous rather than being guessed equivalent.
+
+See [Implementation plan](../planning/IMPLEMENTATION_PLAN.md) for milestone gates and
+[Sports MCP design](SPORTS_MCP.md) for provider discovery, identity, and projection contracts.

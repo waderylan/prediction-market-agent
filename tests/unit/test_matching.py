@@ -3,13 +3,26 @@ from datetime import UTC, datetime
 import pytest
 
 from market_agent.domain import CanonicalMarket, Platform
-from market_agent.domain.matching import assess_pair, match_candidates, threshold_clause
+from market_agent.domain.matching import (
+    ContractEvidence,
+    GameEvidence,
+    assess_market_game,
+    assess_pair,
+    match_candidates,
+    threshold_clause,
+)
 from market_agent.providers.kalshi import _parse_market as parse_kalshi
 from market_agent.providers.polymarket import _parse_market as parse_poly
 
 pytestmark = pytest.mark.unit
 RULE = (
     "If Bitcoin is above 100000 USD on 2028-01-01T00:00:00Z, the market resolves Yes. Otherwise No."
+)
+SPORTS_RULE = (
+    "Winner is based on the official league result. Overtime is included. "
+    "Postponements within two days count. If the game is cancelled, the market resolves void. "
+    "If there is a tie, the market resolves void. A shortened official game counts. "
+    "If the game is abandoned, the market resolves void."
 )
 
 
@@ -33,6 +46,68 @@ def market(platform, **changes):
 
 def check(report, dimension):
     return next(c for c in report.checks if c.dimension == dimension)
+
+
+def sports_market(platform, **changes):
+    is_poly = platform == "polymarket"
+    participants = changes.pop("participants", ["New York Yankees", "San Diego Padres"])
+    start = changes.pop("scheduled_start", "2026-09-20T00:10:00Z")
+    target = changes.pop("target", "New York Yankees")
+    game_number = changes.pop("game_number", None)
+    data = {
+        "platform": platform,
+        "market_id": "201" if is_poly else "KXMLBGAME-OPAQUE-0",
+        "event_id": "101" if is_poly else "KXMLBGAME-OPAQUE",
+        "title": "Yankees vs Padres" if is_poly else "Yankees win",
+        "outcomes": participants if is_poly else ["Yes", "No"],
+        "status": "open",
+        "rules": SPORTS_RULE,
+        "rules_truncated": False,
+        "resolution_source": "MLB official results (https://www.mlb.com/)",
+        "close_time": "2026-09-20T00:10:00Z",
+        "resolution_deadline": "2026-09-23T00:10:00Z",
+        "source_url": "https://example.test/market",
+        "retrieved_at": "2026-09-19T23:00:00Z",
+        "sports": {
+            "league": "mlb",
+            "provider_event_id": "101" if is_poly else "KXMLBGAME-OPAQUE",
+            "participants": participants,
+            "market_type": "game_winner",
+            "line": None,
+            "scheduled_start": start,
+            "schedule_source": "provider_schedule",
+            "game_number": game_number,
+        },
+        "outcome_quotes": (
+            [
+                {"label": participant, "canonical_participant": participant}
+                for participant in participants
+            ]
+            if is_poly
+            else [
+                {"label": target, "side": "yes", "canonical_participant": target},
+                {"label": f"Not {target}", "side": "no"},
+            ]
+        ),
+    }
+    data.update(changes)
+    return ContractEvidence.model_validate(data)
+
+
+def game(**changes):
+    data = {
+        "league": "mlb",
+        "game_ref": "opaque-ref",
+        "source": "espn",
+        "provider_game_id": "401",
+        "home_team": "San Diego Padres",
+        "away_team": "New York Yankees",
+        "scheduled_start": "2026-09-20T00:20:00Z",
+        "retrieved_at": "2026-09-20T03:00:00Z",
+        "lifecycle": "final",
+    }
+    data.update(changes)
+    return GameEvidence.model_validate(data)
 
 
 def test_identical_supplied_terms_are_primary_candidates():
@@ -183,3 +258,138 @@ def test_unsupported_prose_and_wrong_platform():
     assert threshold_clause("If an outcome seems likely, resolve Yes") is None
     with pytest.raises(ValueError, match="Expected one"):
         assess_pair(market("kalshi"), market("polymarket"))
+
+
+def test_sports_equivalence_uses_typed_identity_outcomes_and_rules_without_game_state():
+    report = match_candidates([sports_market("polymarket")], [sports_market("kalshi")])
+    pair = report.pairs[0]
+
+    assert pair.verdict == "equivalent"
+    assert pair.relationship == "primary_candidate"
+    assert pair.comparison_allowed
+    assert pair.event_identity is not None and pair.event_identity.verdict == "match"
+    assert pair.contract_equivalence is not None
+    assert pair.contract_equivalence.verdict == "equivalent"
+    mapping = check(pair, "named_outcome_mapping")
+    assert mapping.state == "match"
+    assert "NO is not inferred" in mapping.reason
+    assert report.market_to_game == []
+
+
+@pytest.mark.parametrize(
+    "left_changes,right_changes,dimension",
+    [
+        ({}, {"participants": ["New York Yankees", "Boston Red Sox"]}, "participants"),
+        (
+            {"game_number": 1},
+            {"game_number": 2},
+            "game_number",
+        ),
+        (
+            {},
+            {"scheduled_start": "2026-09-20T00:41:00Z"},
+            "scheduled_start",
+        ),
+    ],
+)
+def test_sports_event_dangerous_near_matches_are_rejected(left_changes, right_changes, dimension):
+    pair = assess_pair(
+        sports_market("polymarket", **left_changes),
+        sports_market("kalshi", **right_changes),
+    )
+
+    assert pair.verdict == "different"
+    assert pair.relationship == "unrelated"
+    assert pair.event_identity is not None
+    identity_check = next(c for c in pair.event_identity.checks if c.dimension == dimension)
+    assert identity_check.state == "different"
+
+
+def test_sports_start_drift_within_thirty_minutes_and_separate_clocks_are_accepted():
+    pair = assess_pair(
+        sports_market(
+            "polymarket",
+            close_time="2026-09-20T00:00:00Z",
+            resolution_deadline="2026-09-22T00:00:00Z",
+        ),
+        sports_market(
+            "kalshi",
+            scheduled_start="2026-09-20T00:40:00Z",
+            close_time="2026-09-20T01:00:00Z",
+            resolution_deadline="2026-09-24T00:00:00Z",
+        ),
+    )
+
+    assert pair.verdict == "equivalent"
+    assert pair.event_identity is not None
+    assert (
+        next(c for c in pair.event_identity.checks if c.dimension == "scheduled_start").state
+        == "match"
+    )
+    assert check(pair, "trading_close").state == "unknown"
+    assert check(pair, "trading_close").required is False
+    assert check(pair, "resolution_deadline").state == "unknown"
+
+
+def test_sports_settlement_conflict_is_related_context_not_equivalent():
+    conflicting = SPORTS_RULE.replace("market resolves void", "market resolves Yes", 1)
+    pair = assess_pair(sports_market("polymarket"), sports_market("kalshi", rules=conflicting))
+
+    assert pair.verdict == "different"
+    assert pair.relationship == "related_context"
+    assert check(pair, "cancellation_payout").state == "different"
+    assert not pair.comparison_allowed
+
+
+def test_missing_sports_settlement_evidence_is_ambiguous_and_routes_to_future_review():
+    pair = assess_pair(
+        sports_market("polymarket"),
+        sports_market("kalshi", rules="Full game winner.", resolution_source=None),
+    )
+
+    assert pair.verdict == "ambiguous"
+    assert pair.review_required
+    assert not pair.comparison_allowed
+    assert pair.semantic_review_route == "milestone_8_jev_not_integrated"
+    assert pair.contract_equivalence is not None
+    assert any(c.state == "unknown" for c in pair.contract_equivalence.checks)
+
+
+def test_market_to_game_report_is_typed_and_game_result_cannot_change_contract_verdict():
+    poly = sports_market("polymarket")
+    kalshi = sports_market(
+        "kalshi",
+        rules=SPORTS_RULE.replace("market resolves void", "market resolves Yes", 1),
+    )
+    report = match_candidates([poly], [kalshi], games=[game(lifecycle="final")])
+
+    assert report.pairs[0].verdict == "different"
+    assert len(report.market_to_game) == 2
+    assert {assessment.verdict for assessment in report.market_to_game} == {"match"}
+    assert all(assessment.use_together for assessment in report.market_to_game)
+    assert all(assessment.game_source == "espn" for assessment in report.market_to_game)
+    assert all(assessment.game_lifecycle == "final" for assessment in report.market_to_game)
+    assert "does not establish contract equivalence" in report.market_to_game[0].scope
+
+
+def test_market_to_game_conflict_and_missing_market_sports_are_explicit():
+    conflict = assess_market_game(
+        sports_market("polymarket"),
+        game(home_team="Boston Red Sox", scheduled_start="2026-09-20T02:00:00Z"),
+    )
+    missing = assess_market_game(market("polymarket"), game())
+
+    assert conflict.verdict == "different"
+    assert not conflict.use_together
+    assert {c.dimension for c in conflict.checks if c.state == "different"} == {
+        "participants",
+        "scheduled_start",
+    }
+    assert missing.verdict == "insufficient_evidence"
+    assert missing.checks[0].state == "insufficient_evidence"
+
+
+def test_sports_state_unavailability_does_not_block_equivalence():
+    report = match_candidates([sports_market("polymarket")], [sports_market("kalshi")], games=[])
+    assert report.pairs[0].verdict == "equivalent"
+    assert report.market_to_game == []

@@ -28,13 +28,15 @@ then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
 | Current game state | ESPN scores/lifecycle/situations; MLB StatsAPI fallback after exact identity matching |
 | Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
-| Comparison boundary | Deterministic contract checks run before synthesis; sports equivalence is not implemented |
+| Comparison boundary | Typed event, named-outcome, and settlement checks run before synthesis for supported full-game winners |
 
-Sports-specific contract matching, external evidence research, forecasting,
-a saved-forecast ledger, and Cloud Run deployment are **future work**. The current agent accepts
-market and game-state schemas and verifies their event identity before combining them, but its
-comparison engine does not establish equivalence between named-team sports contracts. A final
-sporting result does not establish prediction-market settlement.
+Semantic review through Jev, external evidence research, forecasting, a saved-forecast ledger,
+and Cloud Run deployment are **future work**. The current matcher can establish equivalence only
+when complete supplied full-game-winner identity, named-outcome mapping, authority, and settlement
+terms pass every required deterministic check. Missing or unsupported language stays ambiguous;
+explicit identity or settlement conflicts are rejected. Sports-state data is optional corroboration,
+not proof of contract equivalence or settlement.
+A sporting result does not establish prediction-market settlement, even when the game is final.
 
 The product can expand to additional sports and contract types, including spreads, totals,
 props, and futures. These require verified provider mappings, typed models, settlement

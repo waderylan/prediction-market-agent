@@ -38,9 +38,15 @@ def test_project_documents_match_current_capability_and_future_boundaries():
     design = read("docs/research/GAME_STATE_MCP.md")
     assert "third integrated MCP server" in proposal
     assert "| 6. Sports game-state MCP | Complete locally |" in plan
+    assert (
+        "| 7. Sports-aware event identity and deterministic contract matching | Complete locally |"
+        in plan
+    )
     assert "three separate Python stdio processes" in runtime
     assert "live/test_game_state_mcp_live.py" in testing
     assert "final score cannot" in matching
+    assert "Contract-to-contract equivalence" in matching
+    assert "matching_report.market_to_game" in design
     assert "Current sporting state is a separate provider boundary" in feasibility
     for required in (
         "sports_state_find_games",

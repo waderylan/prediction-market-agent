@@ -1,7 +1,7 @@
 """Real MCP discovery/calls and existing agent consumption of additive sports schemas."""
 
 import json
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from copy import deepcopy
 
 import httpx
@@ -316,3 +316,41 @@ async def test_existing_agent_consumes_sports_search_and_detail(provider):
     assert len(messages) == 2 and all(m.status == "success" for m in messages)
     assert json.loads(messages[0].content)["games"][0]["league"] == "mlb"
     assert json.loads(messages[1].content)["outcome_quotes"][0]["price"] == "0.42"
+
+
+async def test_agent_preserves_sports_detail_evidence_in_typed_cross_market_report():
+    @asynccontextmanager
+    async def connect():
+        async with AsyncExitStack() as stack:
+            poly, _ = await stack.enter_async_context(connection("polymarket"))
+            kalshi, _ = await stack.enter_async_context(connection("kalshi"))
+            yield [*await load_mcp_tools(poly), *await load_mcp_tools(kalshi)]
+
+    model = ScriptedModel(
+        replies=[
+            tool_call("polymarket_search_markets", {"query": "Yankees vs Padres"}, "1"),
+            tool_call("polymarket_get_market", {"market_id": "201"}, "2"),
+            tool_call("kalshi_search_markets", {"query": "Yankees vs Padres"}, "3"),
+            tool_call("kalshi_get_market", {"market_id": "KXMLBGAME-OPAQUE-0"}, "4"),
+            AIMessage("The supplied sports terms still require settlement review."),
+        ]
+    )
+
+    answer = await ChatAgent(model, connect).chat("Compare Yankees vs Padres", "sports-pair")
+    assert "Equivalence unverified" in answer
+    messages = [message for message in model.observed[-1] if isinstance(message, ToolMessage)]
+    report = json.loads(messages[-1].content)["matching_report"]
+    pair = report["pairs"][0]
+    assert pair["event_identity"]["verdict"] == "match"
+    assert pair["contract_equivalence"]["verdict"] == "ambiguous"
+    assert (
+        next(
+            check
+            for check in pair["contract_equivalence"]["checks"]
+            if check["dimension"] == "named_outcome_mapping"
+        )["state"]
+        == "match"
+    )
+    assert pair["review_required"] is True
+    assert pair["comparison_allowed"] is False
+    assert report["market_to_game"] == []

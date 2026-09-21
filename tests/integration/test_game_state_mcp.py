@@ -384,11 +384,15 @@ async def test_agent_verifies_market_and_game_identity_before_combining():
     assert "does not establish prediction-market settlement" in response
     messages = [message for message in model.observed[-1] if isinstance(message, ToolMessage)]
     final_tool = json.loads(messages[-1].content)
-    report = final_tool["sports_identity_report"]
+    report = final_tool["matching_report"]["market_to_game"]
     assert report[0]["verdict"] == "match"
-    assert report[0]["checks"] == {
-        "league": True,
-        "participants": True,
-        "scheduled_start": True,
+    assert {check["dimension"]: check["state"] for check in report[0]["checks"]} == {
+        "league": "match",
+        "participants": "match",
+        "scheduled_start": "match",
+        "provider_backed_game_reference": "match",
     }
+    assert report[0]["game_source"] == "espn"
+    assert report[0]["observed_at"]
     assert report[0]["use_together"] is True
+    assert "does not establish contract equivalence" in report[0]["scope"]

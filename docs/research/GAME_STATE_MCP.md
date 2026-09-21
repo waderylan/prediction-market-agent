@@ -195,10 +195,12 @@ result count where available, and sanitized error class. Stdout remains MCP prot
 The model selects game-state tools semantically for score, lifecycle, or situation requests. It
 must discover before detail and ask the user to select when multiple games remain plausible.
 
-When market and game detail coexist, the host independently checks league, both participants, and
-scheduled start within 30 minutes. The model receives `sports_identity_report` with `match`,
-`different`, or `insufficient_evidence`; only `match` permits the observations to be discussed as
-the same scheduled game. This report does not certify equivalent contracts.
+When market and game detail coexist, the host independently checks league, both participants,
+scheduled start within 30 minutes, and provider-backed references. The model receives typed
+`matching_report.market_to_game` assessments whose dimensions and overall verdict are `match`,
+`different`, or `insufficient_evidence`; only an overall `match` permits the observations to be
+discussed as the same scheduled game. Each assessment includes the sports source and observation
+time. This report cannot certify equivalent contracts or market settlement.
 
 Every response that used exact game detail receives a code-generated notice naming source and
 observation time and stating that sporting result does not establish market settlement or contract

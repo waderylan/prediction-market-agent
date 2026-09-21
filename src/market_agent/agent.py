@@ -8,7 +8,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import timedelta
 from importlib.resources import files
 from typing import Any
 
@@ -21,8 +21,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from pydantic import BaseModel, ConfigDict, Field
 
-from market_agent.domain import CanonicalMarket, Platform
-from market_agent.domain.matching import MatchingReport, comparison_notice, match_candidates
+from market_agent.domain import Platform
+from market_agent.domain.matching import (
+    ContractEvidence,
+    GameEvidence,
+    MatchingReport,
+    comparison_notice,
+    match_candidates,
+)
 from market_agent.logging import log_event
 from market_agent.mcp.common import MarketDetail, SearchResults
 from market_agent.mcp.kalshi import KalshiSearchResults, SeriesResults
@@ -70,10 +76,11 @@ Use compact=true for multi-game slate selection when full scoreboard snapshots a
 Do not call game-state tools for ordinary market discovery, contract rules, general sports
 knowledge, or no-tool questions. Game state is authoritative only for its attributed sporting
 observation. Market tools remain authoritative for contract identity, prices, rules, and
-settlement. The host supplies sports_identity_report when market and game observations coexist;
-never combine mismatched or insufficient identities. A final score never proves market settlement
-or contract equivalence. Name the game-state source and retrieved_at observation time, and disclose
-missing, stale, fallback, or conflicting state.
+settlement. The host supplies typed market-to-game checks inside matching_report when market and
+game observations coexist; never combine mismatched or insufficient identities. Sports-state data
+is optional corroboration and is not required for market-to-market matching. A final score never
+proves market settlement or contract equivalence. Name the game-state source and retrieved_at
+observation time, and disclose missing, stale, fallback, or conflicting state.
 For generic Kalshi topics, use kalshi_search_series when it adds a useful precision filter.
 Never invent or construct Kalshi tickers, including date/time/team segments. Only use
 exact market tickers from discovery, user input, or previously retrieved conversation data.
@@ -128,7 +135,6 @@ class AgentState(MessagesState):
     details: list[dict[str, Any]]
     game_states: list[dict[str, Any]]
     matching_report: dict[str, Any] | None
-    sports_identity_report: list[dict[str, Any]]
     activity: list[dict[str, Any]]
 
 
@@ -262,59 +268,6 @@ def _validate_tool_result(
     return validated
 
 
-def _sports_identity_report(
-    details: list[dict[str, Any]], game_states: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Compare only explicit league, participants, and scheduled-game evidence."""
-
-    report: list[dict[str, Any]] = []
-    for game_data in game_states:
-        game = GameState.model_validate(game_data)
-        for market in details:
-            sports = market.get("sports")
-            if not isinstance(sports, dict):
-                continue
-            league_match = sports.get("league") == game.league
-            participants = sports.get("participants")
-            participant_match = isinstance(participants, list) and set(participants) == {
-                game.home_team,
-                game.away_team,
-            }
-            scheduled = sports.get("scheduled_start")
-            schedule_match: bool | None = None
-            if isinstance(scheduled, str):
-                try:
-                    market_start = datetime.fromisoformat(scheduled.replace("Z", "+00:00"))
-                    schedule_match = (
-                        abs((market_start - game.scheduled_start).total_seconds()) <= 30 * 60
-                    )
-                except ValueError:
-                    schedule_match = None
-            checks = {
-                "league": league_match,
-                "participants": participant_match,
-                "scheduled_start": schedule_match,
-            }
-            verdict = (
-                "different"
-                if any(value is False for value in checks.values())
-                else "match"
-                if all(value is True for value in checks.values())
-                else "insufficient_evidence"
-            )
-            report.append(
-                {
-                    "market_platform": market["platform"],
-                    "market_id": market["market_id"],
-                    "game_ref": game.game_ref,
-                    "verdict": verdict,
-                    "checks": checks,
-                    "use_together": verdict == "match",
-                }
-            )
-    return report
-
-
 def _record_game_state(game_states: list[dict[str, Any]], state: GameState) -> list[dict[str, Any]]:
     snapshot = state.model_dump(mode="json")
     retained = [saved for saved in game_states if saved["game_ref"] != state.game_ref]
@@ -334,7 +287,7 @@ def _game_state_notice(states: list[dict[str, Any]]) -> str | None:
 
 def _record_market_detail(
     details: list[dict[str, Any]], detail: MarketDetail
-) -> tuple[list[dict[str, Any]], MatchingReport | None]:
+) -> list[dict[str, Any]]:
     snapshot = detail.model_dump(mode="json")
     updated_details = [
         saved
@@ -342,19 +295,26 @@ def _record_market_detail(
         if (saved["platform"], saved["market_id"]) != (snapshot["platform"], snapshot["market_id"])
     ]
     updated_details.append(snapshot)
+    return updated_details
 
+
+def _matching_report(
+    details: list[dict[str, Any]], game_states: list[dict[str, Any]]
+) -> MatchingReport | None:
     # The per-turn tool budget bounds this list to four snapshots.
-    canonical = [CanonicalMarket.model_validate(saved) for saved in updated_details]
+    contracts = [ContractEvidence.model_validate(saved) for saved in details]
+    games = [GameEvidence.model_validate(saved) for saved in game_states]
     report = match_candidates(
-        [market for market in canonical if market.platform == Platform.POLYMARKET],
-        [market for market in canonical if market.platform == Platform.KALSHI],
+        [market for market in contracts if market.platform == Platform.POLYMARKET],
+        [market for market in contracts if market.platform == Platform.KALSHI],
         truncated={
             (Platform(saved["platform"]), saved["market_id"])
-            for saved in updated_details
+            for saved in details
             if saved["rules_truncated"]
         },
+        games=games,
     )
-    return updated_details, report if report.pairs else None
+    return report if report.pairs or report.market_to_game else None
 
 
 class ChatAgent:
@@ -426,7 +386,6 @@ class ChatAgent:
             details = list(state["details"])
             game_states = list(state["game_states"])
             matching_report = state["matching_report"]
-            sports_identity_report = list(state["sports_identity_report"])
             activity = list(state["activity"])
             for call in message.tool_calls:
                 name = call["name"]
@@ -451,10 +410,8 @@ class ChatAgent:
                             content = validated.model_dump_json()
                             summary = _tool_summary(validated)
                             if isinstance(validated, MarketDetail):
-                                details, report = _record_market_detail(details, validated)
-                                sports_identity_report = _sports_identity_report(
-                                    details, game_states
-                                )
+                                details = _record_market_detail(details, validated)
+                                report = _matching_report(details, game_states)
                                 additions: dict[str, Any] = {
                                     "market": validated.model_dump(mode="json")
                                 }
@@ -469,26 +426,24 @@ class ChatAgent:
                                     verdicts = ", ".join(
                                         sorted({pair.verdict for pair in report.pairs})
                                     )
-                                    summary += f" Contract check: {verdicts}."
-                                if sports_identity_report:
-                                    additions["sports_identity_report"] = sports_identity_report
+                                    if verdicts:
+                                        summary += f" Contract check: {verdicts}."
                                 if len(additions) > 1:
                                     content = json.dumps(additions)
                             elif isinstance(validated, GameState):
                                 game_states = _record_game_state(game_states, validated)
-                                sports_identity_report = _sports_identity_report(
-                                    details, game_states
-                                )
-                                content = json.dumps(
-                                    {
-                                        "game_state": validated.model_dump(mode="json"),
-                                        "sports_identity_report": sports_identity_report,
-                                        "market_settlement_notice": (
-                                            "Sporting state does not establish market settlement "
-                                            "or contract equivalence."
-                                        ),
-                                    }
-                                )
+                                report = _matching_report(details, game_states)
+                                additions = {
+                                    "game_state": validated.model_dump(mode="json"),
+                                    "market_settlement_notice": (
+                                        "Sporting state does not establish market settlement "
+                                        "or contract equivalence."
+                                    ),
+                                }
+                                if report is not None:
+                                    matching_report = report.model_dump(mode="json")
+                                    additions["matching_report"] = matching_report
+                                content = json.dumps(additions)
                             status = "success"
                             activity_status = "success"
                     except Exception:
@@ -526,7 +481,6 @@ class ChatAgent:
                 "details": details,
                 "game_states": game_states,
                 "matching_report": matching_report,
-                "sports_identity_report": sports_identity_report,
                 "activity": activity,
             }
 
@@ -597,7 +551,6 @@ class ChatAgent:
                             "details": [],
                             "game_states": [],
                             "matching_report": None,
-                            "sports_identity_report": [],
                             "activity": [],
                         },
                         {"configurable": {"thread_id": session_id}, "recursion_limit": 12},

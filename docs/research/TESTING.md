@@ -21,14 +21,14 @@ No test requires a particular game to be open.
 | Tests | Contract being verified |
 |---|---|
 | `unit/test_sports.py` | Exact aliases, local dates/ranges, selectors, grouping, continuation, lifecycle, settlement, coverage, cancellation, malformed data, quote semantics |
-| `integration/test_sports_mcp.py` | Actual tools/list schemas and tools/call results, invalid limit rejection, clarification without HTTP, safe errors, agent schema consumption |
+| `integration/test_sports_mcp.py` | Actual tools/list schemas and tools/call results, invalid limit rejection, clarification without HTTP, safe errors, agent schema consumption, typed cross-market sports report |
 | `unit/test_game_state.py` | Game identity/state parsing, lifecycle, situation nulls/bounds, refs, cache, retry/size limits, cancellation, MLB fallback |
 | `integration/test_game_state_mcp.py` | Third server tools/list and tools/call, strict schemas, errors, agent routing, market/game identity, settlement separation |
 | `live/test_game_state_mcp_live.py` | Current ESPN/MLB compatibility through the independent stdio process across all three leagues |
 | `live/test_sports_mcp_live.py` | Independent stdio processes, current public API compatibility, searches across MLB/NFL/NCAA, detail retrieval when a candidate exists |
 | Provider unit tests | Parsing, status, identity, arrays, retries, transport and HTTP errors |
 | MCP integration tests | Discovery/detail, input/output schema validation, oversized data, lifecycle and partial server availability |
-| `unit/test_matching.py` | Deterministic matching and conservative ambiguity |
+| `unit/test_matching.py` | Generic and sports-aware deterministic matching, typed market/game identity, dangerous near-matches, conservative ambiguity |
 | `integration/test_chat.py`, `integration/test_stdio.py` | Graph control flow, memory, real adapter/subprocess invocation, dependency failure |
 
 The sports suite specifically verifies:
@@ -63,6 +63,11 @@ The sports suite specifically verifies:
 - Injected timeout, 429, 503, and malformed-response transports exercise outage behavior without a
   production failure switch; a platform-specific failure never substitutes the other provider.
 - The agent receives the sports schema through real MCP and validates it.
+- Market detail preserves typed event identity and named outcomes through the host matching path.
+- Equivalent full-game-winner fixtures pass without sports-state data; missing settlement evidence
+  stays ambiguous and explicit identity, outcome, or settlement conflicts are rejected.
+- Wrong opponents, different game numbers, start drift beyond 30 minutes, and cancellation payout
+  conflicts remain distinct even with similar titles.
 
 The game-state suite additionally verifies:
 
@@ -77,8 +82,9 @@ The game-state suite additionally verifies:
   200-event pages, ten candidates, external cancellation, and 256-entry lifecycle-aware cache.
 - ESPN transport/HTTP/schema failures, no NFL/NCAA substitution, exact MLB schedule/live-feed
   fallback, ambiguous doubleheader refusal, response identity conflicts, and provider conflicts.
-- Host validation of league/participants/start before market/state combination and an enforced
-  separation between final score and prediction-market settlement.
+- Typed host validation of league/participants/start/provider references before market/state
+  combination, plus matching/conflicting state, unavailable state, and an enforced separation
+  between final score, contract equivalence, and prediction-market settlement.
 
 ## Public checks
 

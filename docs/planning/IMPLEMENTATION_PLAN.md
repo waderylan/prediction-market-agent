@@ -22,7 +22,7 @@
 | 4. Local vertical slice | Complete locally |
 | 5. Kalshi MCP, routing, and sports discovery | Complete at the MCP/provider layer |
 | 6. Sports game-state MCP | Complete locally |
-| 7. Sports-aware deterministic matching | In progress |
+| 7. Sports-aware event identity and deterministic contract matching | Complete locally |
 | 8. Jev sports-contract equivalence | Planned |
 | 9. Bounded sports evidence research | Planned |
 | 10. Complete sports agent and forecast output | Planned |
@@ -745,48 +745,99 @@ Multi-server MCP client
 - Do not add a paid dependency merely to preserve this optional product capability; the assignment
   already satisfies its minimum two-server requirement with Kalshi and Polymarket.
 
-### Milestone 7: Sports-Aware Deterministic Contract Matching
+### Milestone 7: Sports-Aware Event Identity and Deterministic Contract Matching
 
 #### Work
 
-- Generate bounded candidate pairs from the two market results.
-- Reject clear mismatches in code before any model call.
-- Compare:
-  - League, season, both participants, provider event identity evidence, and game number.
-  - Scheduled start in a shared timezone, without substituting trading close or resolution time.
-  - Full-game market type, line or threshold, and named outcome mapping.
-  - Resolution authority and official-result requirements.
-  - Postponement windows, cancellation payouts, overtime, ties, shortened games, abandoned games,
-    and material exclusions.
-- Treat missing or inconsistent sports evidence as insufficient evidence, not equivalence.
+- Extend the existing bounded matching report rather than adding a separate MCP comparison tool.
+- Consume typed sports identity and outcome quotes from both market-detail results instead of
+  dropping those fields when constructing matcher inputs.
+- Use three explicitly separate deterministic checks:
+  1. **Market-to-market event identity:** compare league, season, both canonical participants,
+     provider event identity evidence, game number when available, scheduled start in a shared
+     timezone, and full-game market type.
+  2. **Market-to-game identity:** when a sports-state observation is already required by the user
+     or the requested analysis, compare each market with that observation's league, both
+     participants, scheduled start, and provider-backed game reference.
+  3. **Contract-to-contract equivalence:** compare named outcome mapping, line or threshold,
+     resolution authority, official-result requirements, postponement windows, cancellation
+     payouts, overtime, ties, shortened or abandoned games, and material exclusions.
+- Make sports-state evidence optional corroboration. An unavailable sports-state server must not
+  prevent market-to-market matching, and an ordinary contract comparison must not call it solely
+  to satisfy the matcher.
+- Allow sports-state evidence to confirm or reject real-world game identity, but never to establish
+  contract equivalence, market settlement, or payout semantics and never to override conflicting
+  market terms.
+- Keep scheduled start, trading close, expected resolution, and resolution deadline as separate
+  clocks. A shifted trading or resolution clock is not automatically a different sporting event.
+- Reject clear identity or settlement mismatches in code before any model call.
+- Treat missing or inconsistent identity, outcome, or settlement evidence as insufficient evidence,
+  not equivalence.
 - Never assume that one Kalshi team's NO outcome equals the opponent's YES contract without
   settlement evidence.
-- Separate primary equivalent candidates from related contextual contracts.
-- Return explicit reasons for rejection or ambiguity.
+- Separate primary equivalent candidates from related contextual contracts and unrelated games.
+- Return one typed report with explicit dimension-level evidence, provenance, and reasons for
+  rejection or ambiguity. Preserve the independent code-generated eligibility notice in the final
+  response.
+
+#### Decision Rules
+
+- Any definite event-identity, outcome-mapping, or settlement-rule conflict produces `different`.
+- Missing required identity or settlement evidence produces `ambiguous` and routes the pair for
+  semantic review.
+- `equivalent` requires all required market-to-market identity, outcome, and settlement checks to
+  pass. Sports-state corroboration can strengthen the report but is not a prerequisite.
+- A final sports score or completed lifecycle never upgrades a contract pair to `equivalent` and
+  never marks either market settled. Only explicit market settlement fields can establish the
+  latter.
 
 #### Exit Criteria
 
 - Obvious mismatches are rejected deterministically.
 - Related markets are labeled as context, not equivalent contracts.
+- A typed market-to-game report replaces the current loose dictionary and distinguishes `match`,
+  `different`, and `insufficient_evidence` for every checked dimension.
+- Equivalent market contracts can be identified without requiring the sports-state MCP.
+- Optional sports-state evidence is combined only after exact identity validation and is presented
+  with its source and observation time.
 - Ambiguous sports-rule cases are routed to the Jev milestone for review.
 - Tests include dangerous near-matches, not only easy positive pairs.
 - Tests keep doubleheaders, wrong opponents, different game numbers, and different settlement
   treatment distinct even when titles are similar.
+- Tests cover matching and conflicting sports-state observations, acceptable and unacceptable
+  start-time drift, sports-state unavailability, and a completed game whose markets remain
+  unsettled or non-equivalent.
 
 #### Pivot Point
 
 - Keep the matcher limited to supported full-game winners if additional sports or contract types
   lack the typed identity and settlement evidence required for safe comparison.
+- If live sports-state availability or identity quality is unreliable, keep it as optional context;
+  do not weaken validation or make contract comparison depend on it.
 
 #### Current State
 
-- **Status:** In progress.
-- The bounded generic matcher, deterministic vetoes, conservative verdicts, contextual labels,
-  independent eligibility notice, and pre-synthesis matching report are implemented.
-- Provider discovery supplies typed sports identity but intentionally marks comparison eligibility
-  as insufficient until the matcher evaluates both contracts' settlement evidence.
-- Sports-aware dimensions and regression cases in this milestone remain required before a
-  cross-platform sports price difference is presented as like-for-like.
+- **Status:** Complete locally for supported full-game winners.
+- Market-detail sports identity and named outcome quotes survive host validation in typed
+  `ContractEvidence` inputs. The bounded matcher returns separate typed event-identity,
+  contract-equivalence, and optional market-to-game assessments with dimension provenance.
+- Event checks cover league, derived or supplied season, both canonical participants, each
+  provider's internal event identity, scheduled-start drift, full-game type, and game number when
+  available. Settlement checks cover affirmative named-outcome mapping, line, authority, official
+  result, postponement, cancellation, overtime/extra innings, ties, shortened and abandoned games,
+  exclusions, and complete supplied rule text.
+- Trading close, expected resolution, and final resolution deadline remain separate informational
+  clocks and do not identify the sporting event. Missing or unsupported required evidence stays
+  ambiguous; explicit identity, outcome, or settlement conflicts remain deterministic vetoes.
+- Milestone 6 game state is incorporated only when already retrieved for the user's request. Typed
+  market-to-game checks expose source and observation time, and cannot alter contract equivalence
+  or market settlement. Market-only equivalence works without the sports-state MCP.
+- Unit and real-MCP scripted-agent regressions cover positive pairs, named outcomes, wrong
+  opponents, doubleheaders/game numbers, acceptable and unacceptable start drift, rule conflicts,
+  missing evidence, sports-state conflicts/unavailability, and final games with non-equivalent or
+  unsettled markets.
+- Ambiguous sports semantics are labeled for the not-yet-integrated Milestone 8 Jev review path;
+  no Jev call or Milestone 8 behavior is implemented here.
 - `../research/CONTRACT_MATCHING.md` defines the matcher boundary and evidence policy.
 
 ### Milestone 8: Jev Sports-Contract Equivalence Evaluation

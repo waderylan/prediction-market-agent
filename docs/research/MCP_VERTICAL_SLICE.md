@@ -52,9 +52,10 @@ metadata; provider response bodies and credential values do not become tool-erro
 
 The sports-state host path validates its distinct discovery/detail schemas, requires the returned
 opaque reference, and checks the situation discriminator against the league. When market and game
-details coexist, code compares league, both participants, and scheduled start before model
-synthesis. Every exact state response names source/time and states that sporting results do not
-establish market settlement.
+details coexist, the typed matching report compares league, both participants, scheduled start,
+and provider-backed references before model synthesis. Every exact state response names
+source/time and states that sporting results do not establish contract equivalence or market
+settlement.
 
 ## Sports adaptation
 
@@ -87,9 +88,12 @@ When both providers' detail snapshots are available, the graph invokes the
 bounded deterministic matcher and supplies a `matching_report` before synthesis.
 A code-generated notice also keeps comparison eligibility visible independently of model prose.
 
-That engine supports a narrow generic contract model; it does not consume the full sports
-identity/rule model for equivalence. Named-team sports comparison is future work in the same
-pipeline, not a second MCP service. See [Matching](CONTRACT_MATCHING.md).
+For supported full-game winners, that engine consumes typed sports identity and named outcome
+quotes from both detail results. It separately evaluates market-to-market event identity,
+contract settlement equivalence, and optional market-to-game identity. Missing required evidence
+stays ambiguous, deterministic conflicts veto comparison, and differing close/resolution clocks do
+not replace scheduled-game identity. Semantic Jev review remains future work in the same pipeline,
+not a second MCP service. See [Matching](CONTRACT_MATCHING.md).
 
 ## Local development and deployment
 
