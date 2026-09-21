@@ -19,7 +19,7 @@ Each result groups outcome contracts by game and preserves provider identity and
 alongside canonical participants, localized kickoff, game lifecycle, quote freshness, and bounded
 discovery coverage. Exact local dates, ranges, next/recent selection, and continuation cursors keep
 common searches direct. A detail call supplies settlement rules and explicit resolution. The
-FastAPI/LangGraph application invokes all three servers through real MCP and retains session
+FastAPI/LangGraph application invokes all four servers through real MCP and retains session
 context.
 
 The sports-state MCP separately finds a supported game by team, league, one local calendar day,
@@ -28,6 +28,12 @@ ESPN is the primary free source. MLB StatsAPI is an MLB-only fallback after exac
 matching; NFL and NCAA football fail honestly when ESPN is unavailable. The result includes score,
 lifecycle, observation provenance, and one nullable league-specific situation object. It does not
 provide odds, forecasts, contract identity, or settlement.
+
+The Tavily MCP adds bounded current evidence only after one exact game is identified. It searches
+for injuries, lineups, weather, venue/schedule changes, or other game news; retains at most five
+HTTPS sources naming both teams and the exact date; preserves source provenance; and exposes the
+text as untrusted evidence. The graph permits at most two such searches per turn. Tavily cannot
+establish game state, contract equivalence, market settlement, or a forecast.
 
 Representative requests:
 
@@ -55,14 +61,12 @@ The server never silently maps a school into another competition.
 
 ## Future product work
 
-The next sports capability is a defensible comparison of two identified contracts. It must
-extend the deterministic matching pipeline, not create a parallel MCP matching system.
-Only after event, outcome, and settlement equivalence is established should the application
-present a comparable price difference.
+The next sports capability is the complete evidence-based forecast workflow. It must combine the
+implemented market, game-state, deterministic comparison, and bounded research paths without
+turning weak or conflicting evidence into false confidence.
 
-Later optional work includes bounded external evidence research through a fourth MCP server,
-an evaluated semantic-equivalence helper, an evidence-based forecast, and an explicitly
-requested saved research snapshot. These are plans, not current capabilities.
+Later optional work includes an explicitly requested saved research snapshot. It is not a current
+capability.
 
 The forecast design should use named outcomes for sports. A generic YES/NO recommendation
 must not erase which team, game, or cancellation rule it refers to. The application must
@@ -78,13 +82,13 @@ abstain when equivalence or evidence is insufficient.
 
 ## Assignment commitments
 
-The project retains two independent market MCP servers and one independent sports-state server
+The project retains two independent market MCP servers, one independent sports-state server, and
+one independent bounded Tavily server
 with actual `tools/list` and `tools/call`, model-driven tool choice, framework-native session
 memory, and the required `POST /chat` contract. Cloud Run deployment, a live grading URL, source
 ZIP, README diagrams, and Rylan Wade's personal `PROCESS_LOG.md` remain submission obligations.
 
-The sports-state process is the third integrated MCP server and uses free, unauthenticated
-providers without a new secret or paid dependency.
+The sports-state process is the third integrated MCP server. Bounded Tavily research is the fourth integrated MCP server; its key is optional because the official keyless access mode supports local verification.
 Personal reflections must come from Rylan Wade. Technical development evidence in the
 automatic transcript does not replace that authorship.
 

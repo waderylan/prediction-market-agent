@@ -26,6 +26,9 @@ No test requires a particular game to be open.
 | `integration/test_game_state_mcp.py` | Third server tools/list and tools/call, strict schemas, errors, agent routing, market/game identity, settlement separation |
 | `live/test_game_state_mcp_live.py` | Current ESPN/MLB compatibility through the independent stdio process across all three leagues |
 | `live/test_sports_mcp_live.py` | Independent stdio processes, current public API compatibility, searches across MLB/NFL/NCAA, detail retrieval when a candidate exists |
+| `unit/test_research.py` | Fixed Tavily request shape, key/keyless authentication, game/date filtering, URL safety, provenance, sanitization, malformed data |
+| `integration/test_tavily_mcp.py` | Fourth-server tools/list and tools/call, strict schema, typed evidence, safe provider errors, invalid-input rejection |
+| `live/test_tavily_mcp_live.py` | Current keyless Tavily compatibility through the independent stdio MCP process |
 | Provider unit tests | Parsing, status, identity, arrays, retries, transport and HTTP errors |
 | MCP integration tests | Discovery/detail, input/output schema validation, oversized data, lifecycle and partial server availability |
 | `unit/test_matching.py` | Generic and sports-aware deterministic matching, typed market/game identity, dangerous near-matches, conservative ambiguity |
@@ -88,11 +91,22 @@ The game-state suite additionally verifies:
   combination, plus matching/conflicting state, unavailable state, and an enforced separation
   between final score, contract equivalence, and prediction-market settlement.
 
+The Tavily suite additionally verifies:
+
+- One game-scoped tool; no arbitrary query, extraction, crawl, map, or research surface.
+- Exact typed league/team/date/start context before provider I/O and a hard two-search graph budget.
+- Five-result request bounds, HTTPS-only sources, participant/date relationship checks, duplicate
+  and private-address rejection, bounded snippets, publication/retrieval provenance, and no raw
+  provider payload.
+- Keyless and optional bearer-key paths without key/error leakage.
+- Malformed, rate-limited, unavailable, and empty-result behavior through real MCP calls.
+- Deterministic source listing and useful synthesis from existing market evidence when Tavily fails.
+
 ## Public checks
 
 ```powershell
 $env:RUN_LIVE_SMOKE = "1"
-uv run pytest tests/live/test_game_state_mcp_live.py tests/live/test_sports_mcp_live.py tests/live/test_market_clients_live.py tests/live/test_kalshi_mcp_live.py tests/live/test_polymarket_mcp_live.py -s
+uv run pytest tests/live/test_game_state_mcp_live.py tests/live/test_sports_mcp_live.py tests/live/test_tavily_mcp_live.py tests/live/test_market_clients_live.py tests/live/test_kalshi_mcp_live.py tests/live/test_polymarket_mcp_live.py -s
 Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
@@ -122,7 +136,7 @@ Real-model checks use `RUN_LIVE_AGENT=1` and a configured backend with
 `tests/live/test_chat_live.py`. They can incur model costs and are separate from provider checks.
 
 Cloud Run acceptance remains required: verify the deployed URL, arbitrary reasonable queries,
-session recall, all three MCP servers, and controlled failure cases. Local tests do not establish
+session recall, all four MCP servers, and controlled failure cases. Local tests do not establish
 a completed deployment.
 
 ## Expansion gate

@@ -13,5 +13,10 @@
     "transport": "stdio",
     "command": "python",
     "args": ["-m", "market_agent.mcp.sports_state"]
+  },
+  "tavily": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["-m", "market_agent.mcp.tavily"]
   }
 }

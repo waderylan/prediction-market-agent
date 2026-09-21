@@ -13,10 +13,10 @@ unauthenticated, and not durable or automatically evicted.
 
 ## MCP lifecycle
 
-The packaged `mcp/servers.json` manifest describes three separate Python stdio processes:
-Kalshi, Polymarket, and sports game state. The client substitutes the running Python interpreter, initializes
-each session, discovers tools through `tools/list`, and loads them through
-`langchain-mcp-adapters`.
+The packaged `mcp/servers.json` manifest describes four separate Python stdio processes:
+Kalshi, Polymarket, sports game state, and bounded Tavily game research. The client substitutes the
+running Python interpreter, initializes each session, discovers tools through `tools/list`, and
+loads them through `langchain-mcp-adapters`.
 
 Sessions are owned by the current request and closed together. Each server lifespan owns
 one asynchronous provider client; injected test clients remain caller-owned. A provider
@@ -31,9 +31,10 @@ does not install a second FastMCP framework or emulate JSON-RPC in application c
 
 ## Tool execution and validation
 
-The model chooses tools semantically. The graph permits four tool calls, then performs
-a final synthesis without bound tools. Tool arguments are validated by the MCP schema,
-and structured results are validated again by the host before model use.
+The model chooses tools semantically. The graph permits four market/state attempts plus two Tavily
+searches, then performs a final synthesis without bound tools. Separate per-turn counters prevent
+repeated model requests from bypassing either budget. Tool arguments are validated by the MCP
+schema, and structured results are validated again by the host before model use.
 
 The host checks provider identity and requested detail IDs. Each tool result has bounded
 models with decimal strings and explicit nulls. Detail rules are limited to 12,000 characters
@@ -82,6 +83,19 @@ The independent [game-state MCP](GAME_STATE_MCP.md) uses ESPN for bounded one-da
 detail, with exact-identity MLB StatsAPI fallback only after primary failure. It shares the team
 catalog but never supplies market identity, price, rules, or settlement.
 
+## Research path
+
+The independent [Tavily research MCP](WEB_RESEARCH_MCP.md) exposes one game-scoped search tool.
+The host blocks it until its league, participant pair, date, and scheduled start exactly match a
+typed market or game-state detail observed in the same turn. The server constructs the query,
+inspects exactly five results, and retains only HTTPS sources naming both teams and the exact date. Typed output preserves
+source title, URL, optional publication date, retrieval time, snippet, relevance, relationship, and
+rejection count. Source text is bounded and untrusted.
+
+Generic Tavily extraction, crawl, map, and research are intentionally absent. Search failure is a
+tool-level error; it does not discard already verified market or game-state data. The response
+lists only URLs actually returned by successful research calls.
+
 ## Matching path
 
 When both providers' detail snapshots are available, the graph invokes the
@@ -103,7 +117,7 @@ The local UI starts the HTTP application and an optional host Codex gateway. The
 only supplies model decisions. The application still owns memory and MCP calls.
 CLI authentication remains outside the container.
 
-The Docker image uses locked runtime dependencies, contains the three application MCP modules and
+The Docker image uses locked runtime dependencies, contains the four application MCP modules and
 their reference data, runs as a non-root user, and reads `PORT`.
 Cloud Run deployment is still required. A cloud-accessible backend, one worker, and one
 instance preserve the assignment's instance-lifetime memory expectation.

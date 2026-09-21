@@ -25,7 +25,7 @@
 | 7. Sports-aware event identity and deterministic contract matching | Complete; simplified by Milestone 8A |
 | 8. Jev sports-contract equivalence | Removed by Milestone 8A |
 | 8A. Contract-matching value evaluation and retention decision | Complete locally |
-| 9. Bounded sports evidence research | Planned |
+| 9. Bounded sports evidence research | Complete locally |
 | 10. Complete sports agent and forecast output | Planned |
 | 11. Unified multi-MCP sports intelligence brief | Tentative idea; optional and not required |
 | 12. Optional sports-research ledger | Optional |
@@ -76,7 +76,7 @@
 - Search-query construction and candidate-ranking logic.
 - Canonical market-model fields beyond the minimum required fields.
 - Exact MCP tool arguments and result schemas after API experiments.
-- Tavily result and extraction limits within the bounded-research requirement.
+- Tavily query and result limits within the bounded-research requirement.
 - Internal Python module layout.
 - Whether the SQLite sports-research ledger is completed for Assignment 1 or retained as a
   stretch milestone.
@@ -102,7 +102,7 @@ Multi-server MCP client
   |-- Polymarket MCP ------> Polymarket public APIs
   |-- Kalshi MCP ----------> Kalshi public APIs
   |-- Sports-state MCP ----> ESPN public JSON / MLB StatsAPI fallback
-  |-- Tavily MCP ----------> Search and extraction
+  |-- Tavily MCP ----------> Bounded game-scoped search
   `-- SQLite MCP ----------> Optional sports-research ledger
 ```
 
@@ -146,8 +146,14 @@ Multi-server MCP client
 
 ### Tavily MCP
 
-- Use the supported Tavily search and extraction tools.
-- Enforce budgets in application state rather than relying only on the prompt.
+- `tavily_search_game_evidence`
+  - Input: league, both exact canonical team names, one game date, scheduled start, and one
+    evidence focus.
+  - Output: at most five typed same-matchup/date sources with title, HTTPS URL, publication date when
+    supplied, retrieval time, snippet, relevance score, and relationship.
+- Construct queries in the server instead of accepting arbitrary web queries.
+- Enforce a maximum of two searches in application state rather than relying only on the prompt.
+- Do not expose Tavily crawl, map, research, or arbitrary extraction tools.
 
 ### Sports Game-State MCP
 
@@ -994,6 +1000,36 @@ only because it has already been implemented.
 
 - Adjust research limits using observed latency, cost, and answer quality.
 - Remove extraction if search snippets provide enough evidence for the assignment demonstration.
+
+#### Current State
+
+- **Status:** Complete locally.
+- The fourth application server is a student-authored Tavily MCP projection with one read-only
+  `tavily_search_game_evidence` tool. The agent performs real MCP discovery and invocation; the
+  server performs one bounded Tavily Search API request.
+- The original generic Tavily MCP was evaluated through real discovery and a live call. It exposed
+  broad crawl, map, research, and extraction tools, returned search output as untyped text, and
+  omitted available publication dates and relevance scores. The implemented projection preserves
+  those fields in a strict schema and matches the safety style of the other application servers.
+- Research is host-blocked until supplied league, teams, game date, and scheduled start exactly
+  match a typed market detail or game-state detail from the same turn. Each server call constructs
+  its query, requests exactly five results, retains only HTTPS results naming both teams and the
+  exact date, and returns bounded snippets as explicitly untrusted data.
+- Per-turn graph state permits at most two research searches in addition to the existing four
+  market/state calls. Search failures remain tool-level errors and the agent answers with already
+  verified market or game evidence.
+- Extraction was removed at the documented pivot point. Live search snippets contained enough
+  event-specific evidence, while arbitrary URL extraction would add latency and prompt-injection
+  surface without a demonstrated Milestone 9 need. The effective extraction budget is therefore
+  zero, stricter than the provisional maximum of three.
+- Tavily supports an optional API key. With no key, the server uses the official Tavily MCP's
+  keyless search mode; no credential is required for local verification.
+- A final 2026-09-20 real stdio MCP check for Marlins–Padres injuries returned one verified
+  same-matchup/date source and rejected four results that failed the identity/date filter.
+- Deterministic fixtures cover strict schemas, malformed responses, HTTP/rate failures, secret
+  redaction, same-city opponent rejection, identity filtering, pre-detail blocking, the two-search
+  budget, source citations, and useful partial answers when research fails.
+- `../research/WEB_RESEARCH_MCP.md` defines the implemented contract and extension boundary.
 
 ### Milestone 10: Complete Sports Agent Workflow and Forecast Output
 

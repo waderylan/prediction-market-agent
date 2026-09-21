@@ -15,7 +15,9 @@ from test_chat import ScriptedModel, tool_call
 from market_agent.agent import ChatAgent
 from market_agent.mcp.kalshi import create_server as kalshi_server
 from market_agent.mcp.polymarket import create_server as poly_server
+from market_agent.mcp.tavily import create_server as tavily_server
 from market_agent.providers import KalshiClient, PolymarketClient
+from market_agent.providers.research import TavilyResearchClient
 
 pytestmark = pytest.mark.integration
 
@@ -133,6 +135,39 @@ async def connection(provider, mode="success"):
             http_client=http, max_retries=0
         )
         server = (kalshi_server if provider == "kalshi" else poly_server)(client)
+        async with create_connected_server_and_client_session(server) as session:
+            yield session, calls
+
+
+@asynccontextmanager
+async def tavily_connection(mode="success"):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if mode == "error":
+            return httpx.Response(503, text="sensitive research diagnostic")
+        return httpx.Response(
+            200,
+            json={
+                "query": "generated query",
+                "request_id": "request-1",
+                "results": [
+                    {
+                        "title": "Yankees vs Padres injuries — September 20, 2026",
+                        "url": "https://sports.example/yankees-padres",
+                        "content": (
+                            "New York Yankees and San Diego Padres play on September 20, 2026."
+                        ),
+                        "score": 0.9,
+                        "published_date": "Sun, 20 Sep 2026 16:00:00 GMT",
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        server = tavily_server(TavilyResearchClient(http_client=http))
         async with create_connected_server_and_client_session(server) as session:
             yield session, calls
 
@@ -354,3 +389,214 @@ async def test_agent_preserves_sports_detail_evidence_in_typed_cross_market_repo
     assert pair["review_required"] is True
     assert pair["comparison_allowed"] is False
     assert report["market_to_game"] == []
+
+
+async def test_agent_researches_only_after_exact_detail_and_cites_typed_sources():
+    @asynccontextmanager
+    async def connect():
+        async with AsyncExitStack() as stack:
+            poly, _ = await stack.enter_async_context(connection("polymarket"))
+            tavily, tavily_calls = await stack.enter_async_context(tavily_connection())
+            connect.tavily_calls = tavily_calls
+            yield [*await load_mcp_tools(poly), *await load_mcp_tools(tavily)]
+
+    connect.tavily_calls = []
+    research_args = {
+        "league": "mlb",
+        "team_a": "New York Yankees",
+        "team_b": "San Diego Padres",
+        "game_date": "2026-09-20",
+        "scheduled_start": "2026-09-20T00:10:00Z",
+        "focus": "injuries",
+    }
+    model = ScriptedModel(
+        replies=[
+            tool_call("polymarket_search_markets", {"query": "Yankees vs Padres"}, "1"),
+            tool_call("polymarket_get_market", {"market_id": "201"}, "2"),
+            tool_call("tavily_search_game_evidence", research_args, "3"),
+            AIMessage(
+                "The retrieved injury report is relevant: https://sports.example/yankees-padres"
+            ),
+        ]
+    )
+
+    turn = await ChatAgent(model, connect).chat_detailed(
+        "Research injuries for Yankees vs Padres", "sports-research"
+    )
+
+    assert len(connect.tavily_calls) == 1
+    assert "Tavily research: 1 bounded search" in turn.response
+    assert "https://sports.example/yankees-padres" in turn.response
+    assert turn.activity[-1].server == "tavily"
+    assert turn.activity[-1].status == "success"
+    message = next(
+        item
+        for item in reversed(model.observed[-1])
+        if isinstance(item, ToolMessage) and "untrusted_content_notice" in item.content
+    )
+    result = json.loads(message.content)
+    assert result["sources"][0]["relationship"] == "same_matchup_date"
+    assert result["sources"][0]["retrieved_at"]
+
+
+async def test_agent_blocks_tavily_before_typed_game_detail_without_upstream_call():
+    @asynccontextmanager
+    async def connect():
+        async with tavily_connection() as (session, calls):
+            connect.calls = calls
+            yield await load_mcp_tools(session)
+
+    connect.calls = []
+    model = ScriptedModel(
+        replies=[
+            tool_call(
+                "tavily_search_game_evidence",
+                {
+                    "league": "mlb",
+                    "team_a": "New York Yankees",
+                    "team_b": "San Diego Padres",
+                    "game_date": "2026-09-20",
+                    "scheduled_start": "2026-09-20T00:10:00Z",
+                    "focus": "injuries",
+                },
+            ),
+            AIMessage("Research was correctly blocked until the game is verified."),
+        ]
+    )
+
+    turn = await ChatAgent(model, connect).chat_detailed("Research this game", "blocked-research")
+
+    assert connect.calls == []
+    assert [item.model_dump() for item in turn.activity] == [
+        {
+            "tool": "tavily_search_game_evidence",
+            "server": "tavily",
+            "status": "skipped",
+            "arguments": {
+                "league": "mlb",
+                "team_a": "New York Yankees",
+                "team_b": "San Diego Padres",
+                "game_date": "2026-09-20",
+                "scheduled_start": "2026-09-20T00:10:00Z",
+                "focus": "injuries",
+            },
+            "summary": "Research identity did not match a typed detail observation.",
+            "duration_ms": turn.activity[0].duration_ms,
+        }
+    ]
+
+
+async def test_agent_blocks_tavily_when_scheduled_start_does_not_match_detail():
+    @asynccontextmanager
+    async def connect():
+        async with AsyncExitStack() as stack:
+            poly, _ = await stack.enter_async_context(connection("polymarket"))
+            tavily, calls = await stack.enter_async_context(tavily_connection())
+            connect.calls = calls
+            yield [*await load_mcp_tools(poly), *await load_mcp_tools(tavily)]
+
+    connect.calls = []
+    model = ScriptedModel(
+        replies=[
+            tool_call("polymarket_search_markets", {"query": "Yankees vs Padres"}, "1"),
+            tool_call("polymarket_get_market", {"market_id": "201"}, "2"),
+            tool_call(
+                "tavily_search_game_evidence",
+                {
+                    "league": "mlb",
+                    "team_a": "New York Yankees",
+                    "team_b": "San Diego Padres",
+                    "game_date": "2026-09-20",
+                    "scheduled_start": "2026-09-20T04:10:00Z",
+                    "focus": "injuries",
+                },
+                "3",
+            ),
+            AIMessage("The mismatched research request was blocked."),
+        ]
+    )
+
+    turn = await ChatAgent(model, connect).chat_detailed(
+        "Research Yankees vs Padres", "research-start-mismatch"
+    )
+
+    assert connect.calls == []
+    assert turn.activity[-1].status == "skipped"
+    assert "identity did not match" in turn.activity[-1].summary
+
+
+async def test_agent_enforces_two_search_research_budget():
+    @asynccontextmanager
+    async def connect():
+        async with AsyncExitStack() as stack:
+            poly, _ = await stack.enter_async_context(connection("polymarket"))
+            tavily, calls = await stack.enter_async_context(tavily_connection())
+            connect.calls = calls
+            yield [*await load_mcp_tools(poly), *await load_mcp_tools(tavily)]
+
+    connect.calls = []
+    arguments = {
+        "league": "mlb",
+        "team_a": "New York Yankees",
+        "team_b": "San Diego Padres",
+        "game_date": "2026-09-20",
+        "scheduled_start": "2026-09-20T00:10:00Z",
+        "focus": "injuries",
+    }
+    model = ScriptedModel(
+        replies=[
+            tool_call("polymarket_search_markets", {"query": "Yankees vs Padres"}, "1"),
+            tool_call("polymarket_get_market", {"market_id": "201"}, "2"),
+            tool_call("tavily_search_game_evidence", arguments, "3"),
+            tool_call("tavily_search_game_evidence", {**arguments, "focus": "lineups"}, "4"),
+            tool_call("tavily_search_game_evidence", {**arguments, "focus": "weather"}, "5"),
+            AIMessage("Two searches were enough."),
+        ]
+    )
+
+    turn = await ChatAgent(model, connect).chat_detailed("Research the game", "research-budget")
+
+    assert len(connect.calls) == 2
+    assert [activity.status for activity in turn.activity[-3:]] == [
+        "success",
+        "success",
+        "skipped",
+    ]
+    assert turn.activity[-1].summary == "Research search budget reached before this call could run."
+
+
+async def test_agent_returns_market_evidence_when_tavily_fails():
+    @asynccontextmanager
+    async def connect():
+        async with AsyncExitStack() as stack:
+            poly, _ = await stack.enter_async_context(connection("polymarket"))
+            tavily, _ = await stack.enter_async_context(tavily_connection("error"))
+            yield [*await load_mcp_tools(poly), *await load_mcp_tools(tavily)]
+
+    model = ScriptedModel(
+        replies=[
+            tool_call("polymarket_search_markets", {"query": "Yankees vs Padres"}, "1"),
+            tool_call("polymarket_get_market", {"market_id": "201"}, "2"),
+            tool_call(
+                "tavily_search_game_evidence",
+                {
+                    "league": "mlb",
+                    "team_a": "New York Yankees",
+                    "team_b": "San Diego Padres",
+                    "game_date": "2026-09-20",
+                    "scheduled_start": "2026-09-20T00:10:00Z",
+                    "focus": "injuries",
+                },
+                "3",
+            ),
+            AIMessage("Market details were verified, but current injury research was unavailable."),
+        ]
+    )
+
+    turn = await ChatAgent(model, connect).chat_detailed("Research the game", "research-failure")
+
+    assert turn.response == (
+        "Market details were verified, but current injury research was unavailable."
+    )
+    assert turn.activity[-1].status == "error"
+    assert "sensitive research diagnostic" not in turn.response
