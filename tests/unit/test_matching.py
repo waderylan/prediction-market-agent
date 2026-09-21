@@ -437,7 +437,7 @@ def test_missing_sports_settlement_evidence_is_ambiguous_and_routes_to_future_re
     assert pair.verdict == "ambiguous"
     assert pair.review_required
     assert not pair.comparison_allowed
-    assert pair.semantic_review_route == "milestone_8_jev_not_integrated"
+    assert pair.semantic_review_route == "main_model_fallback"
     assert pair.contract_equivalence is not None
     assert any(c.state == "unknown" for c in pair.contract_equivalence.checks)
 

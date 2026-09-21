@@ -29,13 +29,15 @@ then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
 | Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
 | Comparison boundary | Typed event, named-outcome, and settlement checks run before synthesis for supported full-game winners |
+| Semantic review | Optional Jev node reviews at most three complete sports pairs that remain ambiguous after deterministic checks |
 
-Semantic review through Jev, external evidence research, forecasting, a saved-forecast ledger,
-and Cloud Run deployment are **future work**. The current matcher can establish equivalence only
-when complete supplied full-game-winner identity, named-outcome mapping, authority, and settlement
-terms pass every required deterministic check. Missing or unsupported language stays ambiguous;
-explicit identity or settlement conflicts are rejected. Sports-state data is optional corroboration,
-not proof of contract equivalence or settlement.
+External evidence research, forecasting, a saved-forecast ledger, and Cloud Run deployment are
+**future work**. The matcher establishes equivalence when complete supplied full-game-winner
+identity, named-outcome mapping, authority, and settlement terms pass every deterministic check.
+When enabled, Jev can review only semantic ambiguity that survives those checks. Explicit identity
+or settlement conflicts are rejected before Jev, and low-confidence or unavailable Jev results stay
+ambiguous. Sports-state data is optional corroboration, not proof of contract equivalence or
+settlement.
 A sporting result does not establish prediction-market settlement, even when the game is final.
 
 The product can expand to additional sports and contract types, including spreads, totals,
@@ -73,6 +75,11 @@ For the conversational application, configure `OPENAI_API_KEY` and run:
 ```powershell
 uv run python main.py
 ```
+
+Jev review is disabled by default. To enable it, set `JEV_ENABLED=true` and configure
+`AI_GATEWAY_API_KEY`. That credential is used only with the hard-coded `typesafe-ai/jev` model
+through Vercel AI Gateway. Keep both values in the ignored `.env`; `.env.example` contains only
+placeholders.
 
 The application binds to `0.0.0.0:$PORT` (default 8080). Its assignment endpoint is:
 
@@ -213,6 +220,10 @@ Real-model checks are separate: configure a backend, set `RUN_LIVE_AGENT=1`, and
 `tests/live/test_chat_live.py`. Scripted-model tests establish schema consumption and control
 flow, not model selection quality.
 
+The opt-in Jev label evaluation requires `AI_GATEWAY_API_KEY`, sets `RUN_LIVE_JEV=1`, and runs
+`tests/live/test_jev_live.py`. It sends contract terms only: no prices, scores, results, or sports
+state. See [Testing](docs/research/TESTING.md) for the measured Milestone 8 results.
+
 ## Container and deployment
 
 ```powershell
@@ -249,6 +260,8 @@ flowchart LR
     G <--> L[Configured cloud LLM or local test gateway]
     G <--> M[InMemorySaver by session_id]
     G --> C[Deterministic contract check]
+    C -->|eligible ambiguity only| J[Jev semantic review]
+    J -->|typed verdict or safe fallback| G
     G --> A[MCP client adapter]
     A <-->|stdio tools/list, tools/call, results| K[Kalshi MCP]
     A <-->|separate stdio session and results| P[Polymarket MCP]

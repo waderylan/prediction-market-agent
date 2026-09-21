@@ -13,6 +13,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from test_chat import ScriptedModel, tool_call
 
 from market_agent.agent import ChatAgent
+from market_agent.jev import JevReviewer
 from market_agent.mcp.kalshi import create_server as kalshi_server
 from market_agent.mcp.polymarket import create_server as poly_server
 from market_agent.providers import KalshiClient, PolymarketClient
@@ -354,3 +355,55 @@ async def test_agent_preserves_sports_detail_evidence_in_typed_cross_market_repo
     assert pair["review_required"] is True
     assert pair["comparison_allowed"] is False
     assert report["market_to_game"] == []
+
+
+async def test_agent_runs_jev_after_real_mcp_details_without_overwriting_deterministic_audit():
+    @asynccontextmanager
+    async def connect():
+        async with AsyncExitStack() as stack:
+            poly, _ = await stack.enter_async_context(connection("polymarket"))
+            kalshi, _ = await stack.enter_async_context(connection("kalshi"))
+            yield [*await load_mcp_tools(poly), *await load_mcp_tools(kalshi)]
+
+    def jev_response(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "equivalence": {
+                        "type": "choice",
+                        "choice": "equivalent",
+                        "probabilities": {
+                            "equivalent": 0.94,
+                            "different": 0.01,
+                            "ambiguous": 0.05,
+                        },
+                    }
+                },
+                "usage": {"inputTokens": 400},
+                "providerMetadata": {"typesafe": {"confidence": {"equivalence": 0.8}}},
+            },
+        )
+
+    model = ScriptedModel(
+        replies=[
+            tool_call("polymarket_search_markets", {"query": "Yankees vs Padres"}, "1"),
+            tool_call("polymarket_get_market", {"market_id": "201"}, "2"),
+            tool_call("kalshi_search_markets", {"query": "Yankees vs Padres"}, "3"),
+            tool_call("kalshi_get_market", {"market_id": "KXMLBGAME-OPAQUE-0"}, "4"),
+            AIMessage("The bounded semantic review passed."),
+        ]
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(jev_response)) as http:
+        reviewer = JevReviewer("test-key", http_client=http)
+        answer = await ChatAgent(model, connect, semantic_reviewer=reviewer).chat(
+            "Compare Yankees vs Padres", "sports-jev"
+        )
+
+    report = json.loads(model.observed[-1][-1].content)["matching_report"]
+    pair = report["pairs"][0]
+    assert "Equivalent after Jev semantic review" in answer, pair
+    assert pair["verdict"] == "equivalent"
+    assert pair["comparison_allowed"] is True
+    assert pair["semantic_review"]["provider"] == "jev"
+    assert pair["contract_equivalence"]["verdict"] == "ambiguous"

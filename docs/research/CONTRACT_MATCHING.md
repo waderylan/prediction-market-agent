@@ -11,7 +11,7 @@ MCP tool.
 - Market detail is retained as typed `ContractEvidence`, including sports identity, named outcome
   quotes, complete-rule status, settlement fields, and separate clocks.
 - The graph rebuilds one `MatchingReport` whenever validated market detail or already-requested
-  game state arrives, and supplies it before cross-platform interpretation.
+  game state arrives, then runs the optional Jev node before cross-platform interpretation.
 - A code-generated notice exposes contract eligibility and market/game identity independently of
   the model's explanation.
 
@@ -62,11 +62,36 @@ Kalshi NO is never relabeled as the opponent. A matching Kalshi YES participant 
 the affirmative mapping; cancellation, tie, and other settlement checks must still pass before
 equivalence.
 
-Supported semantic extraction is intentionally narrow. Explicit values such as a two-day
-rescheduling window, waiting until a postponed game is completed, included overtime, a 50/50
-payout, or a fair-price cancellation payout can match or conflict in code. Missing, truncated,
-unsupported, or differently worded rule text stays `ambiguous` for the future Milestone 8
-semantic-review path. No Jev call is implemented in Milestone 7.
+Supported deterministic semantic extraction is intentionally narrow. Explicit values such as a
+two-day rescheduling window, waiting until a postponed game is completed, included overtime, a
+50/50 payout, or a fair-price cancellation payout can match or conflict in code. Missing,
+truncated, or unsupported rule text stays `ambiguous`. Differently worded complete terms can enter
+the bounded Jev review described below.
+
+## Jev semantic-review boundary
+
+Jev is an optional LangGraph decision node, not an MCP server and not a replacement for the
+deterministic matcher. `JEV_ENABLED=false` is the default. Enabling it also requires an
+`AI_GATEWAY_API_KEY`; the integration hard-codes the `typesafe-ai/jev` model.
+
+A pair is eligible only when it is a supported sports pair, deterministic event identity is a
+match, contract equivalence is ambiguous, both rule texts are complete and untruncated, neither
+rule exceeds 12,000 characters, and no dimension has a deterministic conflict. At most three
+pairs are reviewed per request. Calls run concurrently, use a three-second attempt timeout, retry
+once for transport/retryable HTTP failures, reject responses over 1 MiB, and use a 128-entry
+exact-request cache.
+
+Jev receives only normalized event identity, named-outcome mapping, deterministically matched and
+unresolved dimensions, complete rule text, and stated resolution authority. It does not receive
+market prices, game scores, sporting results, or sports-state evidence. Its typed output records
+the full `equivalent`/`different`/`ambiguous` distribution, provider confidence, selected
+probability, input tokens, latency, reviewed dimensions, and cache status.
+
+Automatic action is asymmetric and conservative: `equivalent` requires selected probability at
+least 0.90, `different` requires 0.75, and both require provider confidence at least 0.60.
+Ambiguous, low-confidence, malformed, timed-out, or unavailable results preserve deterministic
+ambiguity for main-model explanation. The main model cannot upgrade that result or override a
+deterministic veto.
 
 ### Market-to-game identity
 
@@ -122,15 +147,29 @@ Deterministic and real-MCP scripted-agent tests cover:
   contracts remain non-equivalent or unsettled.
 - Bounded candidate counts, duplicate IDs, generic dangerous near-matches, and independent
   code-generated notices.
+- Jev eligibility, request redaction, thresholds, distributions, cache reuse, pair limits,
+  retries, timeouts, malformed responses, deterministic vetoes, disabled operation, and graph
+  integration after real MCP detail calls.
 
-Current support remains limited to MLB, NFL, and NCAA Division I full-game winners with evidence
-that fits the typed and narrow deterministic parsers. Spreads, totals, partial-game markets, props,
-futures, pushes, stat corrections, and season-long identity require type-specific models and tests.
-Semantic equivalence across differently worded but materially identical sports rules remains
-Milestone 8 work; until then, those pairs stay ambiguous rather than being guessed equivalent.
-Live 2026-09-20 replay against six shared NFL/MLB games produced 12 correctly rejected pairs:
-authority wording no longer caused a false conflict, while the exchanges' actual postponement and
-MLB cancellation terms remained decisive.
+The committed 13-case label set contains deterministic positives/conflicts, missing and truncated
+rules, semantic settlement conflicts, an equivalent paraphrase, and overlapping authorities.
+Repeated live Jev evaluations increased automatic decisions from five under Milestone 7 alone to
+eight or nine; every accepted decision matched its label and no semantic false equivalence was
+accepted. The latest run accepted four semantic conflicts for nine total decisions. The equivalent
+paraphrase remained ambiguous because it did not clear the 0.90/0.60 action thresholds. Variation
+near the difference threshold is additional evidence for the conservative fallback and Milestone
+8A retention review.
+
+A separate 2026-09-20 real-slate replay used ten 2026-09-19 NCAA games plus ten NFL and ten MLB
+games on 2026-09-20. All 30 games existed on both platforms, producing 60 cross-platform pairs.
+Every pair had a deterministic settlement conflict, so all 60 were rejected before Jev and the
+Jev call count was zero. This validates the veto boundary but provides no evidence that Jev adds
+value on that real slate. Milestone 8A retains the required keep/simplify/remove decision.
+
+Current support remains conservative: no live semantic equivalence has cleared the automatic
+threshold, and Jev depends on an external gateway/model whose behavior, availability, and cost can
+change. Spreads, totals, partial-game markets, props, futures, pushes, and season-long identity
+still require type-specific models and tests.
 
 See [Implementation plan](../planning/IMPLEMENTATION_PLAN.md) for milestone gates and
 [Sports MCP design](SPORTS_MCP.md) for provider discovery, identity, and projection contracts.

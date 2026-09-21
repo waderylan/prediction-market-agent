@@ -29,6 +29,8 @@ No test requires a particular game to be open.
 | Provider unit tests | Parsing, status, identity, arrays, retries, transport and HTTP errors |
 | MCP integration tests | Discovery/detail, input/output schema validation, oversized data, lifecycle and partial server availability |
 | `unit/test_matching.py` | Generic and sports-aware deterministic matching, typed market/game identity, dangerous near-matches, conservative ambiguity |
+| `unit/test_jev.py` | Jev eligibility, bounded request/response handling, thresholds, deterministic vetoes, cache, retry, and fallback |
+| `live/test_jev_live.py` | Opt-in live Jev evaluation against the committed 13-case sports-equivalence label set |
 | `integration/test_chat.py`, `integration/test_stdio.py` | Graph control flow, memory, real adapter/subprocess invocation, dependency failure |
 
 The sports suite specifically verifies:
@@ -90,6 +92,16 @@ The game-state suite additionally verifies:
   combination, plus matching/conflicting state, unavailable state, and an enforced separation
   between final score, contract equivalence, and prediction-market settlement.
 
+The Jev suite additionally verifies:
+
+- Only complete ambiguous sports pairs with deterministic event matches are eligible.
+- Prices, scores, results, and sports-state observations never enter the Jev request.
+- Deterministic conflicts are never sent to Jev or overwritten by its output.
+- A maximum of three pairs is reviewed concurrently with one retry and bounded timeout/response.
+- Low-confidence, malformed, unavailable, and ambiguous responses retain deterministic ambiguity.
+- Exact inputs reuse a bounded cache, and disabled operation leaves the existing request path intact.
+- Real MCP detail results flow through the separate semantic-review graph node before synthesis.
+
 ## Public checks
 
 ```powershell
@@ -101,6 +113,25 @@ Remove-Item Env:RUN_LIVE_SMOKE
 These are bounded public reads. Sports tests check all supported leagues, schema discovery,
 `limit=20` rejection, coverage bounds, and details for returned candidates.
 An empty current result is valid; exact historical/open-game identity belongs in fixtures.
+
+The Jev live check is separate because it uses the configured gateway credential:
+
+```powershell
+$env:RUN_LIVE_JEV = "1"
+uv run pytest tests/live/test_jev_live.py -s
+Remove-Item Env:RUN_LIVE_JEV
+```
+
+On 2026-09-20, repeated runs of the 13-case label set produced eight or nine automatic final
+decisions versus five for the deterministic matcher alone; every accepted decision matched its
+label. The latest run added four semantic conflicts for nine total decisions, while the equivalent
+paraphrase remained ambiguous. Observed input use was 1,019-1,203 tokens per eligible call after
+removing duplicated state. The near-threshold variation is recorded rather than hidden. This is an
+integration/evaluation observation, not a claim of general model accuracy.
+
+A real-market replay over ten prior-day NCAA games and ten current-day games from each of NFL and
+MLB produced 60 cross-platform pairs. Every pair was rejected by deterministic settlement checks,
+so Jev received zero calls. That replay establishes safe routing, not incremental Jev usefulness.
 
 ## What each verification level establishes
 

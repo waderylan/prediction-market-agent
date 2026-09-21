@@ -23,7 +23,7 @@
 | 5. Kalshi MCP, routing, and sports discovery | Complete at the MCP/provider layer |
 | 6. Sports game-state MCP | Complete locally |
 | 7. Sports-aware event identity and deterministic contract matching | Complete locally |
-| 8. Jev sports-contract equivalence | Planned |
+| 8. Jev sports-contract equivalence | Complete locally; retention pending Milestone 8A |
 | 9. Bounded sports evidence research | Planned |
 | 10. Complete sports agent and forecast output | Planned |
 | 11. Unified multi-MCP sports intelligence brief | Tentative idea; optional and not required |
@@ -843,8 +843,8 @@ Multi-server MCP client
 - A 2026-09-20 live replay covered six shared NFL/MLB games and 12 cross-platform pairs. Authority
   phrasing produced no false conflicts; actual postponement and MLB cancellation differences
   remained deterministic vetoes.
-- Ambiguous sports semantics are labeled for the not-yet-integrated Milestone 8 Jev review path;
-  no Jev call or Milestone 8 behavior is implemented here.
+- Ambiguous sports semantics are labeled for the Milestone 8 Jev review path. Milestone 7 itself
+  remains deterministic and independent of Jev.
 - `../research/CONTRACT_MATCHING.md` defines the matcher boundary and evidence policy.
 
 ### Milestone 8: Jev Sports-Contract Equivalence Evaluation
@@ -876,6 +876,30 @@ Multi-server MCP client
 
 - If Jev does not improve the sports evaluation set, retain the typed interface but disable
   automatic routing and use the primary LLM for ambiguous pairs.
+
+#### Current State
+
+- **Status:** Complete locally; the retention decision remains Milestone 8A work.
+- A separate LangGraph node calls only `typesafe-ai/jev` through Vercel AI Gateway when the feature
+  flag and credential are configured. Disabled operation follows the existing graph path.
+- Eligibility requires matched deterministic event identity, complete untruncated rules, ambiguous
+  contract semantics, and no deterministic conflict. Review is limited to three pairs per request.
+- Requests contain normalized identity, named outcomes, rule text, authorities, and unresolved
+  dimensions only. Prices, scores, results, and Milestone 6 sports-state evidence are excluded.
+- The reviewer returns a typed probability distribution and confidence, uses a three-second
+  timeout, one retry, bounded response/cache sizes, and preserves ambiguity on every failure.
+- Automatic equivalence requires 0.90 selected probability and 0.60 confidence; automatic
+  difference requires 0.75 and 0.60. Deterministic conflicts always veto Jev.
+- On repeated runs of the committed 13-case set, automatic labeled decisions increased from five
+  to eight or nine, with every accepted decision correct and no accepted semantic false
+  equivalence. The latest run produced nine total decisions; the equivalent paraphrase stayed
+  ambiguous below threshold. Near-threshold variation remains an explicit Milestone 8A input.
+- A 30-game real replay (2026-09-19 NCAA; 2026-09-20 NFL and MLB) produced 60 cross-platform
+  pairs. Deterministic conflicts rejected every pair, so Jev made zero calls and demonstrated no
+  incremental value on that slate.
+- Unit, live-model, real-MCP graph, timeout/retry, malformed-response, disabled-mode, cache, pair
+  bound, and leakage regressions cover the operating boundary. `../research/CONTRACT_MATCHING.md`
+  records the detailed policy and limitations.
 
 ### Milestone 8A: Contract-Matching Value Evaluation and Retention Decision
 

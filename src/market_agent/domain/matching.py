@@ -12,7 +12,7 @@ from itertools import product
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from market_agent.domain.models import CanonicalMarket, Platform
 
@@ -113,6 +113,32 @@ class MarketGameAssessment(BaseModel):
     )
 
 
+class VerdictProbabilities(BaseModel):
+    equivalent: float = Field(ge=0, le=1)
+    different: float = Field(ge=0, le=1)
+    ambiguous: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def probabilities_sum_to_one(self) -> "VerdictProbabilities":
+        total = self.equivalent + self.different + self.ambiguous
+        if abs(total - 1.0) > 0.03:
+            raise ValueError("verdict probabilities must sum to one")
+        return self
+
+
+class SemanticReview(BaseModel):
+    provider: Literal["jev"] = "jev"
+    model: Literal["typesafe-ai/jev"] = "typesafe-ai/jev"
+    verdict: Verdict
+    probabilities: VerdictProbabilities
+    confidence: float = Field(ge=0, le=1)
+    selected_probability: float = Field(ge=0, le=1)
+    reviewed_dimensions: list[str] = Field(max_length=12)
+    input_tokens: int = Field(ge=0)
+    latency_ms: int = Field(ge=0)
+    cached: bool = False
+
+
 class PairAssessment(BaseModel):
     polymarket_id: str
     kalshi_id: str
@@ -123,9 +149,9 @@ class PairAssessment(BaseModel):
     comparison_allowed: bool
     event_identity: EventIdentityAssessment | None = None
     contract_equivalence: ContractEquivalenceAssessment | None = None
-    semantic_review_route: Literal["main_model_explanation", "milestone_8_jev_not_integrated"] = (
-        "main_model_explanation"
-    )
+    semantic_review_route: Literal["not_required", "jev", "main_model_fallback"] = "not_required"
+    semantic_review: SemanticReview | None = None
+    semantic_review_note: str | None = Field(default=None, max_length=300)
     scope: str = "Supplied terms only; external or omitted contract terms are not verified."
 
 
@@ -461,6 +487,7 @@ def _assess_generic_pair(
         checks=checks,
         review_required=verdict == "ambiguous",
         comparison_allowed=verdict == "equivalent",
+        semantic_review_route="main_model_fallback" if verdict == "ambiguous" else "not_required",
     )
 
 
@@ -1033,7 +1060,7 @@ def _assess_sports_pair(left: ContractEvidence, right: ContractEvidence) -> Pair
         comparison_allowed=verdict == "equivalent",
         event_identity=event,
         contract_equivalence=contract,
-        semantic_review_route="milestone_8_jev_not_integrated",
+        semantic_review_route="main_model_fallback" if verdict == "ambiguous" else "not_required",
         scope=(
             "Supplied full-game-winner identity, named outcomes, and settlement terms only; "
             "sports-state evidence cannot alter this verdict."
@@ -1214,14 +1241,34 @@ def comparison_notice(report: MatchingReport) -> str:
     lines = []
     for pair in report.pairs:
         if pair.comparison_allowed:
-            finding = "Equivalent supplied terms; external terms remain unverified."
+            if pair.semantic_review is not None:
+                finding = (
+                    "Equivalent after Jev semantic review "
+                    f"({pair.semantic_review.selected_probability:.0%} selected probability, "
+                    f"{pair.semantic_review.confidence:.0%} confidence); external terms remain "
+                    "unverified."
+                )
+            else:
+                finding = "Equivalent supplied terms; external terms remain unverified."
         elif pair.verdict == "different":
-            dimensions = ", ".join(
-                c.dimension.replace("_", " ") for c in pair.checks if c.state == "different"
-            )
-            finding = f"Not equivalent: {dimensions}. Treat prices as separate contracts."
+            if pair.semantic_review is not None:
+                finding = (
+                    "Not equivalent after Jev semantic review "
+                    f"({pair.semantic_review.selected_probability:.0%} selected probability, "
+                    f"{pair.semantic_review.confidence:.0%} confidence). Treat prices as separate "
+                    "contracts."
+                )
+            else:
+                dimensions = ", ".join(
+                    c.dimension.replace("_", " ") for c in pair.checks if c.state == "different"
+                )
+                finding = f"Not equivalent: {dimensions}. Treat prices as separate contracts."
         else:
-            finding = "Equivalence unverified; semantic review required before comparing prices."
+            finding = (
+                "Jev review remained below the action threshold; equivalence is unverified."
+                if pair.semantic_review is not None
+                else "Equivalence unverified; semantic review required before comparing prices."
+            )
         lines.append(f"- Contract check ({pair.polymarket_id} / {pair.kalshi_id}): {finding}")
     for assessment in report.market_to_game:
         finding = {

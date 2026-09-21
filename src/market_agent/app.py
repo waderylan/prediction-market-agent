@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from market_agent.agent import ChatAgent, ToolActivity
 from market_agent.config import load_settings
+from market_agent.jev import JevReviewer
 from market_agent.logging import configure_logging
 
 
@@ -51,13 +52,30 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
                 http_client=http_client,
                 http_async_client=http_async_client,
             )
-            app.state.agent = ChatAgent(model, model_timeout=settings.llm_timeout_seconds)
+            reviewer = (
+                JevReviewer(
+                    settings.ai_gateway_api_key.get_secret_value(),
+                    timeout_seconds=settings.jev_timeout_seconds,
+                    equivalent_threshold=settings.jev_equivalent_threshold,
+                    different_threshold=settings.jev_different_threshold,
+                    confidence_threshold=settings.jev_confidence_threshold,
+                )
+                if settings.jev_enabled and settings.ai_gateway_api_key is not None
+                else None
+            )
+            app.state.agent = ChatAgent(
+                model,
+                model_timeout=settings.llm_timeout_seconds,
+                semantic_reviewer=reviewer,
+            )
         else:
             app.state.agent = agent
         try:
             yield
         finally:
             if agent is None:
+                if reviewer is not None:
+                    await reviewer.aclose()
                 await http_async_client.aclose()
                 http_client.close()
 
