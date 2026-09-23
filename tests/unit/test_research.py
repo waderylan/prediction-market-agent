@@ -74,20 +74,94 @@ async def test_game_search_is_fixed_bounded_typed_and_identity_filtered():
     assert payload["include_raw_content"] is False
     assert payload["include_published_date"] is True
     assert payload["safe_search"] is True
+    assert "September 20 2026" in payload["query"]
+    assert "20:10 UTC" not in payload["query"]
     assert len(result.sources) == 1
     assert result.rejected_result_count == 4
     source = result.sources[0]
     assert source.url == "https://sports.example/game"
     assert source.relationship == "same_matchup_date"
+    assert source.authority_tier == "other"
     assert source.publication_date == datetime(2026, 9, 20, 17, 30, tzinfo=UTC)
     assert "\u0000" not in source.snippet
     assert result.request_id == "request-1"
 
 
+async def test_query_never_combines_the_local_date_with_a_utc_clock():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"query": "generated query", "results": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await TavilyResearchClient(http_client=http).search_game(
+            league="mlb",
+            team_a="San Diego Padres",
+            team_b="Los Angeles Dodgers",
+            game_date=datetime(2026, 9, 22, tzinfo=UTC).date(),
+            scheduled_start=datetime(2026, 9, 23, 2, 10, tzinfo=UTC),
+            focus="injuries",
+        )
+
+    query = json.loads(requests[0].content)["query"]
+    assert "September 22 2026" in query
+    assert "September 23" not in query
+    assert "02:10 UTC" not in query
+    assert result.query == query
+
+
+async def test_retained_sources_are_ranked_by_authority_before_provider_score():
+    payload = {
+        "query": "generated query",
+        "results": [
+            {
+                "title": "Aggregator injury report — September 20, 2026",
+                "url": "https://aggregator.example/injuries",
+                "content": "Miami Marlins and San Diego Padres injuries September 20, 2026.",
+                "score": 0.99,
+            },
+            {
+                "title": "ESPN injury report — September 20, 2026",
+                "url": "https://www.espn.com/mlb/game/injuries",
+                "content": "Miami Marlins and San Diego Padres injuries September 20, 2026.",
+                "score": 0.8,
+            },
+            {
+                "title": "MLB game injury report — September 20, 2026",
+                "url": "https://www.mlb.com/gameday/injuries",
+                "content": "Miami Marlins and San Diego Padres injuries September 20, 2026.",
+                "score": 0.6,
+            },
+        ],
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as http:
+        result = await TavilyResearchClient(http_client=http).search_game(
+            league="mlb",
+            team_a="Miami Marlins",
+            team_b="San Diego Padres",
+            game_date=datetime(2026, 9, 20, tzinfo=UTC).date(),
+            scheduled_start=datetime(2026, 9, 20, 20, 10, tzinfo=UTC),
+            focus="injuries",
+        )
+
+    assert [source.authority_tier for source in result.sources] == [
+        "league_official",
+        "established_sports_media",
+        "other",
+    ]
+    assert [source.relevance_score for source in result.sources] == [0.6, 0.8, 0.99]
+
+
 @pytest.mark.parametrize(
     "focus,relevant_text",
     [
-        ("injuries", "Miami Marlins and San Diego Padres injury report for September 20, 2026."),
+        (
+            "injuries",
+            "Miami Marlins and San Diego Padres lineup scratch for September 20, 2026.",
+        ),
         ("lineups", "Miami Marlins and San Diego Padres confirmed lineups September 20, 2026."),
         ("weather", "Miami Marlins and San Diego Padres weather forecast September 20, 2026."),
         (

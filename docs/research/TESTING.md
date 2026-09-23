@@ -26,7 +26,7 @@ No test requires a particular game to be open.
 | `integration/test_game_state_mcp.py` | Third server tools/list and tools/call, strict schemas, errors, agent routing, market/game identity, settlement separation |
 | `live/test_game_state_mcp_live.py` | Current ESPN/MLB compatibility through the independent stdio process across all three leagues |
 | `live/test_sports_mcp_live.py` | Independent stdio processes, current public API compatibility, searches across MLB/NFL/NCAA, detail retrieval when a candidate exists |
-| `unit/test_research.py` | Fixed Tavily request shape, key/keyless authentication, game/date/focus filtering, URL safety, provenance, sanitization, malformed data |
+| `unit/test_research.py` | Fixed Tavily request shape, local-date query construction, authority ordering, key/keyless authentication, game/date/focus filtering, URL safety, provenance, sanitization, malformed data |
 | `integration/test_tavily_mcp.py` | Fourth-server tools/list and tools/call, strict schema, typed evidence, safe provider errors, invalid-input rejection |
 | `live/test_tavily_mcp_live.py` | Current keyless Tavily compatibility through the independent stdio MCP process |
 | Provider unit tests | Parsing, status, identity, arrays, retries, transport and HTTP errors |
@@ -100,6 +100,8 @@ The Tavily suite additionally verifies:
 - Five-result request bounds, HTTPS-only sources, participant/date relationship checks, duplicate
   and private-address rejection, focus-relevance checks, bounded snippets, publication/retrieval
   provenance, and no raw provider payload.
+- A local game date is never paired with the UTC clock from a different calendar day; retained
+  league/major-media/other sources follow the declared authority ordering.
 - Keyless and optional bearer-key paths without key/error leakage.
 - Malformed, rate-limited, unavailable, and empty-result behavior through real MCP calls.
 - Deterministic source listing and useful synthesis from existing market evidence when Tavily fails.

@@ -1032,6 +1032,10 @@ only because it has already been implemented.
   exact date with text relevant to the requested focus, and returns bounded snippets as explicitly
   untrusted data. Same-matchup ticket, hotel, and generic event pages are rejected for injuries,
   lineups, weather, and venue/schedule evidence when their text does not match that focus.
+- The generated query uses the established local `game_date` without incorrectly pairing it with
+  `scheduled_start`'s UTC clock. The UTC start remains typed identity evidence. Retained sources
+  expose and sort by a bounded league-official/established-media/other authority heuristic, then
+  publication time and provider relevance; the tier is not a correctness claim.
 - Therefore the conversational path always has a prerequisite MCP sequence: market search plus
   market detail, or sports-state discovery plus game-state detail, before Tavily. Tavily cannot be
   the agent's first MCP call, and prior-session memory does not bypass this same-turn requirement.

@@ -26,6 +26,7 @@ EvidenceFocus = Literal[
     "venue_or_schedule",
     "other_game_news",
 ]
+AuthorityTier = Literal["league_official", "established_sports_media", "other"]
 
 FOCUS_QUERY = {
     "injuries": "injuries player availability",
@@ -47,6 +48,13 @@ FOCUS_TERMS: dict[EvidenceFocus, tuple[str, ...]] = {
         "disabled list",
         "activated",
         "activation",
+        "scratch",
+        "scratched",
+        "return",
+        "returning",
+        "eligible to return",
+        "game time decision",
+        "roster move",
         "10 day il",
         "15 day il",
         "60 day il",
@@ -112,6 +120,7 @@ class ResearchSource(BaseModel):
     retrieved_at: datetime
     snippet: str = Field(min_length=1, max_length=MAX_SNIPPET_LENGTH)
     relevance_score: float | None = Field(default=None, ge=0, le=1)
+    authority_tier: AuthorityTier
     relationship: Literal["same_matchup_date"] = "same_matchup_date"
     relationship_note: str = Field(
         default=(
@@ -280,6 +289,48 @@ def _safe_public_url(value: str) -> str | None:
         return None
 
 
+def _host_matches(hostname: str, domains: tuple[str, ...]) -> bool:
+    return any(hostname == domain or hostname.endswith(f".{domain}") for domain in domains)
+
+
+def _authority_tier(url: str) -> AuthorityTier:
+    hostname = urlsplit(url).hostname or ""
+    if _host_matches(hostname, ("mlb.com", "nfl.com", "ncaa.com")):
+        return "league_official"
+    if _host_matches(
+        hostname,
+        (
+            "apnews.com",
+            "cbssports.com",
+            "espn.com",
+            "foxsports.com",
+            "nbcsports.com",
+            "reuters.com",
+            "si.com",
+            "theathletic.com",
+            "usatoday.com",
+            "yahoo.com",
+        ),
+    ):
+        return "established_sports_media"
+    return "other"
+
+
+def _source_sort_key(source: ResearchSource) -> tuple[int, float, float, str]:
+    authority_order = {
+        "league_official": 0,
+        "established_sports_media": 1,
+        "other": 2,
+    }
+    publication_time = (
+        (source.publication_date - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds()
+        if source.publication_date
+        else 0.0
+    )
+    relevance = source.relevance_score if source.relevance_score is not None else 0.0
+    return authority_order[source.authority_tier], -publication_time, -relevance, source.url
+
+
 class TavilyResearchClient:
     """Small HTTP client with fixed search parameters and typed response validation."""
 
@@ -326,10 +377,12 @@ class TavilyResearchClient:
             raise ResearchError("invalid_identity", "The scheduled start must include a timezone.")
         scheduled_start = scheduled_start.astimezone(UTC)
         retrieved_at = datetime.now(UTC)
+        # game_date is the provider-established local calendar date. The tool does not receive
+        # that date's timezone, so pairing it with scheduled_start's UTC clock would describe a
+        # nonexistent timestamp whenever the UTC and local dates differ.
         query = (
             f'"{team_a}" "{team_b}" {game_date.strftime("%B %d %Y")} '
-            f"{scheduled_start.strftime('%H:%M UTC')} {FOCUS_QUERY[focus]} "
-            f"{league.replace('_', ' ')}"
+            f"{FOCUS_QUERY[focus]} {league.replace('_', ' ')}"
         )
         payload = {
             "query": query,
@@ -391,8 +444,11 @@ class TavilyResearchClient:
                     retrieved_at=retrieved_at,
                     snippet=snippet,
                     relevance_score=item.score,
+                    authority_tier=_authority_tier(url),
                 )
             )
+
+        sources.sort(key=_source_sort_key)
 
         return GameResearchResult(
             league=league,
@@ -409,6 +465,7 @@ class TavilyResearchClient:
             coverage=(
                 "One bounded five-result Tavily search. Only HTTPS results naming both teams and "
                 "the requested game date, with text relevant to the requested focus, are retained; "
-                "empty results do not prove no evidence exists."
+                "retained sources are ordered by authority tier, publication time, then provider "
+                "relevance. Empty results do not prove no evidence exists."
             ),
         )

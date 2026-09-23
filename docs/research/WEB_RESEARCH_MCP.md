@@ -29,12 +29,20 @@ model, constructs the web query.
 
 The result contains at most five sources. Each source preserves title, public HTTPS URL,
 publication date when Tavily supplies one, retrieval time, bounded snippet, relevance score, and
-the explicit `same_matchup_date` relationship. Retained title/snippet text must also contain terms
-relevant to the requested focus; a ticket, hotel, or generic event page does not become injury or
-lineup evidence merely because it names the matchup and date. `other_game_news` remains broad after
-the identity/date check. The relationship is deliberately weaker than proof of one game when the
-teams have a same-day doubleheader; the copied scheduled start remains visible for that distinction.
-The result also reports rejected-result count, coverage, request ID, and an untrusted-content notice.
+an `authority_tier` of `league_official`, `established_sports_media`, or `other`, plus the explicit
+`same_matchup_date` relationship. The tier is a small hostname-based ordering heuristic, not proof
+that a claim is correct. Retained title/snippet text must also contain terms relevant to the
+requested focus; a ticket, hotel, or generic event page does not become injury or lineup evidence
+merely because it names the matchup and date. `other_game_news` remains broad after the
+identity/date check. The relationship is deliberately weaker than proof of one game when the teams
+have a same-day doubleheader; the copied scheduled start remains visible for that distinction. The
+result also reports rejected-result count, coverage, request ID, and an untrusted-content notice.
+
+`game_date` is the provider-established local calendar date, while `scheduled_start` is the exact
+UTC instant used by the host identity gate. The tool does not receive the game's IANA timezone, so
+the generated search query uses the local date and deliberately omits the UTC clock. Combining a
+local September 22 date with `02:10 UTC` would describe neither the local start nor the correct UTC
+date for a September 22 evening game. The exact UTC start remains present in the typed output.
 
 ## Safety and budgets
 
@@ -46,6 +54,8 @@ The result also reports rejected-result count, coverage, request ID, and an untr
 - The server retains only HTTPS results that mention both teams and the exact requested date and
   whose title/snippet matches the requested evidence focus. Duplicate URLs, private IP URLs,
   malformed records, wrong opponents, wrong dates, off-focus pages, and empty snippets are rejected.
+- Retained sources are ordered by authority tier, then publication time when supplied, then Tavily
+  relevance. This ordering never bypasses the identity, date, focus, URL, or untrusted-data checks.
 - Titles and snippets are normalized, stripped of control characters, and length bounded. They
   remain untrusted source data and cannot override system or tool policy.
 - Provider response bodies, keys, and transport diagnostics do not appear in errors or logs.
@@ -66,6 +76,11 @@ Extraction was removed under Milestone 9's planned pivot. A real same-day game s
 adequate snippets with source URLs and dates. Exposing arbitrary URL extraction would add a larger
 prompt-injection surface and another latency/cost step without demonstrated value. Add extraction
 later only behind a searched-URL allowlist and a measured need that snippets cannot satisfy.
+
+The current fix intentionally keeps one request and the existing five-result budget. It does not
+add team-only searches, generic crawl/extraction, medical-record parsing, player-status conflict
+resolution, or page-update-time inference. Those changes require a new evidence relationship and
+measured recall/precision need; they are not hidden inside this bounded matchup search.
 
 ## Authentication and cost
 

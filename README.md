@@ -28,7 +28,7 @@ then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
 | Contract detail | Rules, game/close/resolution clocks, consumer links, and explicit settlement results |
 | Current game state | ESPN scores/lifecycle/situations; MLB StatsAPI fallback after exact identity matching |
 | Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
-| Current web evidence | At most two game-scoped Tavily searches; five inspected results each; exact participant/date plus requested-focus filtering and source provenance |
+| Current web evidence | At most two game-scoped Tavily searches; five inspected results each; exact participant/date plus requested-focus filtering, authority ordering, and source provenance |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
 | Comparison boundary | Typed event, named-outcome, and settlement checks run before synthesis for supported full-game winners |
 | Comparison policy | Deterministic identity plus core settlement checks; unsupported or differing full rules cannot authorize price comparison |
@@ -161,6 +161,9 @@ Interactive HTTP documentation is at `/docs`.
   The server constructs the query and retains at most five HTTPS results naming both teams and the
   exact date with text relevant to the requested focus. Focus values are `injuries`, `lineups`,
   `weather`, `venue_or_schedule`, and `other_game_news`.
+- Tavily queries use the provider-established local game date without attaching the scheduled
+  start's UTC clock. Results retain the exact UTC start as identity and are ordered by a transparent
+  league-official/established-media/other heuristic before publication time and provider relevance.
 - Each turn permits at most two Tavily searches in addition to four market/state attempts. Tavily
   titles and snippets are bounded untrusted data. Returned URLs are listed deterministically;
   research cannot establish game state, contract equivalence, settlement, or a forecast.

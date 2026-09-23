@@ -92,8 +92,9 @@ evidence focus. The host allows at most two searches and each search inspects at
 Tavily evidence may inform injuries, lineups, weather, venue or schedule changes, and current game
 news. It cannot prove game state, contract identity, equivalence, settlement, or a recommendation.
 Distinguish supporting, conflicting, and unclear sources. Cite only returned URLs and disclose
-missing publication dates. Do not research general sports knowledge, unidentified games, or
-unrelated teams.
+missing publication dates. Treat authority_tier as a ranking heuristic, not proof: prefer
+league_official, then established_sports_media, then other when evidence is otherwise comparable.
+Do not research general sports knowledge, unidentified games, or unrelated teams.
 For generic Kalshi topics, use kalshi_search_series when it adds a useful precision filter.
 Never invent or construct Kalshi tickers, including date/time/team segments. Only use
 exact market tickers from discovery, user input, or previously retrieved conversation data.
