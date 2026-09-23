@@ -78,7 +78,11 @@ async def test_sports_state_server_starts_as_independent_stdio_process():
     )
     async with adapter.session("sports_state") as session:
         tools = {tool.name for tool in await load_mcp_tools(session)}
-    assert tools == {"sports_state_find_games", "sports_state_get_game_state"}
+    assert tools == {
+        "sports_state_find_games",
+        "sports_state_get_game_state",
+        "sports_state_get_box_score",
+    }
 
 
 async def test_tavily_server_starts_as_independent_stdio_process_without_a_key():

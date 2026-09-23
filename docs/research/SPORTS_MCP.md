@@ -1,7 +1,7 @@
 # Sports market MCP design
 
 This document covers Kalshi and Polymarket contract discovery. The separate implemented
-[sports game-state MCP](GAME_STATE_MCP.md) reuses team identity but has distinct providers,
+[sports game-state and box-score MCP](GAME_STATE_MCP.md) reuses team identity but has distinct providers,
 references, state models, budgets, and authority boundaries.
 
 ## Product boundary

@@ -18,13 +18,14 @@ def test_readme_documents_verified_game_state_surface_and_three_diagrams():
     assert "Four independent MCP servers" in readme
     assert "sports_state_find_games" in readme
     assert "sports_state_get_game_state" in readme
+    assert "sports_state_get_box_score" in readme
     assert "ESPN public JSON" in readme
     assert "MLB StatsAPI" in readme
     assert "undocumented" in readme and "no SLA" in readme
     assert "sporting result does not establish prediction-market settlement" in readme
     assert readme.count("```mermaid") == 3
     assert "Sports-state MCP" in readme
-    assert "Game-state MCP design" in readme
+    assert "Sports-state MCP design" in readme
     assert "jev_review_contracts" not in readme
     assert "market_agent.mcp.jev" not in readme
     assert "tavily_search_game_evidence" in readme
@@ -50,6 +51,7 @@ def test_project_documents_match_current_capability_and_future_boundaries():
     )
     assert "| 8. Jev sports-contract equivalence | Removed by Milestone 8A |" in plan
     assert "| 9. Bounded sports evidence research | Complete locally |" in plan
+    assert "| 9A. Multi-sport exact-game box scores | Complete locally |" in plan
     assert "four separate Python stdio processes" in runtime
     assert "Milestone 8A" in runtime
     assert "live/test_game_state_mcp_live.py" in testing
@@ -64,6 +66,7 @@ def test_project_documents_match_current_capability_and_future_boundaries():
     for required in (
         "sports_state_find_games",
         "sports_state_get_game_state",
+        "sports_state_get_box_score",
         "5 MiB",
         "Maximum 2",
         "30 seconds",

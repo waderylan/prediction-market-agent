@@ -26,6 +26,7 @@
 | 8. Jev sports-contract equivalence | Removed by Milestone 8A |
 | 8A. Contract-matching value evaluation and retention decision | Complete locally |
 | 9. Bounded sports evidence research | Complete locally |
+| 9A. Multi-sport exact-game box scores | Complete locally |
 | 10. Complete sports agent and forecast output | Planned |
 | 11. Unified multi-MCP sports intelligence brief | Tentative idea; optional and not required |
 | 12. Optional sports-research ledger | Optional |
@@ -453,21 +454,16 @@ Multi-server MCP client
 
 #### Purpose and Confirmed Feasibility
 
-- Add one narrow, read-only MCP server that answers what is happening in a supported game now.
+- Maintain one narrow, read-only MCP server for current situations and exact-game box scores.
 - Support the same initial leagues as market discovery: MLB, NFL, and NCAA Division I football.
 - Keep game state separate from prediction-market price, contract equivalence, and settlement.
 - Use ESPN's unauthenticated public JSON scoreboard/summary surface as the primary cross-sport
   source. It is free and requires no account or API key, but it is undocumented and has no SLA.
-- Use MLB StatsAPI as a fallback for MLB only. Do not claim an equivalent official free fallback
-  for NFL or NCAA football unless a later feasibility check verifies one.
-- A 2026-09-20 feasibility check through the project's `httpx` stack returned HTTP 200 for all
-  three ESPN league scoreboards. Live MLB exposed inning, count, outs, bases, pitcher, batter, and
-  last play. Live NFL exposed score, period, clock, down, distance, field position, timeouts, last
-  play, and possession when supplied. The prior NCAA football slate returned scheduled/final game
-  identity and scores. MLB StatsAPI independently returned a matching live game and detailed
-  baseball state.
-- Treat this feasibility evidence as proof of a workable interface, not a promise that an
-  undocumented provider schema will remain stable.
+- Use MLB StatsAPI as a fallback for MLB only. NFL and NCAA football return controlled
+  unavailability when ESPN fails.
+- Current provider verification covers ESPN scoreboards and summaries for all three leagues,
+  completed box scores for MLB/NFL/NCAA, live MLB state and box scores, and exact MLB StatsAPI
+  fallback data. The undocumented ESPN interface has no stability guarantee.
 
 #### Fixed Architecture Decisions
 
@@ -489,10 +485,9 @@ Multi-server MCP client
   WebSockets, or continuous polling.
 - Do not import an existing broad ESPN MCP. Existing servers expose unrelated news, standings,
   odds, roster, and betting surfaces or introduce metered hosting. This server exposes only the
-  minimum game-discovery and state tools needed by this product.
+  minimum game-discovery, current-state, and box-score tools needed by this product.
 - Do not expose provider odds, provider win probability, player projections, fantasy data, news,
-  or full box scores. Those fields are outside the game-state requirement and could be mistaken
-  for the agent's forecast evidence.
+  season statistics, or play-by-play. Game-only box scores remain separate from forecast evidence.
 
 #### Tool Surface
 
@@ -513,6 +508,12 @@ Multi-server MCP client
   - Output: common game state plus exactly one league-specific situation object.
   - Reject edited, malformed, cross-league, or unsupported-source references before
     provider I/O. Never accept a guessed ESPN event ID or MLB `gamePk` as a substitute.
+- `sports_state_get_box_score`
+  - Input: the same opaque `game_ref`; no team, date, provider, or mode parameters.
+  - Purpose: return line scoring plus game-only team and player performance for MLB, NFL, or NCAA
+    football.
+  - Output: sport-specific baseball or football sections, completeness, warnings, provenance,
+    cache metadata, and content-derived observation identity.
 - Require discovery before detail. The agent must not construct identifiers from team names,
   dates, market IDs, or prior knowledge.
 - Return MCP tool errors with compact JSON containing stable `error.code`, `message`, and
@@ -1055,6 +1056,48 @@ only because it has already been implemented.
   redaction, same-city opponent rejection, identity filtering, pre-detail blocking, the two-search
   budget, source citations, and useful partial answers when research fails.
 - `../research/WEB_RESEARCH_MCP.md` defines the implemented contract and extension boundary.
+
+### Milestone 9A: Multi-Sport Exact-Game Box Scores
+
+#### Work
+
+- Expose `sports_state_get_box_score(game_ref)` beside discovery and current game state.
+- Reuse the opaque discovery reference without accepting team, date, provider, or mode selectors.
+- Normalize MLB inning scoring, team totals, batting lines, and pitching lines with stable player
+  IDs and integer `outs_recorded`.
+- Normalize NFL and NCAA football period scoring, named team statistics, and categorized player
+  statistics through one shared football contract.
+- Use ESPN as the primary provider and the existing exact-identity MLB StatsAPI path as the MLB
+  fallback. Keep structured game statistics independent of Tavily.
+- Omit provider-unavailable optional statistics, retain semantic null inning values, exclude season
+  statistics and play-by-play, and expose section completeness and bounded warnings.
+- Cache live box scores for at most 10 seconds and final box scores for at most five minutes. Bind
+  observation IDs to normalized snapshot content.
+- Teach the agent to choose state for the current situation and box score for team/player game
+  performance, while preserving deterministic market-to-game identity checks.
+
+#### Exit Criteria
+
+- The new MCP tool accepts only a `game_ref` returned by `sports_state_find_games`.
+- Completed MLB, NFL, and NCAA games return their supported line score and player/team statistics.
+- Live MLB preserves not-yet-batted inning semantics and returns changing player game lines.
+- Pitching display notation and integer outs agree; unavailable fields are absent and documented.
+- Deterministic tests cover provider normalization, fallback, cache identity, MCP schemas, and agent
+  consumption. Public MCP verification covers completed football/baseball and live baseball.
+
+#### Current State
+
+- **Status:** Complete locally.
+- The sports-state MCP exposes discovery, current state, and box-score tools through one independent
+  stdio process. Both detail tools consume the same checksummed game reference.
+- Baseball and football responses use sport-specific sections instead of irrelevant nullable
+  branches. Completeness metadata identifies partial and unavailable provider sections.
+- ESPN supplies all supported leagues. MLB StatsAPI remains a fallback only after an ESPN
+  transport, HTTP, or schema failure and only after exact participant/date/start matching.
+- The host validates returned identity and sport, stores typed box-score observations, permits them
+  as exact research context, and keeps prediction-market settlement separate.
+- Deterministic and real MCP checks exercise MLB, NFL, NCAA football, completed games, live MLB,
+  stable player IDs, game-only statistics, outs normalization, caching, and observation changes.
 
 ### Milestone 10: Complete Sports Agent Workflow and Forecast Output
 

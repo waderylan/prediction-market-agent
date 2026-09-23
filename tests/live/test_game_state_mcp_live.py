@@ -25,7 +25,11 @@ async def test_game_state_stdio_live_all_supported_leagues():
     ):
         await session.initialize()
         tools = {tool.name: tool for tool in (await session.list_tools()).tools}
-        assert set(tools) == {"sports_state_find_games", "sports_state_get_game_state"}
+        assert set(tools) == {
+            "sports_state_find_games",
+            "sports_state_get_game_state",
+            "sports_state_get_box_score",
+        }
         assert tools["sports_state_find_games"].inputSchema["additionalProperties"] is False
         assert (
             await session.call_tool(
@@ -93,3 +97,26 @@ async def test_game_state_stdio_live_all_supported_leagues():
                 assert {"possession_team", "down", "distance", "field_position"} <= set(
                     state["situation"]
                 )
+            box = await session.call_tool(
+                "sports_state_get_box_score", {"game_ref": game["game_ref"]}
+            )
+            assert not box.isError
+            validate(box.structuredContent, tools["sports_state_get_box_score"].outputSchema)
+            box_score = box.structuredContent
+            assert box_score["league"] == league
+            assert box_score["game_ref"] == game["game_ref"]
+            assert box_score["sport"] == ("baseball" if league == "mlb" else "football")
+            assert box_score["source"] in {"espn", "mlb_statsapi"}
+            assert box_score["observation_id"].startswith(f"{box_score['source']}:")
+            assert box_score["completeness"]
+            if league == "mlb":
+                assert {"line_score", "batting", "pitching"} <= set(box_score)
+                for team in ("away", "home"):
+                    for player in box_score["batting"][team]:
+                        assert player["player_id"] and player["name"]
+                    for player in box_score["pitching"][team]:
+                        assert player["player_id"] and player["name"]
+                        if "outs_recorded" in player:
+                            assert player["outs_recorded"] >= 0
+            else:
+                assert {"line_score", "team_stats", "player_stats"} <= set(box_score)

@@ -92,6 +92,12 @@ The game-state suite additionally verifies:
 - Typed host validation of league/participants/start/provider references before market/state
   combination, plus matching/conflicting state, unavailable state, and an enforced separation
   between final score, contract equivalence, and prediction-market settlement.
+- Exact-reference box scores for MLB, NFL, and NCAA football through unit, MCP, stdio, and agent
+  paths; the tool accepts no selector beyond `game_ref`.
+- MLB inning null semantics, team totals, game-only batting/pitching fields, stable player IDs,
+  integer outs normalization, ESPN partial-field reporting, and exact MLB StatsAPI fallback.
+- Football period scoring, named team statistics, categorized stable-player statistics, completed
+  games, live cache bounds, content-derived observation IDs, and omission of unavailable fields.
 
 The Tavily suite additionally verifies:
 
@@ -115,7 +121,7 @@ Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
 These are bounded public reads. Sports tests check all supported leagues, schema discovery,
-`limit=20` rejection, coverage bounds, and details for returned candidates.
+`limit=20` rejection, coverage bounds, and current-state plus box-score detail for returned candidates.
 An empty current result is valid; exact historical/open-game identity belongs in fixtures.
 
 A real-market replay over ten prior-day NCAA games and ten current-day games from each of NFL and

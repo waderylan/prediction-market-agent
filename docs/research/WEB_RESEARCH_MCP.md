@@ -4,7 +4,8 @@
 
 The Tavily server supplies current public evidence that the market and sports-state providers do
 not contain: injuries, lineups, weather, venue or schedule changes, and other news about one exact
-game. It is corroborating research only. It cannot establish official game state, contract
+game. Structured line scores and player/team game statistics come from
+`sports_state_get_box_score`, never Tavily. It is corroborating research only. It cannot establish official game state, contract
 identity, contract equivalence, market settlement, an independent probability, or a position.
 
 ## MCP surface
@@ -24,7 +25,7 @@ tavily_search_game_evidence(
 
 `league` is `mlb`, `nfl`, or `ncaa_football`. `focus` is `injuries`, `lineups`, `weather`,
 `venue_or_schedule`, or `other_game_news`. Both teams, the local game date, and timezone-aware
-scheduled start must be copied from a typed market-detail or game-state result. The server, not the
+scheduled start must be copied from a typed market-detail, game-state, or box-score result. The server, not the
 model, constructs the web query.
 
 The result contains at most five sources. Each source preserves title, public HTTPS URL,
@@ -66,16 +67,15 @@ date for a September 22 evening game. The exact UTC start remains present in the
 
 ## Why this projection is narrower than the generic Tavily MCP
 
-The official generic server was tested before implementation. Its broad surface included search,
+The official generic server's broad surface includes search,
 extract, crawl, map, and research. Its search result was formatted as untyped text and omitted
 publication dates and relevance scores that the underlying API returned. The local projection
 keeps the real MCP boundary required by the assignment while providing the same strict schemas,
 sanitized errors, provider limits, and domain checks as the other application servers.
 
-Extraction was removed under Milestone 9's planned pivot. A real same-day game search returned
-adequate snippets with source URLs and dates. Exposing arbitrary URL extraction would add a larger
-prompt-injection surface and another latency/cost step without demonstrated value. Add extraction
-later only behind a searched-URL allowlist and a measured need that snippets cannot satisfy.
+The implemented server omits extraction because bounded snippets carry the required source URLs
+and dates. Arbitrary URL extraction would add prompt-injection surface and another latency/cost
+step. Any extraction extension requires a searched-URL allowlist and measured unmet need.
 
 The current fix intentionally keeps one request and the existing five-result budget. It does not
 add team-only searches, generic crawl/extraction, medical-record parsing, player-status conflict
@@ -105,7 +105,7 @@ Show the retained and rejected result counts, then cite every retained URL.
 ```
 
 A direct MCP call relies on the supplied typed identity. The conversational agent adds the stronger
-host check that requires those values to match a market-detail or game-state observation first.
+host check that requires those values to match a market-detail, game-state, or box-score observation first.
 
 Primary references:
 

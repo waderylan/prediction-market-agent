@@ -170,6 +170,149 @@ def mlb_summary(event=None):
     }
 
 
+def completed_status(period=4, detail="Final"):
+    return status(
+        "STATUS_FINAL", "post", "Final", period=period, detail=detail, completed=True, clock="0:00"
+    )
+
+
+def football_box_summary(event=None):
+    event = deepcopy(event or scoreboard_event(game_status=completed_status()))
+    competition = event["competitions"][0]
+    for competitor in competition["competitors"]:
+        competitor["linescores"] = [
+            {"displayValue": value}
+            for value in ([3, 7, 7, 0] if competitor["homeAway"] == "away" else [0, 3, 7, 0])
+        ]
+    result = football_summary(event)
+    if competition["status"]["type"]["state"] == "post":
+        result.pop("drives", None)
+    result["boxscore"] = {
+        "teams": [
+            {
+                "team": competitor["team"],
+                "statistics": [
+                    {"name": "totalYards", "label": "Total Yards", "displayValue": "325"}
+                ],
+            }
+            for competitor in competition["competitors"]
+        ],
+        "players": [
+            {
+                "team": competitor["team"],
+                "statistics": [
+                    {
+                        "name": "passing",
+                        "keys": ["completions/passingAttempts", "passingYards"],
+                        "labels": ["C/ATT", "YDS"],
+                        "athletes": [
+                            {
+                                "athlete": {
+                                    "id": f"qb-{competitor['team']['id']}",
+                                    "displayName": f"{competitor['team']['displayName']} QB",
+                                },
+                                "stats": ["20/30", "250"],
+                            }
+                        ],
+                    }
+                ],
+            }
+            for competitor in competition["competitors"]
+        ],
+    }
+    return result
+
+
+def baseball_box_summary(event=None):
+    event = deepcopy(event or mlb_event())
+    competition = event["competitions"][0]
+    competition["status"]["periodPrefix"] = "Top"
+    for competitor in competition["competitors"]:
+        competitor["linescores"] = [
+            {"displayValue": "0"},
+            {"displayValue": "1" if competitor["homeAway"] == "away" else "0"},
+            {"displayValue": "0"},
+            {"displayValue": "0"},
+            {"displayValue": "1" if competitor["homeAway"] == "home" else "0"},
+            {"displayValue": "0"},
+        ]
+    result = mlb_summary(event)
+    result["boxscore"] = {
+        "teams": [
+            {
+                "team": competitor["team"],
+                "statistics": [
+                    {
+                        "name": "batting",
+                        "stats": [{"name": "hits", "displayValue": "6"}],
+                    },
+                    {
+                        "name": "fielding",
+                        "stats": [{"name": "errors", "displayValue": "0"}],
+                    },
+                ],
+            }
+            for competitor in competition["competitors"]
+        ],
+        "players": [
+            {
+                "team": competitor["team"],
+                "statistics": [
+                    {
+                        "type": "batting",
+                        "keys": [
+                            "atBats",
+                            "runs",
+                            "hits",
+                            "homeRuns",
+                            "RBIs",
+                            "walks",
+                            "strikeouts",
+                        ],
+                        "athletes": [
+                            {
+                                "athlete": {
+                                    "id": f"b-{competitor['team']['id']}",
+                                    "displayName": "Game Batter",
+                                },
+                                "batOrder": 1,
+                                "starter": True,
+                                "position": {"abbreviation": "SS"},
+                                "stats": ["2", "1", "1", "0", "1", "0", "1"],
+                            }
+                        ],
+                    },
+                    {
+                        "type": "pitching",
+                        "keys": [
+                            "fullInnings.partInnings",
+                            "hits",
+                            "runs",
+                            "earnedRuns",
+                            "walks",
+                            "strikeouts",
+                            "homeRuns",
+                            "pitches-strikes",
+                        ],
+                        "athletes": [
+                            {
+                                "athlete": {
+                                    "id": f"p-{competitor['team']['id']}",
+                                    "displayName": "Game Pitcher",
+                                },
+                                "starter": True,
+                                "stats": ["1.1", "1", "0", "0", "0", "2", "0", "24-15"],
+                            }
+                        ],
+                    },
+                ],
+            }
+            for competitor in competition["competitors"]
+        ],
+    }
+    return result
+
+
 def client_with(handler, *, now=None, max_response_bytes=5 * 1024 * 1024):
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return (
@@ -210,6 +353,129 @@ async def discover(client, query="Falcons", league="nfl"):
 )
 def test_lifecycle_uses_explicit_status(provider_status, expected):
     assert _status(provider_status)[0] == expected
+
+
+async def test_baseball_box_score_omits_unavailable_fields_and_normalizes_outs():
+    clock = [datetime(2026, 9, 20, 20, 15, tzinfo=UTC)]
+    summary_calls = 0
+
+    def handler(request):
+        nonlocal summary_calls
+        if request.url.path.endswith("/summary"):
+            summary_calls += 1
+            payload = baseball_box_summary()
+            if summary_calls >= 3:
+                payload["boxscore"]["teams"][0]["statistics"][0]["stats"][0]["displayValue"] = "7"
+            return httpx.Response(200, json=payload, headers={"Cache-Control": "max-age=60"})
+        return httpx.Response(200, json={"events": [mlb_event()]})
+
+    client, http = client_with(handler, now=lambda: clock[0])
+    try:
+        found = await discover(client, "Yankees", "mlb")
+        first = await client.get_box_score(found.games[0].game_ref)
+        clock[0] += timedelta(seconds=5)
+        cached = await client.get_box_score(found.games[0].game_ref)
+        clock[0] += timedelta(seconds=6)
+        refreshed = await client.get_box_score(found.games[0].game_ref)
+        clock[0] += timedelta(seconds=11)
+        changed = await client.get_box_score(found.games[0].game_ref)
+    finally:
+        await http.aclose()
+
+    payload = first.model_dump(mode="json")
+    assert first.sport == "baseball" and first.lifecycle == "live"
+    assert payload["line_score"]["innings"][-1]["home_runs"] is None
+    assert "left_on_base" not in payload["line_score"]["away_totals"]
+    batter = payload["batting"]["away"][0]
+    assert batter["player_id"] == "b-25" and batter["hits"] == 1
+    assert {"doubles", "triples", "stolen_bases"}.isdisjoint(batter)
+    pitcher = payload["pitching"]["away"][0]
+    assert pitcher["outs_recorded"] == 4
+    assert pitcher["innings_pitched_display"] == "1.1"
+    assert (pitcher["pitches"], pitcher["strikes"]) == (24, 15)
+    assert first.completeness.batting == "partial"
+    assert first.completeness.team_totals == "partial"
+    assert cached.cache_hit and cached.cache_age_ms == 5000
+    assert cached.observation_id == first.observation_id == refreshed.observation_id
+    assert changed.observation_id != refreshed.observation_id
+    assert summary_calls == 3
+
+
+@pytest.mark.parametrize("league", ["nfl", "ncaa_football"])
+async def test_completed_football_box_score_supports_nfl_and_ncaa(league):
+    clock = [datetime(2026, 9, 20, 21, 0, tzinfo=UTC)]
+    if league == "ncaa_football":
+        event = scoreboard_event(
+            game_status=completed_status(),
+            teams=competitors(
+                home="Ohio State Buckeyes",
+                away="Michigan Wolverines",
+                home_id="194",
+                away_id="130",
+                home_score="10",
+                away_score="17",
+            ),
+        )
+        event["competitions"][0]["situation"] = None
+    else:
+        event = scoreboard_event(game_status=completed_status())
+
+    def handler(request):
+        if request.url.path.endswith("/summary"):
+            return httpx.Response(200, json=football_box_summary(event))
+        return httpx.Response(200, json={"events": [event]})
+
+    client, http = client_with(handler, now=lambda: clock[0])
+    try:
+        found = await discover(client, "all", league)
+        score = await client.get_box_score(found.games[0].game_ref)
+        clock[0] += timedelta(seconds=11)
+        cached = await client.get_box_score(found.games[0].game_ref)
+    finally:
+        await http.aclose()
+
+    payload = score.model_dump(mode="json")
+    assert score.league == league and score.sport == "football"
+    assert score.lifecycle == "final" and score.is_partial is False
+    assert cached.cache_hit and cached.cache_age_ms == 11000
+    assert len(payload["line_score"]["periods"]) == 4
+    assert payload["team_stats"]["away"][0]["name"] == "totalYards"
+    assert payload["player_stats"]["home"][0]["category"] == "passing"
+    assert payload["player_stats"]["home"][0]["players"][0]["player_id"].startswith("qb-")
+    assert score.completeness.model_dump() == {
+        "line_score": "complete",
+        "team_stats": "complete",
+        "player_stats": "complete",
+    }
+
+
+async def test_pregame_box_score_does_not_expose_provider_placeholders_or_player_stats():
+    event = scoreboard_event(
+        game_status=status("STATUS_SCHEDULED", "pre", "Scheduled", period=0, clock="0:00")
+    )
+
+    def handler(request):
+        if request.url.path.endswith("/summary"):
+            return httpx.Response(200, json=football_box_summary(event))
+        return httpx.Response(200, json={"events": [event]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client)
+        score = await client.get_box_score(found.games[0].game_ref)
+    finally:
+        await http.aclose()
+
+    payload = score.model_dump(mode="json")
+    assert "score" not in payload["away_team"] and "score" not in payload["home_team"]
+    assert payload["line_score"]["periods"] == []
+    assert payload["team_stats"] == {"away": [], "home": []}
+    assert payload["player_stats"] == {"away": [], "home": []}
+    assert score.completeness.model_dump() == {
+        "line_score": "unavailable",
+        "team_stats": "unavailable",
+        "player_stats": "unavailable",
+    }
 
 
 def test_baseball_phase_rejects_contradictory_state():
@@ -754,6 +1020,53 @@ def fallback_schedule(*, duplicate=False):
 
 
 def fallback_feed():
+    def team_box(batter_id, pitcher_id, batter_name, pitcher_name):
+        return {
+            "batters": [batter_id],
+            "pitchers": [pitcher_id],
+            "players": {
+                f"ID{batter_id}": {
+                    "person": {"id": batter_id, "fullName": batter_name},
+                    "battingOrder": "100",
+                    "allPositions": [{"abbreviation": "SS"}],
+                    "stats": {
+                        "batting": {
+                            "atBats": 2,
+                            "runs": 1,
+                            "hits": 1,
+                            "doubles": 1,
+                            "triples": 0,
+                            "homeRuns": 0,
+                            "rbi": 1,
+                            "baseOnBalls": 0,
+                            "strikeOuts": 1,
+                            "stolenBases": 0,
+                        }
+                    },
+                    "seasonStats": {"batting": {"homeRuns": 99}},
+                },
+                f"ID{pitcher_id}": {
+                    "person": {"id": pitcher_id, "fullName": pitcher_name},
+                    "stats": {
+                        "pitching": {
+                            "gamesStarted": 1,
+                            "inningsPitched": "1.1",
+                            "outs": 4,
+                            "hits": 1,
+                            "runs": 0,
+                            "earnedRuns": 0,
+                            "baseOnBalls": 0,
+                            "strikeOuts": 2,
+                            "homeRuns": 0,
+                            "numberOfPitches": 24,
+                            "strikes": 15,
+                        }
+                    },
+                    "seasonStats": {"pitching": {"era": "3.03"}},
+                },
+            },
+        }
+
     return {
         "gameData": {
             "game": {"pk": 777},
@@ -772,12 +1085,25 @@ def fallback_feed():
                 "balls": 2,
                 "strikes": 1,
                 "outs": 2,
-                "teams": {"home": {"runs": 3}, "away": {"runs": 2}},
+                "innings": [
+                    {"num": 1, "away": {"runs": 1}, "home": {"runs": 0}},
+                    {"num": 2, "away": {"runs": 0}, "home": {"runs": 1}},
+                ],
+                "teams": {
+                    "home": {"runs": 3, "hits": 6, "errors": 0, "leftOnBase": 4},
+                    "away": {"runs": 2, "hits": 5, "errors": 1, "leftOnBase": 3},
+                },
                 "offense": {
                     "first": {"id": 1},
                     "batter": {"fullName": "Aaron Judge"},
                 },
                 "defense": {"pitcher": {"fullName": "Yu Darvish"}},
+            },
+            "boxscore": {
+                "teams": {
+                    "away": team_box(101, 201, "Away Batter", "Away Pitcher"),
+                    "home": team_box(102, 202, "Home Batter", "Home Pitcher"),
+                }
             },
             "plays": {"currentPlay": {"result": {"description": "Single to left."}}},
         },
@@ -810,6 +1136,37 @@ async def test_mlb_fallback_requires_exact_match_then_returns_state():
     assert sum("/summary" in call for call in calls) == 2
     assert sum("/schedule" in call for call in calls) == 1
     assert sum("/feed/live" in call for call in calls) == 1
+
+
+async def test_mlb_box_score_fallback_uses_only_game_statistics():
+    def handler(request):
+        if request.url.host == "site.api.espn.com" and request.url.path.endswith("/scoreboard"):
+            return httpx.Response(200, json={"events": [mlb_event()]})
+        if request.url.host == "site.api.espn.com":
+            return httpx.Response(503)
+        if request.url.path.endswith("/schedule"):
+            return httpx.Response(200, json=fallback_schedule())
+        return httpx.Response(200, json=fallback_feed())
+
+    client, http = client_with(handler)
+    try:
+        result = await discover(client, "Yankees", "mlb")
+        score = await client.get_box_score(result.games[0].game_ref)
+    finally:
+        await http.aclose()
+
+    payload = score.model_dump(mode="json")
+    assert score.source == "mlb_statsapi" and score.provider_game_id == "777"
+    assert payload["batting"]["away"][0]["home_runs"] == 0
+    assert payload["pitching"]["away"][0]["outs_recorded"] == 4
+    assert "season_stats" not in json.dumps(payload).lower()
+    assert "3.03" not in json.dumps(payload)
+    assert score.completeness.model_dump() == {
+        "line_score": "complete",
+        "team_totals": "complete",
+        "batting": "complete",
+        "pitching": "complete",
+    }
 
 
 async def test_mlb_fallback_rejects_ambiguous_doubleheader():
