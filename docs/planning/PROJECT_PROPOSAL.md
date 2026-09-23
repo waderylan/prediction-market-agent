@@ -87,16 +87,18 @@ The server never silently maps a school into another competition.
 
 ## Future product work
 
-The next sports capability is the complete evidence-based forecast workflow. It must combine the
-implemented market, game-state, deterministic comparison, and bounded research paths without
-turning weak or conflicting evidence into false confidence.
+The next sports capability is a unified all-in-one information workflow. It will route each request
+to the minimum useful combination of the implemented market, game-state, statistics, play-history,
+deterministic comparison, and bounded research paths, then synthesize a source-attributed answer or
+game brief. It must preserve exact game identity, observation times, provider boundaries, and useful
+partial results when one source is unavailable.
 
 Later optional work includes an explicitly requested saved research snapshot. It is not a current
 capability.
 
-The forecast design should use named outcomes for sports. A generic YES/NO recommendation
-must not erase which team, game, or cancellation rule it refers to. The application must
-abstain when equivalence or evidence is insufficient.
+The product reports provider prices and relevant evidence but does not create an independent win
+probability or betting recommendation. It must refuse unsupported comparisons when contract
+equivalence or evidence is insufficient.
 
 ## Non-goals
 

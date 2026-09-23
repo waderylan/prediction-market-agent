@@ -29,9 +29,9 @@
 | 9A. Multi-sport exact-game box scores | Complete locally |
 | 9B. Exact-game player and play history tools | Complete locally |
 | 9C. Agent-readable presentation and evidence semantics | Complete locally |
-| 10. Complete sports agent and forecast output | Planned |
-| 11. Unified multi-MCP sports intelligence brief | Tentative idea; optional and not required |
-| 12. Optional sports-research ledger | Optional |
+| 10. Unified multi-MCP sports information assistant | Planned |
+| 11. Unified sports intelligence brief | Absorbed into Milestone 10 |
+| 12. Optional sports-research snapshot ledger | Optional |
 | 13. Failure handling and verification | In progress across implemented layers |
 | 14. Cloud Run and submission | Required |
 | 15. Polymarket US migration evaluation | Optional after deployment |
@@ -81,7 +81,7 @@
 - Exact MCP tool arguments and result schemas after API experiments.
 - Tavily query and result limits within the bounded-research requirement.
 - Internal Python module layout.
-- Whether the SQLite sports-research ledger is completed for Assignment 1 or retained as a
+- Whether the SQLite sports-research snapshot ledger is completed for Assignment 1 or retained as a
   stretch milestone.
 - LLM model configuration, provided the deployed model remains cloud-accessible.
 
@@ -106,7 +106,7 @@ Multi-server MCP client
   |-- Kalshi MCP ----------> Kalshi public APIs
   |-- Sports-state MCP ----> ESPN public JSON / MLB StatsAPI fallback
   |-- Tavily MCP ----------> Bounded game-scoped search
-  `-- SQLite MCP ----------> Optional sports-research ledger
+  `-- SQLite MCP ----------> Optional sports-research snapshot ledger
 ```
 
 - The two market servers remain separate processes and separate MCP configurations.
@@ -175,9 +175,9 @@ Multi-server MCP client
 
 ### Optional SQLite MCP
 
-- `save_forecast`
-- `get_forecast`
-- `list_forecasts`
+- `save_research_snapshot`
+- `get_research_snapshot`
+- `list_research_snapshots`
 - Add scoring tools only after save and retrieval work reliably.
 
 ## 6. Canonical Sports and Contract Models
@@ -502,7 +502,7 @@ Multi-server MCP client
   discovery, state, statistics, player detail, and play history.
 - Do not expose provider odds, provider win probability, player projections, fantasy data, news,
   season statistics, or unbounded play feeds. Game-only sports detail remains separate from
-  forecast evidence.
+  market and web-research evidence.
 
 #### Tool Surface
 
@@ -694,7 +694,7 @@ Multi-server MCP client
 - Update all three required README diagrams so they show the sports-state MCP process, ESPN primary
   source, MLB StatsAPI fallback, agent routing, and Cloud Run deployment path accurately.
 - Update `PROJECT_PROPOSAL.md` and this implementation plan's status table to distinguish the
-  implemented game-state capability from future comparison, research, and forecasting work.
+  implemented game-state capability from future comparison, research, and unified synthesis work.
 - Update `SPORTS_MCP.md` or add one focused game-state design document, then link it from the README
   documentation map. Keep provider contracts, field provenance, identity rules, budgets, cache
   semantics, error codes, and known limitations in one canonical research document rather than
@@ -901,7 +901,7 @@ Multi-server MCP client
 - Deterministic conflicts always veto equivalence regardless of Jev output in the default safe
   operating mode.
 - Jev never predicts a game, performs arithmetic, recommends a position, or produces the final
-  forecast.
+  user response.
 - The entire request still succeeds when Jev is disabled.
 
 #### Pivot Point
@@ -1224,139 +1224,116 @@ only because it has already been implemented.
   required/optional field coverage, pre/post outs, substitutions, quote freshness, close timing,
   result containers, official-only sources, empty evidence, recap focus, and corroboration cautions.
 
-### Milestone 10: Complete Sports Agent Workflow and Forecast Output
+### Milestone 10: Unified Multi-MCP Sports Information Assistant
 
-#### Work
+#### Product Boundary
 
-- Assemble the full LangGraph workflow:
-  - Interpret request.
-  - Select zero, one, or both market MCPs.
-  - Resolve the team, matchup, league, local calendar window, and intended game.
-  - Retrieve grouped games and exact provider contracts without inventing identifiers.
-  - Ask the user to choose when multiple event IDs remain plausible.
-  - Normalize and match sports contracts.
-  - Keep semantic ambiguity non-comparable and explain the missing evidence.
-  - Retrieve bounded current evidence when appropriate.
-  - Synthesize a final response.
-- Define a consistent response structure containing:
-  - League, participants, local kickoff, and exact provider event identities.
-  - Matched primary contracts and consumer-facing links.
-  - Named outcome prices with one authoritative `quote_as_of` and stale warnings.
-  - Lifecycle and explicit settlement, separate from provider exchange status.
-  - Material rule differences.
-  - Related-market context.
-  - Current external evidence.
-  - Agent probability estimate.
-  - Uncertainty and limitations.
-  - `YES`, `NO`, or `NO POSITION` conclusion.
-- Calculate price differences, implied probabilities, and other numeric comparisons in Python.
-- Allow a safe refusal to compare when no equivalent pair exists.
-- Preserve no-tool and single-platform behavior.
-
-#### Exit Criteria
-
-- A representative comparison chains both market MCPs and Tavily before synthesis.
-- Platform-specific queries do not force the other market MCP.
-- Local-date requests use the requested IANA timezone rather than treating a UTC calendar date as
-  the user's date.
-- Search/detail follow-ups preserve sports metadata and one explicit normalized observation identity.
-- Multi-turn follow-ups use the correct session context.
-- The agent handles arbitrary reasonable in-scope queries rather than memorized examples.
-- `NO POSITION` is produced when evidence or equivalence is insufficient.
-
-#### Pivot Point
-
-- Simplify output sections or graph branching if latency becomes excessive.
-- Preserve tool selection, memory, and MCP correctness before optional forecast detail.
-
-### Milestone 11: Tentative Unified Multi-MCP Sports Intelligence Brief
-
-This milestone is an optional product idea, not committed assignment scope, a release requirement,
-or part of the completion definition. Do not prioritize it ahead of required implementation,
-verification, deployment, documentation, or submission work. Begin it only after an explicit
-decision to adopt the idea.
+- Build an all-in-one conversational information getter for supported MLB, NFL, and NCAA Division I
+  football games and their Kalshi and Polymarket full-game-winner contracts.
+- Answer with verified sports, market, and current web information. Do not produce an independent
+  win probability, betting recommendation, or generic `YES`, `NO`, or `NO POSITION` conclusion.
+- Treat market prices as provider observations, not as the agent's forecast. Keep sporting state,
+  market trading state, contract equivalence, and market settlement separate.
+- Prefer a direct answer tailored to the question over a mandatory report template. Produce a
+  fuller game brief only when the user asks broadly or when several sources are materially useful.
 
 #### Work
 
 - Define and test an explicit intent-to-source routing matrix:
-  - Current score, lifecycle, or in-game situation uses the sports-state MCP.
-  - A named prediction-market platform uses only that platform's MCP unless comparison is requested.
+  - General sports explanations and unrelated knowledge questions preserve the no-tool path.
+  - Schedule, score, lifecycle, situation, box score, player-stat, and play-by-play questions use
+    only the sports-state MCP tools needed for the answer.
+  - A named prediction-market platform uses only that platform's MCP unless the user requests a
+    comparison or broader game brief.
   - Cross-market comparison uses both market MCPs and retrieves exact contract detail before
-    comparing terms or prices.
-  - A full sports intelligence brief uses the sports-state MCP, both relevant market MCPs, and the
-    bounded research MCP from Milestone 9 when it is available and materially relevant.
-  - General knowledge and unrelated questions preserve the no-tool path.
-- Resolve one canonical sporting event before synthesis. Bind every game-state observation,
-  market contract, and research item to league, both participants, and scheduled start; never merge
-  evidence when identity is different, ambiguous, or insufficient.
-- Add a typed intelligence-brief view model with these sections when evidence exists:
-  - Event identity, localized start, lifecycle, score, and sport-specific situation.
-  - Kalshi and Polymarket contract identities, named outcomes, prices, quote times, links, and
-    freshness warnings.
-  - Deterministic equivalence or mismatch result, material rule differences, settlement authority,
-    and cancellation/postponement treatment.
-  - Bounded external evidence from Milestone 9, separated into supporting, conflicting, and
-    unrelated findings.
-  - Source-attributed synthesis, missing evidence, uncertainty, and explicit limitations.
-- Keep each fact attached to its source, `retrieved_at`, and authoritative provider timestamp when
-  one exists. Never present separate MCP calls as one transactionally consistent snapshot.
-- Keep sporting state, market trading state, contract equivalence, and market settlement as four
-  separate concepts. A final game result may inform the brief but never proves contract settlement.
-- Retrieve exact detail after discovery, reuse opaque references unchanged, and respect each
-  server's request, pagination, cache, size, and timeout budgets.
-- Run independent MCP calls concurrently only after event identity and requested scope are known.
-  Preserve deterministic result ordering and bounded total tool calls.
-- Support follow-up questions from session memory without silently treating an old observation as
-  fresh. Refresh only the sources required by the follow-up.
-- Present useful partial briefs when one MCP is unavailable. Name the missing source and avoid
-  substituting another provider's facts or expanding to an unrequested source.
+    comparing prices, outcomes, rules, or settlement terms.
+  - Current injuries, lineups, weather, venue or schedule changes, game news, and postgame recap
+    questions use bounded Tavily research only after one exact game is established.
+  - A broad all-in-one game request may use sports state, both relevant market MCPs, and bounded
+    research when each source contributes material information.
+- Resolve one canonical game before combining sources. Bind every game-state observation, market
+  contract, and research result to the league, participants, date, and scheduled start. Ask the
+  user to choose when more than one game or provider event remains plausible.
+- Retrieve exact detail through returned identifiers and opaque references. Never construct or
+  guess a ticker, numeric market ID, `game_ref`, player ID, schedule, or consumer URL.
+- Synthesize only the sections supported by the request and available evidence:
+  - Direct answer and exact game identity with localized start time.
+  - Current lifecycle, score, sport-specific situation, and observation time.
+  - Requested box-score, player-stat, or play-by-play detail.
+  - Kalshi and Polymarket contract identities, named outcomes, provider prices, quote times,
+    freshness warnings, links, rules, and explicit settlement when available.
+  - Deterministic equivalence, mismatch, or insufficient-evidence result before any cross-market
+    price comparison.
+  - Bounded current web evidence with source links, retrieval times, and corroboration cautions.
+  - Missing sources, snapshot drift, uncertainty, and limitations that affect the answer.
+- Keep each fact attached to its source and observation time. Never present separate MCP calls as
+  one transactionally consistent snapshot or use a final sporting result as proof of market
+  settlement.
+- Support session-scoped follow-ups without silently presenting remembered observations as fresh.
+  Reuse stable identity from memory, then refresh only the current sources required by the new
+  question.
+- Return a useful partial answer when one MCP or upstream provider is unavailable. Name the missing
+  source, retain verified results from other sources, and do not substitute a different provider's
+  facts.
+- Run independent calls concurrently only after exact event identity and requested scope are known.
+  Preserve bounded tool budgets, deterministic output ordering, and controlled failure behavior.
 - Add scripted-model and real-MCP integration tests that assert the exact servers and tools called,
-  their order/dependencies, normalized evidence passed to synthesis, and sources intentionally not
-  called.
+  their dependencies, the normalized evidence supplied to synthesis, and irrelevant sources that
+  were intentionally not called.
 
 #### Exit Criteria
 
-- A representative full-brief request invokes sports state, Kalshi, and Polymarket through real MCP
-  sessions; it also invokes bounded research when Milestone 9 is enabled and relevant.
-- Sports-state-only, Kalshi-only, Polymarket-only, cross-market, full-brief, follow-up, and no-tool
-  prompts route to the minimum correct source set with no invented identifiers.
-- The agent deterministically verifies event identity before combining sources and asks for
-  clarification when multiple games or contracts remain plausible.
-- The intelligence brief names every source and observation/quote time, distinguishes live snapshot
-  drift, and keeps game result, price, contract rules, equivalence, and settlement separate.
-- Partial server failure produces an explicitly incomplete but useful brief; identity conflict or
-  insufficient evidence prevents unsupported synthesis.
-- Integration tests prove that irrelevant MCPs are not called and that a full brief can consume all
-  relevant MCP outputs within bounded latency and tool-call budgets.
-- Documentation and diagrams describe this as planned until the complete routing and brief tests
-  pass; no earlier milestone is relabeled as providing the unified brief.
+- A representative all-in-one game request invokes sports state, Kalshi, and Polymarket through
+  real MCP sessions and invokes bounded Tavily research only when current external evidence is
+  relevant.
+- Sports-state-only, Kalshi-only, Polymarket-only, cross-market, full-game-brief, follow-up, and
+  no-tool prompts route to the minimum correct source set.
+- The agent verifies exact event identity before combining sources and asks for clarification when
+  multiple games, contracts, or player identities remain plausible.
+- Direct questions receive concise direct answers; broad requests receive a coherent sourced brief
+  rather than a dump of every available field.
+- Local-date requests use the requested IANA timezone rather than treating a UTC calendar date as
+  the user's date.
+- Responses identify sources and observation or quote times, distinguish independently retrieved
+  snapshots, and keep game result, market price, rules, equivalence, and settlement separate.
+- Same-session follow-ups retain the correct game context and cross-session tests prove isolation.
+- Partial server failure produces an explicitly incomplete but still useful answer without an
+  unhandled error or unsupported substitution.
+- The agent handles arbitrary reasonable in-scope queries rather than memorized examples.
+- Responses never present an agent-generated betting pick or independent win probability.
 
 #### Pivot Point
 
-- If the complete brief exceeds latency or context budgets, keep the routing matrix and typed view
-  model but make external research opt-in and use compact discovery projections before removing a
-  required identity, provenance, rule, or freshness field.
+- If a full brief exceeds latency or context budgets, make external research opt-in and use compact
+  discovery projections before removing identity, provenance, freshness, or rule evidence.
 - If model-selected routing remains inconsistent, add a small deterministic intent classifier for
   source eligibility while leaving exact tool choice and synthesis to the agent.
+- Reduce response breadth before weakening correct tool selection, session memory, MCP correctness,
+  event identity, or failure behavior.
 - Never collapse the independent MCP servers into one provider facade merely to simplify routing.
 
-### Milestone 12: Optional SQLite Sports-Research Ledger
+### Milestone 11: Unified Sports Intelligence Brief — Absorbed into Milestone 10
+
+- The previously tentative unified-brief concept is now the committed Milestone 10 product scope.
+- Do not create a separate implementation milestone or duplicate workflow for this capability.
+
+### Milestone 12: Optional SQLite Sports-Research Snapshot Ledger
 
 #### Work
 
 - Build the ledger only after the complete research workflow is stable.
-- Store a forecast only after an explicit user request.
+- Store a research snapshot only after an explicit user request.
 - Save league, participants, provider event and contract references, local kickoff, quote timestamps,
-  prices, probability, evidence URLs, equivalence decision, and explicit settlement when available.
+  provider prices, evidence URLs, equivalence decision, and explicit settlement when available.
 - Support basic retrieval in a later turn.
 - Document that local Cloud Run storage is not durable across instance replacement.
 
 #### Exit Criteria
 
 - The SQLite server is independently discovered and invoked through MCP.
-- “Save that forecast” uses conversational context and creates one record.
+- “Save this research” uses conversational context and creates one record.
 - A different session cannot accidentally overwrite the record through ambiguous context.
-- Ledger failure does not destroy the generated forecast response.
+- Ledger failure does not destroy the generated information response.
 
 #### Pivot Point
 
@@ -1505,10 +1482,10 @@ decision to adopt the idea.
   8. Accurate documentation and required diagrams.
 - Reduce these first if time is constrained:
   1. SQLite calibration summaries.
-  2. SQLite sports-research ledger.
+  2. SQLite sports-research snapshot ledger.
   3. Order-book depth.
   4. Additional leagues, spreads, totals, props, and futures.
-  5. Detailed forecast presentation beyond the required evidence and uncertainty.
+  5. Saved research snapshots and expanded brief presentation.
   6. Polymarket US migration.
 
 ## 10. Completion Definition

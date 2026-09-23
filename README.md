@@ -43,7 +43,9 @@ IDs into `before_play_id` to page backward or `after_play_id` to retrieve only l
 | Comparison boundary | Typed event, named-outcome, and settlement checks run before synthesis for supported full-game winners |
 | Comparison policy | Deterministic identity plus core settlement checks; unsupported or differing full rules cannot authorize price comparison |
 
-Forecasting, a saved-forecast ledger, and Cloud Run deployment are **future work**. The matcher
+The unified all-in-one information workflow, an optional saved-research ledger, and Cloud Run
+deployment are **future work**. Independent forecasting and betting recommendations are outside the
+product scope. The matcher
 establishes equivalence when complete supplied full-game-winner
 identity, named-outcome mapping, game-winner type, postponement/cancellation terms, and exact full
 rules agree. Missing or differently worded rules remain ambiguous unless a core settlement conflict
