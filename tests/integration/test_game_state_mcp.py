@@ -261,6 +261,16 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         box_schema = tools["sports_state_get_box_score"].inputSchema
         assert box_schema["additionalProperties"] is False
         assert box_schema["required"] == ["game_ref"]
+        assert box_schema["properties"]["view"]["default"] == "summary"
+        assert set(box_schema["properties"]["view"]["enum"]) == {
+            "summary",
+            "full",
+            "line_score",
+            "batting",
+            "pitching",
+            "team_stats",
+            "player_stats",
+        }
         player_list_schema = tools["sports_state_list_players"].inputSchema
         assert player_list_schema["additionalProperties"] is False
         assert player_list_schema["required"] == ["game_ref"]
@@ -347,13 +357,26 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         assert not box.isError
         validate(box.structuredContent, tools["sports_state_get_box_score"].outputSchema)
         assert box.structuredContent["sport"] == "football"
+        assert box.structuredContent["view"] == "summary"
         assert box.structuredContent["line_score"]["periods"][0] == {
             "period": 1,
             "away_points": 7,
             "home_points": 0,
         }
-        assert box.structuredContent["player_stats"]["away"][0]["category"] == "passing"
+        assert "player_stats" not in box.structuredContent
+        assert box.structuredContent["highlights"][0]["stat_group"] == "passing"
+        assert "full box score" in box.structuredContent["follow_up_tip"]
         assert box.structuredContent["is_partial"] is True
+        assert sum(request.url.path.endswith("/summary") for request in calls) == 2
+
+        full_box = await session.call_tool(
+            "sports_state_get_box_score",
+            {"game_ref": game["game_ref"], "view": "player_stats", "team_side": "away"},
+        )
+        assert not full_box.isError
+        assert full_box.structuredContent["view"] == "player_stats"
+        assert full_box.structuredContent["player_stats"]["away"][0]["category"] == "passing"
+        assert full_box.structuredContent["player_stats"]["home"] == []
         assert sum(request.url.path.endswith("/summary") for request in calls) == 2
 
         plays = await session.call_tool(
@@ -363,6 +386,7 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         assert not plays.isError
         validate(plays.structuredContent, tools["sports_state_get_play_by_play"].outputSchema)
         assert [play["play_id"] for play in plays.structuredContent["plays"]] == ["play-2"]
+        assert plays.structuredContent["plays"][0]["event_kind"] == "football_play"
         assert plays.structuredContent["resume_after_play_id"] == "play-2"
         assert plays.structuredContent["requested_limit"] == 1
         after = await session.call_tool(
@@ -533,6 +557,8 @@ async def test_agent_selects_box_score_and_records_typed_result():
     result = json.loads(messages[-1].content)
     assert result["box_score"]["sport"] == "football"
     assert result["box_score"]["game_ref"] == game_ref
+    assert result["box_score"]["view"] == "summary"
+    assert "full box score" in result["box_score"]["follow_up_tip"]
 
 
 async def test_agent_lists_players_then_gets_one_narrow_stat_result():

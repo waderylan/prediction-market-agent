@@ -25,8 +25,16 @@ EvidenceFocus = Literal[
     "weather",
     "venue_or_schedule",
     "other_game_news",
+    "postgame_recap",
 ]
 AuthorityTier = Literal["league_official", "established_sports_media", "other"]
+SourcePolicy = Literal["all", "official_only"]
+
+OFFICIAL_DOMAINS_BY_LEAGUE: dict[League, tuple[str, ...]] = {
+    "mlb": ("mlb.com",),
+    "nfl": ("nfl.com",),
+    "ncaa_football": ("ncaa.com",),
+}
 
 FOCUS_QUERY = {
     "injuries": "injuries player availability",
@@ -34,6 +42,7 @@ FOCUS_QUERY = {
     "weather": "game weather forecast conditions",
     "venue_or_schedule": "venue kickoff start time postponement schedule change",
     "other_game_news": "latest game news",
+    "postgame_recap": "postgame recap analysis",
 }
 
 FOCUS_TERMS: dict[EvidenceFocus, tuple[str, ...]] = {
@@ -97,6 +106,18 @@ FOCUS_TERMS: dict[EvidenceFocus, tuple[str, ...]] = {
     ),
     # This category is deliberately broad after the exact matchup/date check.
     "other_game_news": (),
+    "postgame_recap": (
+        "recap",
+        "postgame",
+        "final",
+        "defeated",
+        "beat",
+        "win",
+        "won",
+        "loss",
+        "lost",
+        "highlights",
+    ),
 }
 
 
@@ -138,6 +159,16 @@ class ResearchSource(BaseModel):
         return value
 
 
+class EvidenceCaution(BaseModel):
+    """A deterministic signal that a snippet claim needs structured corroboration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=500)
+    source_urls: list[str] = Field(min_length=1, max_length=MAX_RESULTS)
+
+
 class GameResearchResult(BaseModel):
     """Typed, bounded evidence returned by the Tavily MCP projection."""
 
@@ -150,8 +181,13 @@ class GameResearchResult(BaseModel):
     game_date: date
     scheduled_start: datetime
     focus: EvidenceFocus
+    source_policy: SourcePolicy
     query: str = Field(min_length=1, max_length=500)
     sources: list[ResearchSource] = Field(max_length=MAX_RESULTS)
+    result_status: Literal["evidence_found", "no_qualifying_sources"]
+    empty_reason: str | None = Field(default=None, max_length=500)
+    official_source_count: int = Field(ge=0, le=MAX_RESULTS)
+    evidence_cautions: list[EvidenceCaution] = Field(default_factory=list, max_length=10)
     rejected_result_count: int = Field(ge=0, le=20)
     retrieved_at: datetime
     request_id: str | None = Field(default=None, max_length=200)
@@ -370,6 +406,7 @@ class TavilyResearchClient:
         game_date: date,
         scheduled_start: datetime,
         focus: EvidenceFocus,
+        source_policy: SourcePolicy = "all",
     ) -> GameResearchResult:
         if _normalized(team_a) == _normalized(team_b):
             raise ResearchError("invalid_identity", "The two teams must be different.")
@@ -398,6 +435,8 @@ class TavilyResearchClient:
             "filter_by_language": True,
             "safe_search": True,
         }
+        if source_policy == "official_only":
+            payload["include_domains"] = list(OFFICIAL_DOMAINS_BY_LEAGUE[league])
         try:
             async with asyncio.timeout(25):
                 response = await self._http.post(
@@ -450,6 +489,59 @@ class TavilyResearchClient:
 
         sources.sort(key=_source_sort_key)
 
+        if source_policy == "official_only":
+            official_domains = OFFICIAL_DOMAINS_BY_LEAGUE[league]
+            sources = [
+                source
+                for source in sources
+                if _host_matches(urlsplit(source.url).hostname or "", official_domains)
+            ]
+
+        evidence_cautions: list[EvidenceCaution] = []
+        if focus == "injuries":
+            return_claim_urls = [
+                source.url
+                for source in sources
+                if any(
+                    phrase in _normalized(f"{source.title} {source.snippet}")
+                    for phrase in (
+                        "return from the il",
+                        "returns from the il",
+                        "returning from the il",
+                        "activated from the il",
+                        "activated off the il",
+                        "will return",
+                        "set to return",
+                    )
+                )
+            ]
+            if return_claim_urls:
+                evidence_cautions.append(
+                    EvidenceCaution(
+                        code="return_claim_requires_structured_check",
+                        message=(
+                            "One or more snippets claim a player return or activation. Verify "
+                            "against official transactions, lineups, or structured recent-game "
+                            "participation before presenting the claim as current fact."
+                        ),
+                        source_urls=return_claim_urls,
+                    )
+                )
+
+        official_source_count = sum(
+            source.authority_tier == "league_official" for source in sources
+        )
+        result_status: Literal["evidence_found", "no_qualifying_sources"] = (
+            "evidence_found" if sources else "no_qualifying_sources"
+        )
+        empty_reason = None
+        if not sources:
+            empty_reason = (
+                "No league-official source passed the exact matchup, date, focus, and URL checks."
+                if source_policy == "official_only"
+                else "No source passed the exact matchup, date, focus, and URL checks."
+            )
+
         return GameResearchResult(
             league=league,
             team_a=team_a,
@@ -457,8 +549,13 @@ class TavilyResearchClient:
             game_date=game_date,
             scheduled_start=scheduled_start,
             focus=focus,
+            source_policy=source_policy,
             query=query,
             sources=sources,
+            result_status=result_status,
+            empty_reason=empty_reason,
+            official_source_count=official_source_count,
+            evidence_cautions=evidence_cautions,
             rejected_result_count=len(inspected_results) - len(sources),
             retrieved_at=retrieved_at,
             request_id=parsed.request_id,

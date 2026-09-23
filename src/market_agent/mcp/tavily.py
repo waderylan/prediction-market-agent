@@ -17,6 +17,7 @@ from market_agent.providers.research import (
     EvidenceFocus,
     GameResearchResult,
     ResearchError,
+    SourcePolicy,
     TavilyResearchClient,
 )
 from market_agent.providers.sports import League
@@ -84,12 +85,16 @@ def create_server(client: TavilyResearchClient | None = None) -> FastMCP[Any]:
         game_date: date,
         scheduled_start: datetime,
         focus: EvidenceFocus,
+        source_policy: SourcePolicy = "all",
     ) -> GameResearchResult:
         """Find current public evidence for one already-identified sports game.
 
         Copy league, both canonical team names, game_date, and scheduled_start from a market-detail,
         game-state, or box-score result. Never guess or alter that identity. focus must be one of
-        injuries, lineups, weather, venue_or_schedule, or other_game_news. The server constructs
+        injuries, lineups, weather, venue_or_schedule, other_game_news, or postgame_recap.
+        source_policy="official_only" restricts the request and retained evidence to league-
+        official domains; an empty result then means no official source passed this bounded search,
+        not that no official report exists. The server constructs
         the web query, inspects at most five results, and returns only HTTPS sources that name both
         teams and the exact game date. The query uses game_date without combining it with the UTC
         clock from scheduled_start; scheduled_start remains an exact identity field. Retained
@@ -108,6 +113,7 @@ def create_server(client: TavilyResearchClient | None = None) -> FastMCP[Any]:
                     game_date=game_date,
                     scheduled_start=scheduled_start,
                     focus=focus,
+                    source_policy=source_policy,
                 )
         except TimeoutError:
             raise _tool_error(

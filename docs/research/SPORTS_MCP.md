@@ -241,7 +241,9 @@ A sports result includes a `sports` object:
 Different provider event IDs are never merged merely because the participants match.
 Two doubleheader games remain two events even when both fall on the same UTC date.
 
-Sports search returns `games[]`, not a flat list of team contracts. Each game contains its event
+Sports search returns `games[]`, not a flat list of team contracts. `result_kind="sports_games"`
+and `contracts_location="games[].contracts"` make that shape explicit; generic topic search uses
+`result_kind="generic_markets"` and `contracts_location="markets[]"`. Each game contains its event
 identity, participants, UTC scheduled start, requested-timezone date and kickoff, a readable
 date/time label, lifecycle state, consumer URL, and `contracts[]`. The limit counts games. A
 Kalshi game normally contains both team contracts; a Polymarket game normally contains one
@@ -282,8 +284,10 @@ fabricated YES/NO prices or bid/ask assignments. No additional order-book reques
 `quote_as_of` is reserved for an authoritative provider quote timestamp. The mapped endpoints do
 not currently supply one, so it is null rather than copied from `retrieved_at` or generic record
 metadata. `retrieved_at` remains the response-observation time. `provider_updated_at` is retained
-as provider record metadata, not relabeled as a quote or trade clock. Missing authoritative timing,
-non-trading contracts, and old metadata produce an explicit stale flag/reason.
+as provider record metadata, not relabeled as a quote or trade clock. `quote_freshness` is
+`current`, `stale`, `timestamp_unavailable`, or `not_trading`. Missing authoritative timing
+is unknown freshness rather than stale; stale requires an authoritative quote timestamp more than
+15 minutes older than retrieval.
 
 Every normalized provider response receives an `observation_id`. A bounded 256-entry, 30-second
 cache reuses quote-bearing fields for an immediate detail call and exposes `cache_hit` plus
@@ -299,8 +303,10 @@ event identity when Gamma omits the event array.
 | `expected_resolution_time` | Kalshi expected expiration estimate |
 | `resolution_deadline` | Kalshi latest expiration, otherwise supplied expiration; Gamma null |
 
-A game beginning before trading closes is normal. Conflicting explicit game-start fields or
-conflicting identities fail validation; normal settlement timing does not create a warning. An
+A game beginning before trading closes is normal. A trading close more than 24 hours after
+scheduled start produces a timing warning explaining that close is not kickoff and may reflect
+administrative or postponement handling. Conflicting explicit game-start fields or conflicting
+identities fail validation. An
 `expected_resolution_time` earlier than scheduled start is omitted with `timing_warning` rather
 than presented as valid.
 Detail retrieval uses the exact event ID to recover Kalshi milestone metadata.

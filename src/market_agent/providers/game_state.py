@@ -44,6 +44,24 @@ Source = Literal["espn", "mlb_statsapi"]
 HalfInning = Literal["top", "bottom", "unknown"]
 BaseballPhase = Literal["not_started", "active", "transition", "complete", "unavailable"]
 CompletenessStatus = Literal["complete", "partial", "unavailable"]
+InningParticipation = Literal["played", "not_played", "not_reached", "unknown"]
+BoxScoreViewName = Literal[
+    "summary",
+    "full",
+    "line_score",
+    "batting",
+    "pitching",
+    "team_stats",
+    "player_stats",
+]
+TeamSide = Literal["away", "home", "both"]
+PlayEventKind = Literal[
+    "pitch",
+    "plate_appearance",
+    "substitution",
+    "game_action",
+    "football_play",
+]
 NOT_STARTED_LIFECYCLES = {"scheduled", "pregame"}
 
 DISCOVERY_USAGE = (
@@ -59,10 +77,10 @@ DETAIL_USAGE = (
     "establish prediction-market settlement."
 )
 BOX_SCORE_USAGE = (
-    "Box score contains period scoring and provider-backed game statistics. Baseball includes "
-    "team totals plus batting and pitching lines; football includes team statistics and grouped "
-    "player lines. Unavailable optional fields are omitted, semantic inning nulls mean a team has "
-    "not batted, and season statistics and play-by-play are not included."
+    "The default summary contains scoring and compact leaders. Use view=full for every available "
+    "box-score section, or request line_score, batting, pitching, team_stats, or player_stats. "
+    "Unavailable fields are omitted; inning participation explains every null run value. Season "
+    "statistics and play-by-play are not included."
 )
 PLAYER_DIRECTORY_USAGE = (
     "Available players are the provider-backed participants with game-stat lines in this exact "
@@ -76,7 +94,9 @@ PLAYER_STATS_USAGE = (
 PLAY_BY_PLAY_USAGE = (
     "Plays are chronological and carry stable provider-backed play_id values. Use the first "
     "returned ID as before_play_id to page backward or resume_after_play_id as after_play_id to "
-    "request only later unseen plays. This is game history, not market settlement evidence."
+    "request only later unseen plays. Baseball outs_before and outs_after describe state around "
+    "the event; substitution events are labeled separately from pitches and plate appearances. "
+    "This is game history, not market settlement evidence."
 )
 
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -128,6 +148,8 @@ class StateWarning(BaseModel):
 
     code: str = Field(min_length=1, max_length=100)
     message: str = Field(min_length=1, max_length=500)
+    section: str | None = Field(default=None, min_length=1, max_length=100)
+    fields: list[str] = Field(default_factory=list, max_length=30)
 
 
 class FootballSituation(BaseModel):
@@ -248,6 +270,19 @@ class InningLine(BaseModel):
     inning: int = Field(ge=1, le=30)
     away_runs: int | None = Field(default=None, ge=0)
     home_runs: int | None = Field(default=None, ge=0)
+    away_participation: InningParticipation = "unknown"
+    home_participation: InningParticipation = "unknown"
+
+    @model_validator(mode="after")
+    def participation_matches_runs(self) -> Self:
+        for role in ("away", "home"):
+            runs = getattr(self, f"{role}_runs")
+            participation = getattr(self, f"{role}_participation")
+            if participation == "played" and runs is None:
+                raise ValueError("played inning half requires a run value")
+            if participation != "played" and runs is not None:
+                raise ValueError("unplayed inning half cannot contain a run value")
+        return self
 
 
 class TeamTotals(BaseModel):
@@ -335,6 +370,8 @@ class BaseballBoxScoreCompleteness(BaseModel):
     team_totals: CompletenessStatus
     batting: CompletenessStatus
     pitching: CompletenessStatus
+    missing_required_fields: dict[str, list[str]] = Field(default_factory=dict)
+    missing_optional_fields: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class FootballPeriodLine(BaseModel):
@@ -394,6 +431,8 @@ class FootballBoxScoreCompleteness(BaseModel):
     line_score: CompletenessStatus
     team_stats: CompletenessStatus
     player_stats: CompletenessStatus
+    missing_required_fields: dict[str, list[str]] = Field(default_factory=dict)
+    missing_optional_fields: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class _BoxScoreBase(BaseModel):
@@ -477,6 +516,80 @@ class BoxScore(_BoxScoreBase):
         return self
 
 
+class BoxScoreHighlightStat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=100)
+    value: str = Field(min_length=1, max_length=100)
+
+
+class BoxScoreHighlight(BaseModel):
+    """One compact provider-backed player line selected for the summary view."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    player_id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    team: str = Field(min_length=1, max_length=200)
+    team_side: Literal["away", "home"]
+    stat_group: str = Field(min_length=1, max_length=100)
+    statistics: list[BoxScoreHighlightStat] = Field(min_length=1, max_length=12)
+
+
+class BoxScoreView(_BoxScoreBase):
+    """Presentation-bounded projection of one normalized full box score."""
+
+    sport: Literal["baseball", "football"]
+    view: BoxScoreViewName
+    team_side: TeamSide
+    available_views: list[BoxScoreViewName] = Field(min_length=3, max_length=7)
+    follow_up_tip: str = Field(min_length=1, max_length=500)
+    line_score: BaseballLineScore | FootballLineScore | None = None
+    batting: TeamBatting | None = Field(default=None, exclude_if=lambda value: value is None)
+    pitching: TeamPitching | None = Field(default=None, exclude_if=lambda value: value is None)
+    team_stats: TeamFootballStatistics | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    player_stats: TeamFootballPlayers | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    highlights: list[BoxScoreHighlight] = Field(default_factory=list, max_length=8)
+    completeness: BaseballBoxScoreCompleteness | FootballBoxScoreCompleteness
+
+    @model_validator(mode="after")
+    def valid_view(self) -> Self:
+        expected_sport = "baseball" if self.league == "mlb" else "football"
+        if self.sport != expected_sport:
+            raise ValueError("box-score view sport does not match league")
+        if self.view not in self.available_views:
+            raise ValueError("requested box-score view is unavailable for this sport")
+        present = {
+            name
+            for name in ("line_score", "batting", "pitching", "team_stats", "player_stats")
+            if getattr(self, name) is not None
+        }
+        expected: dict[BoxScoreViewName, set[str]] = {
+            "summary": {"line_score"},
+            "full": (
+                {"line_score", "batting", "pitching"}
+                if self.sport == "baseball"
+                else {"line_score", "team_stats", "player_stats"}
+            ),
+            "line_score": {"line_score"},
+            "batting": {"batting"},
+            "pitching": {"pitching"},
+            "team_stats": {"team_stats"},
+            "player_stats": {"player_stats"},
+        }
+        if present != expected[self.view]:
+            raise ValueError("box-score sections do not match the requested view")
+        if self.view == "summary" and not self.highlights and not self.is_partial:
+            # A final provider response can legitimately have no player sections, but that must
+            # already be disclosed as partial/unavailable rather than appearing complete.
+            raise ValueError("complete summary view requires at least one player highlight")
+        return self
+
+
 class AvailablePlayer(BaseModel):
     """Compact selector for one player with provider-backed game statistics."""
 
@@ -547,10 +660,30 @@ class BaseballPlayContext(BaseModel):
     half: HalfInning
     balls: int | None = Field(default=None, ge=0, le=4, exclude_if=lambda value: value is None)
     strikes: int | None = Field(default=None, ge=0, le=3, exclude_if=lambda value: value is None)
-    outs: int | None = Field(default=None, ge=0, le=3, exclude_if=lambda value: value is None)
+    outs_before: int | None = Field(
+        default=None, ge=0, le=3, exclude_if=lambda value: value is None
+    )
+    outs_after: int | None = Field(default=None, ge=0, le=3, exclude_if=lambda value: value is None)
     at_bat_id: str | None = Field(
         default=None, max_length=100, exclude_if=lambda value: value is None
     )
+
+
+class SubstitutionParticipant(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(min_length=1, max_length=100)
+    player_id: str | None = Field(default=None, min_length=1, max_length=100)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class BaseballSubstitution(BaseModel):
+    """Provider-labeled roster action kept separate from plate-appearance state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    substitution_type: str = Field(min_length=1, max_length=100)
+    participants: list[SubstitutionParticipant] = Field(default_factory=list, max_length=10)
 
 
 class FootballPlayContext(BaseModel):
@@ -583,6 +716,10 @@ class GamePlay(BaseModel):
     play_type: str | None = Field(
         default=None, max_length=100, exclude_if=lambda value: value is None
     )
+    event_kind: PlayEventKind
+    substitution: BaseballSubstitution | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     text: str = Field(min_length=1, max_length=MAX_TEXT)
     team: str | None = Field(default=None, max_length=200, exclude_if=lambda value: value is None)
     team_side: Literal["away", "home"] | None = Field(
@@ -600,6 +737,16 @@ class GamePlay(BaseModel):
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError("play wallclock must include a timezone")
         return value
+
+    @model_validator(mode="after")
+    def structured_event_matches_kind(self) -> Self:
+        if (self.event_kind == "substitution") != (self.substitution is not None):
+            raise ValueError("substitution payload does not match event kind")
+        if self.context.sport == "football" and self.event_kind != "football_play":
+            raise ValueError("football context requires football_play event kind")
+        if self.context.sport == "baseball" and self.event_kind == "football_play":
+            raise ValueError("baseball context cannot use football_play event kind")
+        return self
 
 
 class _PlayFeed(_BoxScoreBase):
@@ -1387,6 +1534,172 @@ def _finalize_box_score(box_score: BoxScore) -> BoxScore:
     return box_score.model_copy(update={"observation_id": _box_score_observation_id(box_score)})
 
 
+def _display_stat(label: str, value: int | str | None) -> BoxScoreHighlightStat | None:
+    if value is None:
+        return None
+    return BoxScoreHighlightStat(label=label, value=str(value))
+
+
+def _baseball_highlights(box_score: BoxScore, team_side: TeamSide) -> list[BoxScoreHighlight]:
+    assert box_score.batting is not None and box_score.pitching is not None
+    highlights: list[BoxScoreHighlight] = []
+    sides: tuple[Literal["away", "home"], ...] = (
+        ("away", "home") if team_side == "both" else (team_side,)
+    )
+    for side in sides:
+        team = box_score.away_team.name if side == "away" else box_score.home_team.name
+        batters = getattr(box_score.batting, side)
+        if batters:
+            batter = max(
+                batters,
+                key=lambda line: (
+                    line.rbi or 0,
+                    line.home_runs or 0,
+                    line.hits or 0,
+                    line.runs or 0,
+                    line.walks or 0,
+                ),
+            )
+            stats = [
+                _display_stat("AB", batter.at_bats),
+                _display_stat("R", batter.runs),
+                _display_stat("H", batter.hits),
+                _display_stat("RBI", batter.rbi),
+                _display_stat("BB", batter.walks),
+                _display_stat("SO", batter.strikeouts),
+                _display_stat("HR", batter.home_runs),
+            ]
+            highlights.append(
+                BoxScoreHighlight(
+                    player_id=batter.player_id,
+                    name=batter.name,
+                    team=team,
+                    team_side=side,
+                    stat_group="batting",
+                    statistics=[stat for stat in stats if stat is not None],
+                )
+            )
+        pitchers = getattr(box_score.pitching, side)
+        if pitchers:
+            pitcher = max(
+                pitchers,
+                key=lambda line: (
+                    line.outs_recorded or 0,
+                    line.strikeouts or 0,
+                    -(line.earned_runs or 0),
+                ),
+            )
+            stats = [
+                _display_stat("IP", pitcher.innings_pitched_display),
+                _display_stat("H", pitcher.hits),
+                _display_stat("R", pitcher.runs),
+                _display_stat("ER", pitcher.earned_runs),
+                _display_stat("BB", pitcher.walks),
+                _display_stat("SO", pitcher.strikeouts),
+            ]
+            highlights.append(
+                BoxScoreHighlight(
+                    player_id=pitcher.player_id,
+                    name=pitcher.name,
+                    team=team,
+                    team_side=side,
+                    stat_group="pitching",
+                    statistics=[stat for stat in stats if stat is not None],
+                )
+            )
+    return highlights
+
+
+def _football_highlights(box_score: BoxScore, team_side: TeamSide) -> list[BoxScoreHighlight]:
+    assert box_score.player_stats is not None
+    highlights: list[BoxScoreHighlight] = []
+    sides: tuple[Literal["away", "home"], ...] = (
+        ("away", "home") if team_side == "both" else (team_side,)
+    )
+    for side in sides:
+        team = box_score.away_team.name if side == "away" else box_score.home_team.name
+        for group in getattr(box_score.player_stats, side):
+            if not group.players:
+                continue
+            player = group.players[0]
+            highlights.append(
+                BoxScoreHighlight(
+                    player_id=player.player_id,
+                    name=player.name,
+                    team=team,
+                    team_side=side,
+                    stat_group=group.category,
+                    statistics=[
+                        BoxScoreHighlightStat(label=stat.label, value=stat.value)
+                        for stat in player.statistics[:12]
+                    ],
+                )
+            )
+            if len([item for item in highlights if item.team_side == side]) >= 4:
+                break
+    return highlights
+
+
+def _filter_team_section(section: BaseModel, team_side: TeamSide) -> BaseModel:
+    if team_side == "both":
+        return section
+    other = "home" if team_side == "away" else "away"
+    return section.model_copy(update={other: []})
+
+
+def project_box_score(
+    box_score: BoxScore,
+    *,
+    view: BoxScoreViewName = "summary",
+    team_side: TeamSide = "both",
+) -> BoxScoreView:
+    """Project a full cached box score into one agent-readable presentation view."""
+
+    available_views: list[BoxScoreViewName] = (
+        ["summary", "full", "line_score", "batting", "pitching"]
+        if box_score.sport == "baseball"
+        else ["summary", "full", "line_score", "team_stats", "player_stats"]
+    )
+    if view not in available_views:
+        raise SportsStateError(
+            "unsupported_box_score_view",
+            f"{view} is not available for {box_score.sport} box scores",
+            fields={"view": view, "sport": box_score.sport},
+        )
+    common = box_score.model_dump(include=set(_BoxScoreBase.model_fields) - {"usage_note"})
+    sections: dict[str, Any] = {}
+    if view in {"summary", "full", "line_score"}:
+        sections["line_score"] = box_score.line_score
+    if view in {"full", "batting"} and box_score.batting is not None:
+        sections["batting"] = _filter_team_section(box_score.batting, team_side)
+    if view in {"full", "pitching"} and box_score.pitching is not None:
+        sections["pitching"] = _filter_team_section(box_score.pitching, team_side)
+    if view in {"full", "team_stats"} and box_score.team_stats is not None:
+        sections["team_stats"] = _filter_team_section(box_score.team_stats, team_side)
+    if view in {"full", "player_stats"} and box_score.player_stats is not None:
+        sections["player_stats"] = _filter_team_section(box_score.player_stats, team_side)
+    highlights = (
+        _baseball_highlights(box_score, team_side)
+        if box_score.sport == "baseball"
+        else _football_highlights(box_score, team_side)
+    )
+    return BoxScoreView(
+        **common,
+        sport=box_score.sport,
+        view=view,
+        team_side=team_side,
+        available_views=available_views,
+        follow_up_tip=(
+            "Present this requested view only. Tell the user they can ask for the full box score "
+            "or for any available section: " + ", ".join(available_views[2:]) + "."
+        ),
+        completeness=box_score.completeness,
+        highlights=highlights if view == "summary" else [],
+        usage_note=BOX_SCORE_USAGE,
+        **sections,
+    )
+
+
 def _player_projection_data(box_score: BoxScore) -> dict[str, Any]:
     fields = set(_BoxScoreBase.model_fields) - {"usage_note"}
     return box_score.model_dump(include=fields)
@@ -1626,12 +1939,66 @@ def _espn_play_team_index(
     return result
 
 
+def _baseball_event_kind(
+    raw: dict[str, Any], type_data: dict[str, Any], text: str
+) -> PlayEventKind:
+    type_text = " ".join(
+        value
+        for value in (
+            _text(type_data.get("type"), limit=100),
+            _text(type_data.get("text"), limit=100),
+            _text(type_data.get("abbreviation"), limit=100),
+        )
+        if value
+    ).casefold()
+    combined = f"{type_text} {text.casefold()}"
+    substitution_markers = (
+        "substitution",
+        "pitching change",
+        "defensive change",
+        "pinch hit",
+        "pinch-hit",
+        "pinch ran",
+        "pinch run",
+        "replaced ",
+        " hit for ",
+    )
+    if any(marker in combined for marker in substitution_markers):
+        return "substitution"
+    if "pitch" in type_text:
+        return "pitch"
+    if raw.get("atBatId") not in (None, ""):
+        return "plate_appearance"
+    return "game_action"
+
+
+def _substitution_participants(raw: dict[str, Any]) -> list[SubstitutionParticipant]:
+    values = raw.get("participants")
+    if not isinstance(values, list):
+        return []
+    participants: list[SubstitutionParticipant] = []
+    for value in values[:10]:
+        if not isinstance(value, dict):
+            continue
+        athlete_value = value.get("athlete")
+        athlete = athlete_value if isinstance(athlete_value, dict) else value
+        role = _text(value.get("type") or value.get("role"), limit=100) or "participant"
+        player_id = _text(athlete.get("id"), limit=100)
+        name = _text(athlete.get("displayName") or athlete.get("fullName"), limit=200)
+        if player_id is None and name is None:
+            continue
+        participants.append(SubstitutionParticipant(role=role, player_id=player_id, name=name))
+    return participants
+
+
 def _espn_play(
     raw: dict[str, Any],
     *,
     sequence: int,
     sport: Literal["baseball", "football"],
     teams_by_id: dict[str, tuple[str, Literal["away", "home"]]],
+    outs_before: int | None = None,
+    outs_after: int | None = None,
 ) -> GamePlay:
     play_id = _text(raw.get("id"), limit=100)
     text = _text(raw.get("text"))
@@ -1664,6 +2031,8 @@ def _espn_play(
     scoring = _boolean(raw.get("scoringPlay"), "scoring play")
     play_type = raw.get("type")
     type_data = _object(play_type, "play type") if play_type is not None else {}
+    event_kind: PlayEventKind
+    substitution: BaseballSubstitution | None = None
     clock_data = raw.get("clock")
     clock = (
         _text(_object(clock_data, "play clock").get("displayValue"), limit=100)
@@ -1672,6 +2041,15 @@ def _espn_play(
     )
     context: BaseballPlayContext | FootballPlayContext
     if sport == "baseball":
+        event_kind = _baseball_event_kind(raw, type_data, text)
+        if event_kind == "substitution":
+            substitution = BaseballSubstitution(
+                substitution_type=(
+                    _text(type_data.get("text") or type_data.get("type"), limit=100)
+                    or "substitution"
+                ),
+                participants=_substitution_participants(raw),
+            )
         half_text = (_text(period_data.get("type"), limit=20) or "").casefold()
         half: HalfInning = (
             "top"
@@ -1686,11 +2064,13 @@ def _espn_play(
             half=half,
             balls=_optional_integer(count_data.get("balls"), "play balls", maximum=4),
             strikes=_optional_integer(count_data.get("strikes"), "play strikes", maximum=3),
-            outs=_optional_integer(raw.get("outs"), "play outs", maximum=3),
+            outs_before=outs_before,
+            outs_after=outs_after,
             at_bat_id=_text(raw.get("atBatId"), limit=100),
         )
         period_label = _text(period_data.get("displayValue"), limit=100)
     else:
+        event_kind = "football_play"
         end = raw.get("end")
         start = raw.get("start")
         position = end if isinstance(end, dict) else start if isinstance(start, dict) else {}
@@ -1722,6 +2102,8 @@ def _espn_play(
         period_label=period_label,
         clock=clock,
         play_type=_text(type_data.get("text") or type_data.get("abbreviation"), limit=100),
+        event_kind=event_kind,
+        substitution=substitution,
         text=text,
         team=team_identity[0] if team_identity else None,
         team_side=team_identity[1] if team_identity else None,
@@ -1775,6 +2157,7 @@ def _espn_play_feed(
         raise StateValidationError("response_too_large", "play feed exceeds 1,000 plays")
     plays: list[GamePlay] = []
     seen: set[str] = set()
+    baseball_outs: dict[tuple[int | None, HalfInning], int] = {}
     warnings = list(state.warnings)
     discarded = 0
     for raw in raw_plays:
@@ -1787,7 +2170,44 @@ def _espn_play_feed(
         ):
             continue
         try:
-            play = _espn_play(raw, sequence=len(plays) + 1, sport=sport, teams_by_id=teams_by_id)
+            outs_before = outs_after = None
+            if sport == "baseball":
+                period_value = raw.get("period")
+                period_data = _object(period_value or {}, "play period")
+                inning = _optional_integer(period_data.get("number"), "play period", maximum=30)
+                half_text = (_text(period_data.get("type"), limit=20) or "").casefold()
+                half: HalfInning = (
+                    "top"
+                    if half_text.startswith("top")
+                    else "bottom"
+                    if half_text.startswith("bot")
+                    else "unknown"
+                )
+                key = (inning, half)
+                provider_outs = _optional_integer(raw.get("outs"), "play outs", maximum=3)
+                prior_outs = baseball_outs.get(key)
+                if provider_outs is not None:
+                    outs_before = prior_outs if prior_outs is not None else 0
+                    outs_after = provider_outs
+                    baseball_outs[key] = provider_outs
+                elif prior_outs is not None:
+                    outs_before = outs_after = prior_outs
+            play = _espn_play(
+                raw,
+                sequence=len(plays) + 1,
+                sport=sport,
+                teams_by_id=teams_by_id,
+                outs_before=outs_before,
+                outs_after=outs_after,
+            )
+            if play.event_kind == "substitution" and isinstance(play.context, BaseballPlayContext):
+                stable_outs = play.context.outs_after
+                if stable_outs is not None:
+                    play = play.model_copy(
+                        update={
+                            "context": play.context.model_copy(update={"outs_before": stable_outs})
+                        }
+                    )
             if play.play_id in seen:
                 raise StateValidationError("malformed_response", "duplicate play ID")
             seen.add(play.play_id)
@@ -2123,6 +2543,54 @@ def _collection_completeness(
     )
 
 
+def _missing_collection_fields(values: Sequence[BaseModel], fields: tuple[str, ...]) -> list[str]:
+    return [field for field in fields if any(getattr(value, field) is None for value in values)]
+
+
+def _inning_participation(
+    *,
+    runs: int | None,
+    role: Literal["away", "home"],
+    inning: int,
+    inning_count: int,
+    lifecycle: Lifecycle,
+    current_period: int | None,
+    current_half: str,
+    away_score: int | None,
+    home_score: int | None,
+) -> InningParticipation:
+    if runs is not None:
+        return "played"
+    if (
+        role == "home"
+        and lifecycle == "live"
+        and current_period == inning
+        and current_half.startswith("top")
+    ):
+        return "not_reached"
+    if (
+        role == "home"
+        and lifecycle == "final"
+        and inning == inning_count
+        and away_score is not None
+        and home_score is not None
+        and home_score > away_score
+    ):
+        return "not_played"
+    return "unknown"
+
+
+def _complete_box_sections(
+    completeness: BaseballBoxScoreCompleteness | FootballBoxScoreCompleteness,
+) -> bool:
+    sections = (
+        ("line_score", "team_totals", "batting", "pitching")
+        if isinstance(completeness, BaseballBoxScoreCompleteness)
+        else ("line_score", "team_stats", "player_stats")
+    )
+    return all(getattr(completeness, section) == "complete" for section in sections)
+
+
 def _espn_box_score(
     root: Any, reference: _GameRefPayload, retrieved_at: datetime, source_url: str
 ) -> BoxScore:
@@ -2170,7 +2638,33 @@ def _espn_box_score(
         if state.lifecycle == "live" and state.period == number and prefix == "top":
             values["home"] = None
         innings.append(
-            InningLine(inning=number, away_runs=values["away"], home_runs=values["home"])
+            InningLine(
+                inning=number,
+                away_runs=values["away"],
+                home_runs=values["home"],
+                away_participation=_inning_participation(
+                    runs=values["away"],
+                    role="away",
+                    inning=number,
+                    inning_count=inning_count,
+                    lifecycle=state.lifecycle,
+                    current_period=state.period,
+                    current_half=prefix,
+                    away_score=state.away_score,
+                    home_score=state.home_score,
+                ),
+                home_participation=_inning_participation(
+                    runs=values["home"],
+                    role="home",
+                    inning=number,
+                    inning_count=inning_count,
+                    lifecycle=state.lifecycle,
+                    current_period=state.period,
+                    current_half=prefix,
+                    away_score=state.away_score,
+                    home_score=state.home_score,
+                ),
+            )
         )
 
     scores = {state.away_team: state.away_score, state.home_team: state.home_score}
@@ -2192,11 +2686,8 @@ def _espn_box_score(
         if not available or not innings
         else "complete"
         if all(
-            inning.away_runs is not None
-            and (
-                inning.home_runs is not None
-                or (state.lifecycle == "live" and state.period == inning.inning and prefix == "top")
-            )
+            inning.away_participation == "played"
+            and inning.home_participation in {"played", "not_played", "not_reached"}
             for inning in innings
         )
         else "partial"
@@ -2209,7 +2700,7 @@ def _espn_box_score(
         if all(
             getattr(total, field) is not None
             for total in total_values
-            for field in ("runs", "hits", "errors", "left_on_base")
+            for field in ("runs", "hits", "errors")
         )
         else "partial"
     )
@@ -2218,25 +2709,19 @@ def _espn_box_score(
     batting_status = _collection_completeness(
         batter_lines,
         (
-            "lineup_slot",
-            "starter",
             "at_bats",
             "runs",
             "hits",
-            "doubles",
-            "triples",
             "home_runs",
             "rbi",
             "walks",
             "strikeouts",
-            "stolen_bases",
         ),
         available=available,
     )
     pitching_status = _collection_completeness(
         pitcher_lines,
         (
-            "starter",
             "outs_recorded",
             "innings_pitched_display",
             "hits",
@@ -2244,36 +2729,90 @@ def _espn_box_score(
             "earned_runs",
             "walks",
             "strikeouts",
-            "home_runs",
-            "pitches",
-            "strikes",
         ),
         available=available,
     )
+    batting_required = _missing_collection_fields(
+        batter_lines,
+        ("at_bats", "runs", "hits", "home_runs", "rbi", "walks", "strikeouts"),
+    )
+    batting_optional = _missing_collection_fields(
+        batter_lines, ("lineup_slot", "starter", "doubles", "triples", "stolen_bases")
+    )
+    pitching_required = _missing_collection_fields(
+        pitcher_lines,
+        (
+            "outs_recorded",
+            "innings_pitched_display",
+            "hits",
+            "runs",
+            "earned_runs",
+            "walks",
+            "strikeouts",
+        ),
+    )
+    pitching_optional = _missing_collection_fields(
+        pitcher_lines, ("starter", "home_runs", "pitches", "strikes")
+    )
+    total_required = [
+        field
+        for field in ("runs", "hits", "errors")
+        if any(getattr(total, field) is None for total in total_values)
+    ]
+    total_optional = (
+        ["left_on_base"] if any(total.left_on_base is None for total in total_values) else []
+    )
+    line_required = [
+        f"{role}_runs_inning_{inning.inning}"
+        for inning in innings
+        for role in ("away", "home")
+        if getattr(inning, f"{role}_participation") == "unknown"
+    ]
     completeness = BaseballBoxScoreCompleteness(
         line_score=line_status,
         team_totals=total_status,
         batting=batting_status,
         pitching=pitching_status,
+        missing_required_fields={
+            key: value
+            for key, value in {
+                "line_score": line_required,
+                "team_totals": total_required,
+                "batting": batting_required,
+                "pitching": pitching_required,
+            }.items()
+            if value
+        },
+        missing_optional_fields={
+            key: value
+            for key, value in {
+                "team_totals": total_optional,
+                "batting": batting_optional,
+                "pitching": pitching_optional,
+            }.items()
+            if value
+        },
     )
     warnings = list(state.warnings)
-    if total_status == "partial":
+    for section, fields in completeness.missing_required_fields.items():
         warnings.append(
             StateWarning(
-                code="partial_team_totals",
+                code="partial_box_score_section",
                 message=(
-                    "ESPN did not report every requested team total; missing fields are omitted."
+                    f"ESPN omitted required {section} fields: {', '.join(fields)}. "
+                    "Missing fields are omitted and season statistics were not substituted."
                 ),
+                section=section,
+                fields=fields,
             )
         )
-    if batting_status == "partial":
+    for section, fields in completeness.missing_optional_fields.items():
         warnings.append(
             StateWarning(
-                code="partial_batting_lines",
-                message=(
-                    "ESPN omitted some game batting fields; missing fields are omitted and "
-                    "season statistics were not substituted."
-                ),
+                code="optional_box_score_fields_omitted",
+                message=f"ESPN omitted optional {section} fields: {', '.join(fields)}.",
+                section=section,
+                fields=fields,
             )
         )
     box_score = BoxScore(
@@ -2300,8 +2839,7 @@ def _espn_box_score(
         pitching=TeamPitching(away=pitching[state.away_team], home=pitching[state.home_team]),
         retrieved_at=state.retrieved_at,
         observation_id="pending",
-        is_partial=state.lifecycle != "final"
-        or any(value != "complete" for value in completeness.model_dump().values()),
+        is_partial=state.lifecycle != "final" or not _complete_box_sections(completeness),
         completeness=completeness,
         warnings=warnings[:20],
     )
@@ -2541,8 +3079,7 @@ def _espn_football_box_score(
         ),
         retrieved_at=state.retrieved_at,
         observation_id="pending",
-        is_partial=state.lifecycle != "final"
-        or any(value != "complete" for value in completeness.model_dump().values()),
+        is_partial=state.lifecycle != "final" or not _complete_box_sections(completeness),
         completeness=completeness,
         warnings=warnings[:20],
     )
@@ -2886,15 +3423,41 @@ def _mlb_box_score(
     if len(innings_data) > 30:
         raise StateValidationError("response_too_large", "MLB line score exceeds 30 innings")
     innings: list[InningLine] = []
+    inning_count = len(innings_data)
+    current_half = (_text(linescore.get("inningHalf"), limit=20) or "").lower()
     for entry in innings_data:
         number = _integer(entry.get("num"), "MLB inning number", minimum=1, maximum=30)
         away = _object(entry.get("away", {}), "MLB away inning")
         home = _object(entry.get("home", {}), "MLB home inning")
+        away_runs = _optional_integer(away.get("runs"), "MLB away inning runs")
+        home_runs = _optional_integer(home.get("runs"), "MLB home inning runs")
         innings.append(
             InningLine(
                 inning=number,
-                away_runs=_optional_integer(away.get("runs"), "MLB away inning runs"),
-                home_runs=_optional_integer(home.get("runs"), "MLB home inning runs"),
+                away_runs=away_runs,
+                home_runs=home_runs,
+                away_participation=_inning_participation(
+                    runs=away_runs,
+                    role="away",
+                    inning=number,
+                    inning_count=inning_count,
+                    lifecycle=state.lifecycle,
+                    current_period=state.period,
+                    current_half=current_half,
+                    away_score=state.away_score,
+                    home_score=state.home_score,
+                ),
+                home_participation=_inning_participation(
+                    runs=home_runs,
+                    role="home",
+                    inning=number,
+                    inning_count=inning_count,
+                    lifecycle=state.lifecycle,
+                    current_period=state.period,
+                    current_half=current_half,
+                    away_score=state.away_score,
+                    home_score=state.home_score,
+                ),
             )
         )
     if [inning.inning for inning in innings] != sorted({inning.inning for inning in innings}):
@@ -2918,21 +3481,13 @@ def _mlb_box_score(
     away_batting, home_batting = _mlb_batters(away_box), _mlb_batters(home_box)
     away_pitching, home_pitching = _mlb_pitchers(away_box), _mlb_pitchers(home_box)
     available = state.lifecycle not in NOT_STARTED_LIFECYCLES
-    current_half = (_text(linescore.get("inningHalf"), limit=20) or "").lower()
     line_status: CompletenessStatus = (
         "unavailable"
         if not available or not innings
         else "complete"
         if all(
-            inning.away_runs is not None
-            and (
-                inning.home_runs is not None
-                or (
-                    state.lifecycle == "live"
-                    and state.period == inning.inning
-                    and current_half.startswith("top")
-                )
-            )
+            inning.away_participation == "played"
+            and inning.home_participation in {"played", "not_played", "not_reached"}
             for inning in innings
         )
         else "partial"
@@ -2945,7 +3500,7 @@ def _mlb_box_score(
         if all(
             getattr(team_total, field) is not None
             for team_total in team_totals
-            for field in ("runs", "hits", "errors", "left_on_base")
+            for field in ("runs", "hits", "errors")
         )
         else "partial"
     )
@@ -2954,25 +3509,19 @@ def _mlb_box_score(
     batting_status = _collection_completeness(
         batter_lines,
         (
-            "lineup_slot",
-            "starter",
             "at_bats",
             "runs",
             "hits",
-            "doubles",
-            "triples",
             "home_runs",
             "rbi",
             "walks",
             "strikeouts",
-            "stolen_bases",
         ),
         available=available,
     )
     pitching_status = _collection_completeness(
         pitcher_lines,
         (
-            "starter",
             "outs_recorded",
             "innings_pitched_display",
             "hits",
@@ -2980,18 +3529,91 @@ def _mlb_box_score(
             "earned_runs",
             "walks",
             "strikeouts",
-            "home_runs",
-            "pitches",
-            "strikes",
         ),
         available=available,
     )
+    batting_required = _missing_collection_fields(
+        batter_lines,
+        ("at_bats", "runs", "hits", "home_runs", "rbi", "walks", "strikeouts"),
+    )
+    batting_optional = _missing_collection_fields(
+        batter_lines, ("lineup_slot", "starter", "doubles", "triples", "stolen_bases")
+    )
+    pitching_required = _missing_collection_fields(
+        pitcher_lines,
+        (
+            "outs_recorded",
+            "innings_pitched_display",
+            "hits",
+            "runs",
+            "earned_runs",
+            "walks",
+            "strikeouts",
+        ),
+    )
+    pitching_optional = _missing_collection_fields(
+        pitcher_lines, ("starter", "home_runs", "pitches", "strikes")
+    )
+    total_required = [
+        field
+        for field in ("runs", "hits", "errors")
+        if any(getattr(team_total, field) is None for team_total in team_totals)
+    ]
+    total_optional = (
+        ["left_on_base"]
+        if any(team_total.left_on_base is None for team_total in team_totals)
+        else []
+    )
+    line_required = [
+        f"{role}_runs_inning_{inning.inning}"
+        for inning in innings
+        for role in ("away", "home")
+        if getattr(inning, f"{role}_participation") == "unknown"
+    ]
     completeness = BaseballBoxScoreCompleteness(
         line_score=line_status,
         team_totals=total_status,
         batting=batting_status,
         pitching=pitching_status,
+        missing_required_fields={
+            key: value
+            for key, value in {
+                "line_score": line_required,
+                "team_totals": total_required,
+                "batting": batting_required,
+                "pitching": pitching_required,
+            }.items()
+            if value
+        },
+        missing_optional_fields={
+            key: value
+            for key, value in {
+                "team_totals": total_optional,
+                "batting": batting_optional,
+                "pitching": pitching_optional,
+            }.items()
+            if value
+        },
     )
+    warnings = list(state.warnings)
+    for section, fields in completeness.missing_required_fields.items():
+        warnings.append(
+            StateWarning(
+                code="partial_box_score_section",
+                message=f"MLB StatsAPI omitted required {section} fields: {', '.join(fields)}.",
+                section=section,
+                fields=fields,
+            )
+        )
+    for section, fields in completeness.missing_optional_fields.items():
+        warnings.append(
+            StateWarning(
+                code="optional_box_score_fields_omitted",
+                message=f"MLB StatsAPI omitted optional {section} fields: {', '.join(fields)}.",
+                section=section,
+                fields=fields,
+            )
+        )
     box_score_result = BoxScore(
         league="mlb",
         sport="baseball",
@@ -3014,10 +3636,9 @@ def _mlb_box_score(
         pitching=TeamPitching(away=away_pitching, home=home_pitching),
         retrieved_at=state.retrieved_at,
         observation_id="pending",
-        is_partial=state.lifecycle != "final"
-        or any(value != "complete" for value in completeness.model_dump().values()),
+        is_partial=state.lifecycle != "final" or not _complete_box_sections(completeness),
         completeness=completeness,
-        warnings=state.warnings,
+        warnings=warnings[:20],
     )
     return _finalize_box_score(box_score_result)
 
@@ -3033,6 +3654,7 @@ def _mlb_play_feed(
     if len(raw_plays) > MAX_PLAYS:
         raise StateValidationError("response_too_large", "MLB play feed exceeds 1,000 at-bats")
     plays: list[GamePlay] = []
+    outs_by_half: dict[tuple[int | None, HalfInning], int] = {}
     warnings = list(state.warnings)
     discarded = 0
     for raw in raw_plays:
@@ -3061,6 +3683,11 @@ def _mlb_play_feed(
             team = (
                 state.away_team if side == "away" else state.home_team if side == "home" else None
             )
+            outs_after = _optional_integer(count.get("outs"), "MLB play outs", maximum=3)
+            half_key = (inning, half)
+            outs_before = outs_by_half.get(half_key, 0) if outs_after is not None else None
+            if outs_after is not None:
+                outs_by_half[half_key] = outs_after
             plays.append(
                 GamePlay(
                     play_id=f"{state.provider_game_id}:{at_bat_index}",
@@ -3073,6 +3700,7 @@ def _mlb_play_feed(
                         else None
                     ),
                     play_type=_text(result.get("event") or result.get("eventType"), limit=100),
+                    event_kind="plate_appearance",
                     text=text,
                     team=team,
                     team_side=side,
@@ -3086,7 +3714,8 @@ def _mlb_play_feed(
                         strikes=_optional_integer(
                             count.get("strikes"), "MLB play strikes", maximum=3
                         ),
-                        outs=_optional_integer(count.get("outs"), "MLB play outs", maximum=3),
+                        outs_before=outs_before,
+                        outs_after=outs_after,
                         at_bat_id=str(at_bat_index),
                     ),
                 )

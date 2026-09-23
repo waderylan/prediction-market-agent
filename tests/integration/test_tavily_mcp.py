@@ -68,7 +68,9 @@ async def test_schema_and_typed_game_evidence_are_real_mcp_calls():
             "weather",
             "venue_or_schedule",
             "other_game_news",
+            "postgame_recap",
         ]
+        assert schema["properties"]["source_policy"]["enum"] == ["all", "official_only"]
 
         result = await session.call_tool(
             "tavily_search_game_evidence",
@@ -86,6 +88,8 @@ async def test_schema_and_typed_game_evidence_are_real_mcp_calls():
     assert not result.isError
     validate(result.structuredContent, tools["tavily_search_game_evidence"].outputSchema)
     assert result.structuredContent["provider"] == "tavily"
+    assert result.structuredContent["result_status"] == "evidence_found"
+    assert result.structuredContent["source_policy"] == "all"
     assert result.structuredContent["sources"][0]["relationship"] == "same_matchup_date"
     assert result.structuredContent["sources"][0]["publication_date"].startswith("2026-09-20")
 

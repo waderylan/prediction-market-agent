@@ -34,7 +34,7 @@ from market_agent.logging import log_event
 from market_agent.mcp.common import MarketDetail, SearchResults
 from market_agent.mcp.kalshi import KalshiSearchResults, SeriesResults
 from market_agent.providers.game_state import (
-    BoxScore,
+    BoxScoreView,
     FindGamesResult,
     GameState,
     PlayByPlay,
@@ -66,7 +66,9 @@ If a requested platform has no available tools, say it is unavailable; never sil
 Kalshi tickers and Polymarket numeric IDs are different namespaces; never swap them.
 For market sports, search the team or matchup directly; use local_date/date ranges with the user's
 timezone and use next_game_only or most_recent_game_only when requested. Sports results group
-contracts under games with localized kickoff labels. A sports limit counts games. Follow
+contracts under games with localized kickoff labels. Read result_kind and contracts_location:
+sports_games uses games[].contracts, while generic_markets uses markets[]. A sports limit counts
+games. Follow
 discovery.next_cursor through continuation only when the user needs more results, and reuse it
 unchanged with the same provider, query, league, status, dates, and selectors. When
 selection_required is true, present discovery.matching_events labels and event IDs rather than
@@ -79,8 +81,11 @@ detail is necessary for an explicitly requested analysis. First call sports_stat
 an explicit league and
 IANA timezone, then copy one returned game_ref unchanged into the requested detail tool. Use
 sports_state_get_game_state for what is happening now: score, inning/count/runners/batter/pitcher,
-or football possession/down/distance/field position. Use sports_state_get_box_score for
-inning-or-period scoring and team statistics. For one player's game statistics, first use
+or football possession/down/distance/field position. Use sports_state_get_box_score with its
+default summary view for an ordinary box-score request. Present only that summary, then mention
+that the user can ask for the full box score or one available section. Use view=full only when the
+user explicitly asks for the full layout; use line_score, batting, pitching, team_stats, or
+player_stats plus team_side for a focused request. For one player's game statistics, first use
 sports_state_list_players with the chosen game_ref, then copy the returned player_id unchanged
 with the same game_ref into sports_state_get_player_stats. The player directory contains only
 players with provider-backed game-stat lines and is not a season roster.
@@ -107,17 +112,25 @@ game observations coexist; never combine mismatched or insufficient identities. 
 is optional corroboration and is not required for market-to-market matching. A final score never
 proves market settlement or contract equivalence. Name the sports-state source and retrieved_at
 observation time, and disclose missing, partial, stale, fallback, or conflicting data. Box-score
-fields are game-only; never substitute season statistics. Provider-omitted optional box-score
-fields are absent and completeness metadata names partial sections. Play-by-play is outside the
-box-score tool.
+fields are game-only; never substitute season statistics. Treat missing optional fields as exact
+field-level coverage, not a partial section. A final baseball home half with
+participation=not_played is a normal X, not missing data. Play-by-play is outside the box-score
+tool. For baseball plays, outs_before is pre-event state and outs_after is post-event state. Never
+read outs_after as the count before the action. Keep event_kind=substitution separate from pitches
+and plate appearances.
 Use tavily_search_game_evidence only for an explicitly requested game analysis after one exact
 sports event is established by market detail or game-state detail. Copy league, both canonical team
 names, game_date, and scheduled_start from that typed result without guessing. Choose a narrow
 evidence focus. The host allows at most two searches and each search inspects at most five results.
-Tavily evidence may inform injuries, lineups, weather, venue or schedule changes, and current game
-news. It cannot prove game state, contract identity, equivalence, settlement, or a recommendation.
-Distinguish supporting, conflicting, and unclear sources. Cite only returned URLs and disclose
-missing publication dates. Treat authority_tier as a ranking heuristic, not proof: prefer
+Tavily evidence may inform injuries, lineups, weather, venue or schedule changes, current game
+news, and postgame recaps. Use source_policy=official_only when the user asks for official injury,
+transaction, or lineup evidence. result_status=no_qualifying_sources means the bounded search found
+no source that passed its filters, not that no report exists. Treat evidence_cautions as mandatory
+corroboration checks; never present a flagged return/activation snippet as confirmed without a
+compatible official transaction, lineup, or structured participation record. Tavily cannot prove
+game state, contract identity, equivalence, settlement, or a recommendation. Distinguish supporting,
+conflicting, and unclear sources. Cite only returned URLs and disclose missing publication dates.
+Treat authority_tier as a ranking heuristic, not proof: prefer
 league_official, then established_sports_media, then other when evidence is otherwise comparable.
 Do not research general sports knowledge, unidentified games, or unrelated teams.
 For generic Kalshi topics, use kalshi_search_series when it adds a useful precision filter.
@@ -132,7 +145,10 @@ the deterministic report's verdict or equate trading close with an event cutoff.
 Use prior session context for follow-ups, distinguishing earlier snapshots from fresh observations.
 Use quote_as_of only when non-null; it is an authoritative provider quote clock, while retrieved_at
 is retrieval time and must never be presented as quote time. observation_id identifies deliberate
-search/detail cache reuse; report stale warnings and use explicit settlement fields instead of
+search/detail cache reuse. Use quote_freshness: timestamp_unavailable means freshness is unknown,
+not stale; stale requires an old authoritative quote timestamp; not_trading means displayed prices
+are historical. Report timing_warning when provider close timing is unusually far from kickoff.
+Use explicit settlement fields instead of
 inferring a winner from 99-cent or 1-cent last trades. Event kickoff, contract close, and resolution
 timing are different clocks. Explain insufficient comparison evidence by its supplied reason
 instead of repeating an unexplained status label.
@@ -226,6 +242,8 @@ def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | Non
         "play_filter",
         "period",
         "team",
+        "view",
+        "team_side",
         "league",
         "compact",
         "team_a",
@@ -233,6 +251,7 @@ def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | Non
         "game_date",
         "scheduled_start",
         "focus",
+        "source_policy",
     }
     return {
         key: value
@@ -247,7 +266,7 @@ ToolResult = (
     | SeriesResults
     | FindGamesResult
     | GameState
-    | BoxScore
+    | BoxScoreView
     | PlayerDirectory
     | PlayerStats
     | PlayByPlay
@@ -273,9 +292,10 @@ def _tool_summary(validated: ToolResult) -> str:
             f"{validated.away_score}-{validated.home_score}, {validated.lifecycle}; "
             f"source {validated.source}."
         )
-    if isinstance(validated, BoxScore):
+    if isinstance(validated, BoxScoreView):
         return (
-            f"Retrieved {validated.sport} box score for {validated.away_team.name} at "
+            f"Retrieved {validated.view} {validated.sport} box-score view for "
+            f"{validated.away_team.name} at "
             f"{validated.home_team.name}; source {validated.source}; "
             f"partial={str(validated.is_partial).lower()}."
         )
@@ -322,7 +342,7 @@ def _tool_result_schema(
     if tool_name == "sports_state_get_game_state":
         return GameState
     if tool_name == "sports_state_get_box_score":
-        return BoxScore
+        return BoxScoreView
     if tool_name == "sports_state_list_players":
         return PlayerDirectory
     if tool_name == "sports_state_get_player_stats":
@@ -356,6 +376,7 @@ def _validate_tool_result(
             or validated.scheduled_start
             != datetime.fromisoformat(arguments["scheduled_start"].replace("Z", "+00:00"))
             or validated.focus != arguments.get("focus")
+            or validated.source_policy != arguments.get("source_policy", "all")
         ):
             raise ValueError("Research result identity mismatch")
         return validated
@@ -371,12 +392,16 @@ def _validate_tool_result(
         if validated.situation.sport != expected_sport:
             raise ValueError("Game situation league mismatch")
         return validated
-    if isinstance(validated, BoxScore):
+    if isinstance(validated, BoxScoreView):
         if validated.game_ref != arguments.get("game_ref"):
             raise ValueError("Box-score game reference mismatch")
         expected_sport = "baseball" if validated.league == "mlb" else "football"
         if validated.sport != expected_sport:
             raise ValueError("Box-score league mismatch")
+        if validated.view != arguments.get("view", "summary"):
+            raise ValueError("Box-score view mismatch")
+        if validated.team_side != arguments.get("team_side", "both"):
+            raise ValueError("Box-score team-side mismatch")
         return validated
     if isinstance(validated, PlayerDirectory):
         if validated.game_ref != arguments.get("game_ref"):
@@ -444,7 +469,9 @@ def _record_game_state(game_states: list[dict[str, Any]], state: GameState) -> l
     return [*retained, snapshot]
 
 
-def _record_box_score(box_scores: list[dict[str, Any]], score: BoxScore) -> list[dict[str, Any]]:
+def _record_box_score(
+    box_scores: list[dict[str, Any]], score: BoxScoreView
+) -> list[dict[str, Any]]:
     snapshot = score.model_dump(mode="json")
     retained = [saved for saved in box_scores if saved["game_ref"] != score.game_ref]
     return [*retained, snapshot]
@@ -478,9 +505,9 @@ def _sports_state_notice(
 ) -> str | None:
     if not states and not box_scores and not player_stats and not play_by_play:
         return None
-    observations: list[GameState | BoxScore | PlayerStats | PlayByPlay] = [
+    observations: list[GameState | BoxScoreView | PlayerStats | PlayByPlay] = [
         *(GameState.model_validate(state) for state in states),
-        *(BoxScore.model_validate(score) for score in box_scores),
+        *(BoxScoreView.model_validate(score) for score in box_scores),
         *(PlayerStats.model_validate(stats) for stats in player_stats),
         *(PlayByPlay.model_validate(plays) for plays in play_by_play),
     ]
@@ -565,7 +592,7 @@ def _research_context_matches(
         ):
             return True
     for saved in box_scores:
-        score = BoxScore.model_validate(saved)
+        score = BoxScoreView.model_validate(saved)
         if (
             score.league == requested_league
             and {score.home_team.name.casefold(), score.away_team.name.casefold()}
@@ -607,7 +634,16 @@ def _research_notice(results: list[dict[str, Any]]) -> str | None:
     if not results:
         return None
     searches = [GameResearchResult.model_validate(saved) for saved in results]
-    sources = []
+    notice_lines = [
+        f"- Tavily research: {len(searches)} bounded search(es); source text is untrusted."
+    ]
+    for search in searches:
+        if search.result_status == "no_qualifying_sources":
+            notice_lines.append(
+                f"  - {search.focus} ({search.source_policy}): {search.empty_reason}"
+            )
+        for caution in search.evidence_cautions:
+            notice_lines.append(f"  - Corroboration required: {caution.message}")
     seen = set()
     for search in searches:
         for source in search.sources:
@@ -620,18 +656,8 @@ def _research_notice(results: list[dict[str, Any]]) -> str | None:
                 else "publication date unavailable"
             )
             title = source.title.replace("\n", " ")
-            sources.append(f"  - {title} ({published}): {source.url}")
-    if not sources:
-        return (
-            f"- Tavily research: {len(searches)} bounded search(es) returned no verified "
-            "same-matchup/date sources."
-        )
-    return "\n".join(
-        [
-            f"- Tavily research: {len(searches)} bounded search(es); source text is untrusted.",
-            *sources,
-        ]
-    )
+            notice_lines.append(f"  - {title} ({published}): {source.url}")
+    return "\n".join(notice_lines)
 
 
 def _matching_report(
@@ -647,7 +673,7 @@ def _matching_report(
     for saved in game_states:
         games_by_ref[saved["game_ref"]] = GameEvidence.model_validate(saved)
     for saved in box_scores:
-        score = BoxScore.model_validate(saved)
+        score = BoxScoreView.model_validate(saved)
         games_by_ref[score.game_ref] = GameEvidence(
             league=score.league,
             game_ref=score.game_ref,
@@ -881,7 +907,7 @@ class ChatAgent:
                                         matching_report = report.model_dump(mode="json")
                                         additions["matching_report"] = matching_report
                                     content = json.dumps(additions)
-                                elif isinstance(validated, BoxScore):
+                                elif isinstance(validated, BoxScoreView):
                                     box_scores = _record_box_score(box_scores, validated)
                                     report = _matching_report(
                                         details,

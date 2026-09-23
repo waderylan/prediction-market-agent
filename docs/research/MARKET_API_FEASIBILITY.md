@@ -83,9 +83,13 @@ are in [Game-state MCP](GAME_STATE_MCP.md).
 | `market_url` | Indexed series/event route plus returned identities | Documented market route plus returned slug |
 
 Object-update time is not last-trade or quote time. `quote_as_of` therefore remains null for the
-currently mapped endpoints instead of copying `retrieved_at`; stale flags explain the missing
-authoritative clock. `observation_id` identifies normalized response reuse independently from time.
+currently mapped endpoints instead of copying `retrieved_at`. `quote_freshness` reports
+`timestamp_unavailable` for an actively tradable contract without an authoritative clock,
+`not_trading` for historical prices, and `stale` only when an authoritative quote timestamp is
+more than 15 minutes old. `observation_id` identifies normalized response reuse independently from time.
 Trading close is not scheduled game start.
+A close more than 24 hours after scheduled start produces a warning without being reclassified as
+kickoff, quote time, or a contract-identity failure.
 A NO complement is not necessarily the opponent's win. Missing data remains null.
 The server does not infer settlement from a 99-cent or 1-cent trade. Settlement fields require
 provider resolution evidence. The server does not fetch order books because this product does

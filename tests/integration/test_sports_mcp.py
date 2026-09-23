@@ -208,6 +208,8 @@ async def test_sports_schema_and_call(provider):
         assert not result.isError
         validate(result.structuredContent, tools[name].outputSchema)
         assert result.structuredContent["markets"] == []
+        assert result.structuredContent["result_kind"] == "sports_games"
+        assert result.structuredContent["contracts_location"] == "games[].contracts"
         game = result.structuredContent["games"][0]
         market = game["contracts"][0]
         assert game["local_date"] == "2026-09-19"
@@ -218,7 +220,9 @@ async def test_sports_schema_and_call(provider):
         assert market["sports"]["scheduled_start_local"].endswith("-07:00")
         assert market["outcome_quotes"][0]["price"] == "0.42"
         assert market["quote_as_of"] is None
-        assert market["quote_is_stale"] is True
+        assert market["quote_freshness"] == "timestamp_unavailable"
+        assert market["quote_is_stale"] is False
+        assert market["quote_stale_reason"] is None
         assert market["observation_id"].startswith(provider + ":")
         assert market["cache_hit"] is False
         assert market["market_url"].startswith(f"https://{provider}.com/")

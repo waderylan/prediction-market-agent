@@ -22,11 +22,11 @@ No test requires a particular game to be open.
 |---|---|
 | `unit/test_sports.py` | Exact aliases, two-team provider queries, local dates/ranges, selectors, grouping, continuation, lifecycle, settlement, coverage, cancellation, malformed data, quote semantics |
 | `integration/test_sports_mcp.py` | Actual tools/list schemas and tools/call results, invalid limit rejection, clarification without HTTP, safe errors, agent schema consumption, typed cross-market sports report |
-| `unit/test_game_state.py` | Game identity/state parsing, lifecycle, situation nulls/bounds, refs, box/player projections, cache, retry/size limits, cancellation, MLB fallback |
-| `integration/test_game_state_mcp.py` | Third server tools/list and tools/call, strict state/box/player schemas, errors, agent routing, market/game identity, settlement separation |
+| `unit/test_game_state.py` | Game identity/state parsing, lifecycle, situation bounds, box views, inning participation, field coverage, pre/post outs, substitutions, cache, fallback |
+| `integration/test_game_state_mcp.py` | Third server tools/list and tools/call, strict state/box-view/player/play schemas, errors, agent routing, identity, settlement separation |
 | `live/test_game_state_mcp_live.py` | Current ESPN/MLB compatibility through the independent stdio process across all three leagues |
 | `live/test_sports_mcp_live.py` | Independent stdio processes, current public API compatibility, searches across MLB/NFL/NCAA, detail retrieval when a candidate exists |
-| `unit/test_research.py` | Fixed Tavily request shape, local-date query construction, authority ordering, key/keyless authentication, game/date/focus filtering, URL safety, provenance, sanitization, malformed data |
+| `unit/test_research.py` | Fixed Tavily request shape, local-date query construction, official-only policy, recap focus, explicit empty results, corroboration cautions, URL safety, provenance, malformed data |
 | `integration/test_tavily_mcp.py` | Fourth-server tools/list and tools/call, strict schema, typed evidence, safe provider errors, invalid-input rejection |
 | `live/test_tavily_mcp_live.py` | Current keyless Tavily compatibility through the independent stdio MCP process |
 | Provider unit tests | Parsing, status, identity, arrays, retries, transport and HTTP errors |
@@ -59,7 +59,10 @@ The sports suite specifically verifies:
 - Lifecycle moves through pregame, live, awaiting resolution, and settled without treating an
   exchange's open flag as proof that a completed game is live.
 - Search/detail reuse one explicit `observation_id` inside the 30-second cache window and expose
-  cache hits/age. A missing provider quote clock leaves `quote_as_of` null and stale with a reason.
+  cache hits/age. A missing provider quote clock leaves `quote_as_of` null with
+  `quote_freshness="timestamp_unavailable"`; stale requires an old authoritative quote timestamp.
+- Sports and generic searches identify `games[].contracts` and `markets[]` respectively through
+  result-kind metadata. A close more than 24 hours after scheduled start produces a timing warning.
 - Malformed individual provider records are discarded with bounded warnings while valid siblings
   remain available; malformed page roots still fail safely.
 - Local timezone/date/start metadata survives search-to-detail projection.
@@ -97,25 +100,28 @@ The game-state suite additionally verifies:
 - Compact available-player lookup and single-player game-stat detail for every supported league;
   stable player IDs bind selection, unrelated player lines stay out of detail, and list/detail
   reuse one box-score observation inside the cache window.
-- MLB inning null semantics, team totals, game-only batting/pitching fields, stable player IDs,
-  integer outs normalization, ESPN partial-field reporting, and exact MLB StatsAPI fallback.
+- MLB inning participation, skipped final home halves, team totals, game-only batting/pitching
+  fields, stable player IDs, integer outs normalization, required/optional field coverage, summary,
+  full, section, and team-side projections, and exact MLB StatsAPI fallback.
 - Football period scoring, named team statistics, categorized stable-player statistics, completed
   games, live cache bounds, content-derived observation IDs, and omission of unavailable fields.
 - Stable-ID play windows for MLB, NFL, and NCAA football; latest, before, and later-unseen
-  navigation; chronological ordering; scoring, period, and team filters; bounded malformed-play
-  warnings; lifecycle-aware caching; and exact MLB at-bat fallback.
+  navigation; chronological ordering; baseball pre/post-event outs and structured substitutions;
+  scoring, period, and team filters; bounded malformed-play warnings; lifecycle-aware caching; and
+  exact MLB at-bat fallback.
 
 The Tavily suite additionally verifies:
 
 - One game-scoped tool; no arbitrary query, extraction, crawl, map, or research surface.
 - Exact typed league/team/date/start context before provider I/O and a hard two-search graph budget.
 - Five-result request bounds, HTTPS-only sources, participant/date relationship checks, duplicate
-  and private-address rejection, focus-relevance checks, bounded snippets, publication/retrieval
-  provenance, and no raw provider payload.
+  and private-address rejection, focus-relevance checks, official-only domain restriction,
+  postgame-recap focus, bounded snippets, publication/retrieval provenance, and no raw payload.
 - A local game date is never paired with the UTC clock from a different calendar day; retained
   league/major-media/other sources follow the declared authority ordering.
 - Keyless and optional bearer-key paths without key/error leakage.
-- Malformed, rate-limited, unavailable, and empty-result behavior through real MCP calls.
+- Malformed, rate-limited, unavailable, explicit no-qualifying-source behavior, and return/activation
+  corroboration cautions through real MCP calls.
 - Deterministic source listing and useful synthesis from existing market evidence when Tavily fails.
 
 ## Public checks

@@ -85,6 +85,9 @@ async def test_game_search_is_fixed_bounded_typed_and_identity_filtered():
     assert source.publication_date == datetime(2026, 9, 20, 17, 30, tzinfo=UTC)
     assert "\u0000" not in source.snippet
     assert result.request_id == "request-1"
+    assert result.result_status == "evidence_found"
+    assert result.source_policy == "all"
+    assert result.official_source_count == 0
 
 
 async def test_query_never_combines_the_local_date_with_a_utc_clock():
@@ -109,6 +112,8 @@ async def test_query_never_combines_the_local_date_with_a_utc_clock():
     assert "September 23" not in query
     assert "02:10 UTC" not in query
     assert result.query == query
+    assert result.result_status == "no_qualifying_sources"
+    assert "No source passed" in result.empty_reason
 
 
 async def test_retained_sources_are_ranked_by_authority_before_provider_score():
@@ -155,6 +160,81 @@ async def test_retained_sources_are_ranked_by_authority_before_provider_score():
     assert [source.relevance_score for source in result.sources] == [0.6, 0.8, 0.99]
 
 
+async def test_official_only_restricts_provider_and_retained_sources():
+    requests = []
+    payload = {
+        "query": "generated query",
+        "results": [
+            {
+                "title": "MLB injury report — September 20, 2026",
+                "url": "https://www.mlb.com/gameday/injuries",
+                "content": "Miami Marlins and San Diego Padres injuries September 20, 2026.",
+            },
+            {
+                "title": "ESPN injury report — September 20, 2026",
+                "url": "https://www.espn.com/mlb/game/injuries",
+                "content": "Miami Marlins and San Diego Padres injuries September 20, 2026.",
+            },
+            {
+                "title": "NFL injury report — September 20, 2026",
+                "url": "https://www.nfl.com/news/injuries",
+                "content": "Miami Marlins and San Diego Padres injuries September 20, 2026.",
+            },
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await TavilyResearchClient(http_client=http).search_game(
+            league="mlb",
+            team_a="Miami Marlins",
+            team_b="San Diego Padres",
+            game_date=datetime(2026, 9, 20, tzinfo=UTC).date(),
+            scheduled_start=datetime(2026, 9, 20, 20, 10, tzinfo=UTC),
+            focus="injuries",
+            source_policy="official_only",
+        )
+
+    request_payload = json.loads(requests[0].content)
+    assert request_payload["include_domains"] == ["mlb.com"]
+    assert [source.url for source in result.sources] == ["https://www.mlb.com/gameday/injuries"]
+    assert result.official_source_count == 1
+    assert result.rejected_result_count == 2
+
+
+async def test_injury_return_claim_requires_structured_corroboration():
+    payload = {
+        "query": "generated query",
+        "results": [
+            {
+                "title": "Marlins vs Padres injuries — September 20, 2026",
+                "url": "https://sports.example/return",
+                "content": (
+                    "Miami Marlins and San Diego Padres injuries September 20, 2026. "
+                    "A player is set to return from the IL."
+                ),
+            }
+        ],
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as http:
+        result = await TavilyResearchClient(http_client=http).search_game(
+            league="mlb",
+            team_a="Miami Marlins",
+            team_b="San Diego Padres",
+            game_date=datetime(2026, 9, 20, tzinfo=UTC).date(),
+            scheduled_start=datetime(2026, 9, 20, 20, 10, tzinfo=UTC),
+            focus="injuries",
+        )
+
+    assert result.evidence_cautions[0].code == "return_claim_requires_structured_check"
+    assert result.evidence_cautions[0].source_urls == ["https://sports.example/return"]
+
+
 @pytest.mark.parametrize(
     "focus,relevant_text",
     [
@@ -167,6 +247,10 @@ async def test_retained_sources_are_ranked_by_authority_before_provider_score():
         (
             "venue_or_schedule",
             "Miami Marlins and San Diego Padres start time update September 20, 2026.",
+        ),
+        (
+            "postgame_recap",
+            "Miami Marlins defeated the San Diego Padres in a postgame recap September 20, 2026.",
         ),
     ],
 )

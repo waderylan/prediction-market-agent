@@ -118,8 +118,12 @@ def create_server(client: KalshiClient | None = None) -> FastMCP[Any]:
         containing JSON error.code, message, and fields; fix those fields before retrying.
         discovery.warnings and discarded_record_count identify isolated unsafe provider records;
         valid games remain usable. matching_events supplies complete labeled game choices.
+        result_kind and contracts_location identify games[].contracts for sports and markets[] for
+        generic topics.
         quote_as_of is null when Kalshi supplies no authoritative quote timestamp; never replace it
-        with retrieved_at. observation_id identifies a cached quote snapshot.
+        with retrieved_at. quote_freshness distinguishes timestamp_unavailable from stale and
+        not_trading. timing_warning identifies unusually late provider close timing.
+        observation_id identifies a cached quote snapshot.
         Only use exact returned MARKET tickers for details; never construct or guess tickers.
         Never substitute Polymarket for a Kalshi request.
         """

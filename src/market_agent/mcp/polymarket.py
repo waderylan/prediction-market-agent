@@ -73,12 +73,16 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
         from sports discovery. Named outcomes carry labeled snapshot prices, not YES prices.
         Generic topics retain bounded free-text discovery. Defaults to open
         markets; use null status to include historical markets. Returns up to 10 unique
-        candidates with decimal prices and IDs. Search is not exhaustive; try a shorter topic
-        if empty. Fetch a candidate by ID for resolution rules before interpreting its odds.
+        candidates with decimal prices and IDs. result_kind and contracts_location identify
+        games[].contracts for sports and markets[] for generic topics. Search is not exhaustive;
+        try a shorter topic if empty. Fetch a candidate by ID for resolution rules before
+        interpreting its odds.
         Scans up to three pages, stopping when enough candidates are found. Resolved requires
         explicit provider resolution metadata; a zero or one price does not prove settlement.
         quote_as_of is null when Gamma supplies no authoritative quote timestamp; never substitute
-        retrieved_at. observation_id identifies the normalized quote snapshot.
+        retrieved_at. quote_freshness distinguishes timestamp_unavailable from stale and
+        not_trading. timing_warning identifies unusually late provider close timing.
+        observation_id identifies the normalized quote snapshot.
         """
         async with controlled_errors("Polymarket"):
             assert active_client is not None

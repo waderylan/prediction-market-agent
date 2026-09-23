@@ -101,7 +101,7 @@ async def test_game_state_stdio_live_all_supported_leagues():
                     state["situation"]
                 )
             box = await session.call_tool(
-                "sports_state_get_box_score", {"game_ref": game["game_ref"]}
+                "sports_state_get_box_score", {"game_ref": game["game_ref"], "view": "full"}
             )
             assert not box.isError
             validate(box.structuredContent, tools["sports_state_get_box_score"].outputSchema)

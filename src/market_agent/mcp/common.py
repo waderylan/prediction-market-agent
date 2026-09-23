@@ -6,12 +6,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from mcp.server.fastmcp.exceptions import ToolError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from market_agent.domain import CanonicalMarket, MarketStatus, Platform
 from market_agent.providers.exceptions import (
@@ -29,6 +29,7 @@ MarketId = Annotated[str, Field(strict=True, pattern=r"^[0-9]{1,20}$")]
 Limit = Annotated[int, Field(strict=True, ge=1, le=10)]
 ShortText = Annotated[str, Field(max_length=500)]
 Price = Annotated[Decimal, Field(ge=0, le=1, max_digits=20)] | None
+QuoteFreshness = Literal["current", "stale", "timestamp_unavailable", "not_trading"]
 
 
 class OutcomeQuote(BaseModel):
@@ -58,6 +59,8 @@ class MarketSummary(BaseModel):
     source_url: Annotated[str, Field(max_length=2048)]
     retrieved_at: datetime
     quote_as_of: datetime | None
+    quote_freshness: QuoteFreshness
+    quote_freshness_reason: str
     quote_is_stale: bool
     quote_stale_reason: str | None = None
     observation_id: str | None = None
@@ -134,6 +137,28 @@ class SearchResults(BaseModel):
     discovery: DiscoveryCoverage | None = None
     clarification: str | None = None
     choices: Annotated[list[str], Field(max_length=20)] = Field(default_factory=list)
+    result_kind: Literal["sports_games", "generic_markets", "clarification"] = "generic_markets"
+    contracts_location: Literal["games[].contracts", "markets[]", "none"] = "markets[]"
+    usage_note: str = Field(
+        default=(
+            "Sports results place contracts under games[].contracts; markets[] is reserved for "
+            "generic topic search. Read result_kind and contracts_location before consuming."
+        ),
+        max_length=300,
+    )
+
+    @model_validator(mode="after")
+    def identify_result_shape(self) -> Self:
+        if self.clarification:
+            self.result_kind = "clarification"
+            self.contracts_location = "none"
+        elif self.games:
+            self.result_kind = "sports_games"
+            self.contracts_location = "games[].contracts"
+        else:
+            self.result_kind = "generic_markets"
+            self.contracts_location = "markets[]"
+        return self
 
 
 def project(market: CanonicalMarket, *, detail: bool = False) -> MarketSummary:
@@ -159,25 +184,40 @@ def project(market: CanonicalMarket, *, detail: bool = False) -> MarketSummary:
     # Neither provider documents its generic record-update clock as the timestamp of the
     # returned quote. Only expose an actual price-observation clock when one exists.
     data["quote_as_of"] = data.get("price_observed_at")
-    stale_reasons: list[str] = []
-    if data["quote_as_of"] is None:
-        stale_reasons.append(
-            "Provider supplies no authoritative timestamp for this quote observation."
+    quote_as_of = data["quote_as_of"]
+    actively_trading = market.status in {
+        MarketStatus.OPEN,
+        MarketStatus.PAUSED,
+        MarketStatus.UNOPENED,
+    }
+    if not actively_trading:
+        freshness: QuoteFreshness = "not_trading"
+        freshness_reason = "The contract is not actively trading; displayed prices are historical."
+    elif quote_as_of is None:
+        freshness = "timestamp_unavailable"
+        freshness_reason = (
+            "Provider supplies no authoritative timestamp for this quote observation. "
+            "This is unknown freshness, not evidence that the quote is stale."
         )
-    if market.status not in {MarketStatus.OPEN, MarketStatus.PAUSED, MarketStatus.UNOPENED}:
-        stale_reasons.append("The contract is not actively trading.")
-    updated = data.get("provider_updated_at")
-    if isinstance(updated, str):
-        try:
-            updated_at = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-        except ValueError:
-            updated_at = None
-        if updated_at and market.retrieved_at - updated_at.astimezone(UTC) > timedelta(days=1):
-            stale_reasons.append(
-                "Provider record metadata is more than 24 hours old; verify before use."
+    else:
+        observed = (
+            datetime.fromisoformat(quote_as_of.replace("Z", "+00:00"))
+            if isinstance(quote_as_of, str)
+            else quote_as_of
+        )
+        age = market.retrieved_at - observed.astimezone(UTC)
+        if age > timedelta(minutes=15):
+            freshness = "stale"
+            freshness_reason = "The authoritative quote timestamp is more than 15 minutes old."
+        else:
+            freshness = "current"
+            freshness_reason = (
+                "The authoritative quote timestamp is within 15 minutes of retrieval."
             )
-    data["quote_is_stale"] = bool(stale_reasons)
-    data["quote_stale_reason"] = " ".join(stale_reasons) or None
+    data["quote_freshness"] = freshness
+    data["quote_freshness_reason"] = freshness_reason
+    data["quote_is_stale"] = freshness == "stale"
+    data["quote_stale_reason"] = freshness_reason if freshness == "stale" else None
     sports = data.get("sports")
     if sports:
         mapping = dict(zip(sports["raw_participants"], sports["participants"], strict=True))
@@ -199,6 +239,20 @@ def project(market: CanonicalMarket, *, detail: bool = False) -> MarketSummary:
                 data["expected_resolution_time"] = None
                 data["timing_warning"] = (
                     "Provider expected resolution preceded the scheduled start and is omitted."
+                )
+        close = data.get("close_time")
+        if scheduled and close:
+            scheduled_at = datetime.fromisoformat(scheduled.replace("Z", "+00:00"))
+            close_at = datetime.fromisoformat(close.replace("Z", "+00:00"))
+            if close_at - scheduled_at > timedelta(hours=24):
+                close_warning = (
+                    "Provider trading close is more than 24 hours after scheduled start; it is "
+                    "not kickoff and may reflect administrative or postponement handling. Verify "
+                    "the contract rules before interpreting the timing."
+                )
+                existing = data.get("timing_warning")
+                data["timing_warning"] = (
+                    f"{existing} {close_warning}" if existing else close_warning
                 )
     if detail:
         data.update(

@@ -51,9 +51,12 @@ The agent catches tool/transport/schema failures and continues with an explicit 
 to verify that data. It does not substitute fabricated quotes. Logs use safe operational
 metadata; provider response bodies and credential values do not become tool-error text.
 
-The sports-state host path validates distinct discovery, current-state, box-score, player-list,
-single-player, and play-by-play schemas; requires returned game/player/play identifiers; and checks
-each sport discriminator against the league.
+The sports-state host path validates distinct discovery, current-state, box-score-view, player-list,
+single-player, and play-by-play schemas; requires returned game/player/play identifiers; checks the
+requested view and team side; and checks each sport discriminator against the league. Default
+box-score calls transfer scoring and compact leaders, while full and section calls project from the
+same cached normalized observation. Baseball inning participation, field-level completeness,
+pre/post-event outs, and substitution event kinds remain typed through host validation.
 When market and game details coexist, the typed matching report compares league, both participants,
 scheduled start, and provider-backed references before model synthesis. Every exact detail response names
 source/time and states that sporting results do not establish contract equivalence or market
@@ -68,7 +71,10 @@ truncation. Clarification can finish locally without an API call.
 
 Sports search projects provider contracts into game-first results. Each game groups its outcome
 contracts and carries localized kickoff labels, lifecycle status, consumer links, quote freshness,
-and explicit settlement when available. Exact local dates, inclusive date ranges, next/recent
+and explicit settlement when available. Result-kind metadata identifies `games[].contracts` for
+sports and `markets[]` for generic topics. Quote freshness distinguishes unavailable timestamps
+from authoritative stale timestamps, and unusual close timing remains a separate warning. Exact
+local dates, inclusive date ranges, next/recent
 selectors, and opaque continuation cursors stay inside the existing two search tools. The agent
 validates both generic `markets[]` and sports `games[].contracts[]` paths.
 The Polymarket client retains verified search event context for 15 minutes because Gamma market
@@ -91,9 +97,11 @@ the team catalog but never supplies market identity, price, rules, or settlement
 The independent [Tavily research MCP](WEB_RESEARCH_MCP.md) exposes one game-scoped search tool.
 The host blocks it until its league, participant pair, date, and scheduled start exactly match a
 typed market or exact-game sports detail observed in the same turn. The server constructs the query,
-inspects exactly five results, and retains only HTTPS sources naming both teams and the exact date. Typed output preserves
+inspects exactly five results, and retains only HTTPS sources naming both teams and the exact date.
+It supports a league-official-only policy and postgame-recap focus. Typed output preserves
 source title, URL, optional publication date, retrieval time, snippet, relevance, relationship, and
-rejection count. Source text is bounded and untrusted.
+rejection count, plus explicit empty status and corroboration cautions for player return/activation
+claims. Source text is bounded and untrusted.
 
 Generic Tavily extraction, crawl, map, and research are intentionally absent. Search failure is a
 tool-level error; it does not discard already verified market or sports-state data. The response

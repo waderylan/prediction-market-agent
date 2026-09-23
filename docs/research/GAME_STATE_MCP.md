@@ -101,14 +101,19 @@ summary box score or roster; unresolved or conflicting IDs remain null.
 
 ### `sports_state_get_box_score`
 
-Input:
+Inputs:
 
 - `game_ref`: one opaque value copied unchanged from discovery. Team names, dates, ESPN IDs, MLB
-  IDs, provider selectors, modes, and projection controls are not accepted.
+  IDs, and provider selectors are not accepted.
+- `view`: `summary` by default; `full`, `line_score`, `batting`, `pitching`, `team_stats`,
+  or `player_stats` when applicable to the sport.
+- `team_side`: `both` by default; `away` or `home` narrows team/player sections.
 
 The result shares exact game identity, source URL, lifecycle, teams, scores, observation time and
-ID, cache metadata, warnings, and an explicit `completeness` object with the state tool. It is
-sport-discriminated:
+ID, cache metadata, warnings, and an explicit `completeness` object with the state tool. The
+default summary contains the line score and compact provider-backed leaders plus a follow-up tip
+for full and section-specific layouts. The full normalized observation remains in the cache for
+player lookup and later section requests. Results are sport-discriminated:
 
 - MLB returns `line_score.innings`, team runs/hits/errors/left-on-base when supplied, `batting`
   by team, and `pitching` by team. Batter lines carry stable provider player IDs and game-only
@@ -120,11 +125,13 @@ sport-discriminated:
 
 Optional statistics absent from a provider response are omitted rather than serialized as
 permanent null fields. `completeness` reports each section as `complete`, `partial`, or
-`unavailable`; `is_partial` and warnings make omissions visible. Pregame player arrays remain
-empty and unavailable. The parser never fills game fields with season statistics.
+`unavailable` and names exact missing required and optional fields. Optional omissions do not
+make a section partial. Pregame player arrays remain empty and unavailable. The parser never fills
+game fields with season statistics.
 
-Inning scoring is the intentional exception to omission semantics. A null home-inning value in
-the top half means the home team has not batted; zero means it completed the inning without a run.
+Every baseball inning half carries `played`, `not_played`, `not_reached`, or `unknown`
+participation. A final unnecessary home half is `not_played` and renders as X without making the
+line score partial; zero means a played scoreless half.
 Pitching calculations use `outs_recorded`: display `1.1` means four outs, not 1.1 mathematical
 innings.
 
@@ -186,10 +193,14 @@ the window. An anchor must identify a play in the exact current game observation
 other filters exclude that anchor from the returned subset.
 
 Each play includes its stable provider-backed ID, feed sequence, period, clock, bounded text,
-scoring flag, supplied score, attributed team/side, wall-clock time when available, and one
-sport-specific context object. MLB context can include pitch count, outs, pitch type, runners,
-and at-bat ID. Football context can include down, distance, field position, yards, turnover, and
-penalty. Optional provider fields stay null; prose is never parsed to invent structured values.
+event kind, scoring flag, supplied score, attributed team/side, wall-clock time when available,
+and one sport-specific context object. MLB context can include pitch count, `outs_before`,
+`outs_after`, and at-bat ID. The out fields make post-action state explicit rather than
+presenting it as batter-start state. Provider-labeled substitutions use
+`event_kind="substitution"` and a separate structured participant payload when supplied; they are
+not plate appearances. Football context can include down, distance, field position, yards,
+turnover, and penalty. Optional provider fields stay null; participant names come only from
+structured provider fields.
 
 ESPN supplies pitch/action granularity for MLB and play granularity for NFL and NCAA football. An
 exact-identity MLB StatsAPI fallback supplies at-bat granularity after ESPN transport, HTTP, or
@@ -306,8 +317,10 @@ result count where available, and sanitized error class. Stdout remains MCP prot
 ## Agent consumption
 
 The model selects game-state tools semantically. `sports_state_get_game_state` answers score,
-lifecycle, and current-situation requests. `sports_state_get_box_score` answers inning or period
-scoring and team totals. For one player's game statistics, the model lists players, resolves the
+lifecycle, and current-situation requests. `sports_state_get_box_score` uses its summary view for
+ordinary requests, then offers the full layout or an available section. Explicit full and focused
+requests select the corresponding view and team side. For one player's game statistics, the model
+lists players, resolves the
 requested name to a returned ID, then requests only that player's detail. It must discover before
 detail calls and ask the user to select when multiple games or same-name player choices remain
 plausible. For chronological events, it requests a bounded play window, retains the returned play
@@ -332,10 +345,11 @@ Deterministic tests cover all lifecycle values, exact aliases, NCAA ambiguity, d
 timezone rollover, null situation fields, impossible bounds, reference edits, response identity,
 cache identity/TTL, response limits, retries, cancellation, malformed siblings/roots, exact MLB
 fallback, fallback ambiguity, provider conflict warnings, MLB batting/pitching normalization,
-season-stat exclusion, the shared NFL/NCAA football box-score model, compact player selection,
-multi-category player aggregation, missing-player errors, stable play IDs, backward and forward
-play windows, focused play filters, malformed-play isolation, MLB at-bat fallback, and
-cache/observation reuse.
+season-stat exclusion, summary/full/section box-score projections, skipped home halves,
+required/optional field coverage, the shared NFL/NCAA football box-score model, compact player
+selection, multi-category player aggregation, missing-player errors, stable play IDs,
+pre/post-event outs, structured substitutions, backward and forward play windows, focused play
+filters, malformed-play isolation, MLB at-bat fallback, and cache/observation reuse.
 
 Real MCP tests exercise `tools/list`, strict schemas, `tools/call`, discovery-before-detail, stable
 errors, host validation, semantic routing, no-tool behavior, market/game identity checks, and an

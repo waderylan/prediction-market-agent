@@ -471,8 +471,13 @@ async def test_baseball_box_score_omits_unavailable_fields_and_normalizes_outs()
     assert pitcher["outs_recorded"] == 4
     assert pitcher["innings_pitched_display"] == "1.1"
     assert (pitcher["pitches"], pitcher["strikes"]) == (24, 15)
-    assert first.completeness.batting == "partial"
-    assert first.completeness.team_totals == "partial"
+    assert first.completeness.batting == "complete"
+    assert first.completeness.team_totals == "complete"
+    assert first.completeness.missing_required_fields == {}
+    assert first.completeness.missing_optional_fields == {
+        "team_totals": ["left_on_base"],
+        "batting": ["doubles", "triples", "stolen_bases"],
+    }
     assert cached.cache_hit and cached.cache_age_ms == 5000
     assert cached.observation_id == first.observation_id == refreshed.observation_id
     assert changed.observation_id != refreshed.observation_id
@@ -524,6 +529,8 @@ async def test_completed_football_box_score_supports_nfl_and_ncaa(league):
         "line_score": "complete",
         "team_stats": "complete",
         "player_stats": "complete",
+        "missing_required_fields": {},
+        "missing_optional_fields": {},
     }
 
 
@@ -553,6 +560,8 @@ async def test_pregame_box_score_does_not_expose_provider_placeholders_or_player
         "line_score": "unavailable",
         "team_stats": "unavailable",
         "player_stats": "unavailable",
+        "missing_required_fields": {},
+        "missing_optional_fields": {},
     }
 
 
@@ -701,6 +710,90 @@ async def test_baseball_play_windows_use_stable_ids_filters_and_cache():
     assert latest.observation_id == earlier.observation_id == unseen.observation_id
     assert earlier.cache_hit and unseen.cache_hit and scoring.cache_hit
     assert summary_calls == 1
+
+
+async def test_baseball_play_state_separates_pre_post_outs_and_substitutions():
+    payload = baseball_play_summary()
+    for play in payload["plays"][:3]:
+        play["outs"] = 0
+    payload["plays"][3]["outs"] = 1
+    payload["plays"].insert(
+        3,
+        {
+            "id": "baseball-substitution-1",
+            "sequenceNumber": "35",
+            "type": {"text": "Offensive Substitution", "type": "substitution"},
+            "text": "Pinch-hitter entered for the shortstop.",
+            "awayScore": 2,
+            "homeScore": 1,
+            "period": {"type": "Top", "number": 6, "displayValue": "6th Inning"},
+            "scoringPlay": False,
+            "team": {"id": "25"},
+            "outs": 0,
+            "participants": [
+                {
+                    "type": "incoming",
+                    "athlete": {"id": "pinch-1", "displayName": "Pinch Hitter"},
+                }
+            ],
+        },
+    )
+
+    def handler(request):
+        if request.url.path.endswith("/summary"):
+            return httpx.Response(200, json=payload)
+        return httpx.Response(200, json={"events": [mlb_event()]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client, "Yankees", "mlb")
+        plays = await client.get_play_by_play(found.games[0].game_ref, limit=10)
+    finally:
+        await http.aclose()
+
+    home_run = next(play for play in plays.plays if play.play_id == "baseball-play-3")
+    substitution = next(play for play in plays.plays if play.play_id == "baseball-substitution-1")
+    final_out = next(play for play in plays.plays if play.play_id == "baseball-play-4")
+    assert home_run.context.outs_before == 0 and home_run.context.outs_after == 0
+    assert substitution.event_kind == "substitution"
+    assert substitution.context.outs_before == substitution.context.outs_after == 0
+    assert substitution.substitution is not None
+    assert substitution.substitution.participants[0].name == "Pinch Hitter"
+    assert final_out.context.outs_before == 0 and final_out.context.outs_after == 1
+
+
+async def test_final_home_lead_marks_unplayed_bottom_ninth_as_complete():
+    event = mlb_event()
+    event["status"] = completed_status(period=9)
+    competition = event["competitions"][0]
+    competition["status"] = event["status"]
+    for competitor in competition["competitors"]:
+        if competitor["homeAway"] == "away":
+            competitor["score"] = "0"
+            competitor["linescores"] = [{"displayValue": "0"} for _ in range(9)]
+        else:
+            competitor["score"] = "7"
+            competitor["linescores"] = [{"displayValue": "0"} for _ in range(8)]
+    payload = baseball_box_summary(event)
+    payload["header"]["competitions"][0] = competition
+
+    def handler(request):
+        if request.url.path.endswith("/summary"):
+            return httpx.Response(200, json=payload)
+        return httpx.Response(200, json={"events": [event]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client, "Yankees", "mlb")
+        box_score = await client.get_box_score(found.games[0].game_ref)
+    finally:
+        await http.aclose()
+
+    ninth = box_score.line_score.innings[-1]
+    assert ninth.away_participation == "played" and ninth.away_runs == 0
+    assert ninth.home_participation == "not_played" and ninth.home_runs is None
+    assert box_score.completeness.line_score == "complete"
+    assert box_score.is_partial is False
 
 
 async def test_football_play_windows_support_period_team_and_scoring_filters():
@@ -1453,6 +1546,8 @@ async def test_mlb_box_score_fallback_uses_only_game_statistics():
         "team_totals": "complete",
         "batting": "complete",
         "pitching": "complete",
+        "missing_required_fields": {},
+        "missing_optional_fields": {},
     }
 
 

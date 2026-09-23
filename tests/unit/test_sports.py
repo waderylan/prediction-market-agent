@@ -833,11 +833,13 @@ def test_settlement_and_quote_freshness_are_explicit():
     assert summary.winning_outcome == "New York Y"
     assert summary.resolved_at == datetime(2026, 9, 20, 5, tzinfo=UTC)
     assert summary.quote_as_of is None
-    assert summary.quote_is_stale
-    assert "authoritative timestamp" in summary.quote_stale_reason
+    assert summary.quote_freshness == "not_trading"
+    assert not summary.quote_is_stale
+    assert summary.quote_stale_reason is None
+    assert "historical" in summary.quote_freshness_reason
 
 
-def test_open_quote_flags_old_provider_metadata():
+def test_open_quote_with_old_record_metadata_reports_timestamp_unavailable():
     from market_agent.providers.kalshi import _parse_market
 
     event, _ = kalshi_fixture()
@@ -845,8 +847,49 @@ def test_open_quote_flags_old_provider_metadata():
     market["updated_time"] = "2026-09-01T00:00:00Z"
     summary = project(_parse_market(market, retrieved_at=datetime(2026, 9, 19, tzinfo=UTC)))
     assert summary.quote_as_of is None
+    assert summary.quote_freshness == "timestamp_unavailable"
+    assert not summary.quote_is_stale
+    assert summary.quote_stale_reason is None
+    assert "unknown freshness" in summary.quote_freshness_reason
+
+
+def test_authoritative_old_quote_timestamp_is_stale():
+    from market_agent.providers.kalshi import _parse_market
+
+    event, _ = kalshi_fixture()
+    canonical = _parse_market(
+        event["markets"][0], retrieved_at=datetime(2026, 9, 19, 1, tzinfo=UTC)
+    )
+    canonical = canonical.model_copy(
+        update={
+            "provider_data": {
+                **canonical.provider_data,
+                "price_observed_at": "2026-09-19T00:00:00Z",
+            }
+        }
+    )
+    summary = project(canonical)
+    assert summary.quote_freshness == "stale"
     assert summary.quote_is_stale
-    assert "authoritative timestamp" in summary.quote_stale_reason
+    assert "15 minutes" in summary.quote_stale_reason
+
+
+def test_close_far_after_scheduled_start_has_timing_warning():
+    from market_agent.providers.kalshi import _parse_market
+
+    event, milestone = kalshi_fixture()
+    event["markets"][0]["close_time"] = "2026-10-01T00:10:00Z"
+    canonical = _parse_market(event["markets"][0], retrieved_at=datetime(2026, 9, 19, tzinfo=UTC))
+    canonical = canonical.model_copy(
+        update={
+            "provider_data": {
+                **canonical.provider_data,
+                "sports": kalshi_event(event, [milestone]).model_dump(mode="json"),
+            }
+        }
+    )
+    summary = project(canonical)
+    assert "more than 24 hours after scheduled start" in summary.timing_warning
 
 
 def test_invalid_expected_resolution_is_omitted_with_warning():

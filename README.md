@@ -13,8 +13,10 @@ Shared cities and ambiguous abbreviations produce clarification choices.
 For a current score, start with
 `sports_state_find_games(query="Yankees", league="mlb", timezone="America/Los_Angeles")`,
 then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
-Use the same reference with `sports_state_get_box_score` for inning or period scoring and team
-totals. For one player's game line, call `sports_state_list_players`, then copy its stable
+Use the same reference with `sports_state_get_box_score`; its default `summary` view returns the
+line score and compact leaders. Request `view="full"` for the complete layout or select
+`line_score`, `batting`, `pitching`, `team_stats`, or `player_stats`, with optional team-side
+filtering. For one player's game line, call `sports_state_list_players`, then copy its stable
 `player_id` into `sports_state_get_player_stats` with the same `game_ref`. Structured sports
 statistics never require Tavily.
 Use `sports_state_get_play_by_play` for a bounded chronological play window. Copy returned play
@@ -29,14 +31,14 @@ IDs into `before_play_id` to page backward or `after_play_id` to retrieve only l
 | Team identity | Exact aliases from a reviewed provider catalog; same-city teams stay distinct |
 | Candidate selection | Results group both outcome contracts by game; separate event IDs preserve doubleheaders |
 | Dates | Exact local dates and ranges matched against provider game-start time in an IANA timezone; next/most-recent selection |
-| Prices | Honest nullable quote clocks, explicit observation identity/cache reuse, stale flags, snapshots, trades, bids, and complements |
+| Prices | Authoritative quote clocks when available; distinct current, stale, timestamp-unavailable, and not-trading states; explicit observation identity/cache reuse |
 | Coverage | Actual pages/events/contracts scanned, partial-result warnings, truncation, continuation evidence, and scoped totals |
 | Contract detail | Rules, game/close/resolution clocks, consumer links, and explicit settlement results |
 | Current game state | ESPN scores/lifecycle/situations; MLB StatsAPI fallback after exact identity matching |
-| Exact-game box scores | MLB inning/team/batting/pitching lines and NFL/NCAA period/team/player statistics from the discovery `game_ref` |
-| Player and play detail | Compact player selection, single-player game lines, and stable-ID play windows with paging and focused filters |
+| Exact-game box scores | Default summary plus full/section views, team-side filtering, inning participation, and field-level completeness from the discovery `game_ref` |
+| Player and play detail | Compact player selection, single-player game lines, and stable-ID play windows with pre/post-event outs, structured substitutions, paging, and focused filters |
 | Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
-| Current web evidence | At most two game-scoped Tavily searches; five inspected results each; exact participant/date plus requested-focus filtering, authority ordering, and source provenance |
+| Current web evidence | At most two game-scoped Tavily searches; official-only policy, postgame recaps, exact participant/date/focus filtering, provenance, explicit empty status, and corroboration cautions |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
 | Comparison boundary | Typed event, named-outcome, and settlement checks run before synthesis for supported full-game winners |
 | Comparison policy | Deterministic identity plus core settlement checks; unsupported or differing full rules cannot authorize price comparison |
@@ -115,11 +117,11 @@ Interactive HTTP documentation is at `/docs`.
 | `polymarket_get_market` | Exact returned numeric Gamma `market_id` |
 | `sports_state_find_games` | `query`, required `league` and IANA `timezone`; optional exact `local_date`, game `limit=5`, `compact=false` |
 | `sports_state_get_game_state` | Exact opaque `game_ref` copied unchanged from discovery |
-| `sports_state_get_box_score` | Exact opaque `game_ref` copied unchanged from discovery; no other selector |
+| `sports_state_get_box_score` | Exact opaque `game_ref`; `view=summary` by default, optional full/section view and `team_side=both|away|home` |
 | `sports_state_list_players` | Exact opaque `game_ref`; returns compact player IDs, names, teams, and available game-stat groups |
 | `sports_state_get_player_stats` | Exact opaque `game_ref` plus one unchanged `player_id` returned by the player-list tool |
 | `sports_state_get_play_by_play` | Exact opaque `game_ref`; optional `limit=1..50`, mutually exclusive before/after play ID, scoring, period, and home/away filters |
-| `tavily_search_game_evidence` | Exact `league`, `team_a`, `team_b`, `game_date`, `scheduled_start`, and focus copied from market/game detail |
+| `tavily_search_game_evidence` | Exact game identity, focus, and optional `source_policy=all|official_only` copied from market/game detail |
 
 - Limits are strict integers from 1 through 10 in the client-visible MCP schema.
 - League values are `mlb`, `nfl`, and `ncaa_football`.
@@ -127,6 +129,8 @@ Interactive HTTP documentation is at `/docs`.
   (an IANA name such as `America/Los_Angeles`). `event_date` remains an exact-date alias.
 - `next_game_only` and `most_recent_game_only` are mutually exclusive. Sports `limit` counts
   games; each `games[]` entry contains its returned `contracts[]`.
+- Market discovery declares `result_kind` and `contracts_location`. Sports contracts live under
+  `games[].contracts`; generic topic results live under `markets[]`.
 - Sports discovery accepts full-game winners; it does not substitute a spread, total,
   partial-game winner, player prop, season series, or future.
 - Clarification results include `clarification` and `choices`; they do not trigger upstream requests.
@@ -142,9 +146,12 @@ Interactive HTTP documentation is at `/docs`.
 - Explicit series discovery is an optional precision control, not a prerequisite for an
   ordinary sports query.
 - `quote_as_of` is an authoritative provider quote clock or null; it never aliases `retrieved_at`.
-  `provider_updated_at` remains provider record metadata. `observation_id`, `cache_hit`, and
-  `cache_age_ms` identify explicit 30-second normalized-observation reuse across search/detail.
-  Missing quote timing is stale with a reason instead of being assigned the retrieval time.
+  `quote_freshness` distinguishes `current`, `stale`, `timestamp_unavailable`, and `not_trading`.
+  Missing quote timing is unknown freshness, not stale. `provider_updated_at` remains provider
+  record metadata. `observation_id`, `cache_hit`, and `cache_age_ms` identify explicit 30-second
+  normalized-observation reuse across search/detail.
+- `timing_warning` identifies a provider close more than 24 hours after scheduled start without
+  treating trading close as kickoff or declaring the contract invalid.
 - Sports contracts retain `timezone`, `local_date`, and `scheduled_start_local` in their normalized
   `sports` object, including an immediate detail call after search.
 - Fetch details before interpreting settlement rules. Resolved details expose
@@ -164,9 +171,10 @@ Interactive HTTP documentation is at `/docs`.
   Rediscovery in another timezone intentionally returns a different reference.
 - Game state returns one baseball or football situation object. Missing possession, count, outs,
   bases, players, timeouts, or field position remain null rather than being inferred.
-- Box score returns MLB inning scoring, team totals, batting lines, and pitching lines, or
-  NFL/NCAA period scoring, team statistics, and categorized player statistics. It excludes
-  play-by-play and season statistics.
+- Box-score `view=summary` returns scoring and compact leaders and includes a follow-up tip for
+  full or section-specific layouts. `view=full` returns every sport-applicable section; narrow
+  views and `team_side` avoid transferring unrelated rows. Play-by-play and season statistics are
+  excluded.
 - Player listing is a compact lookup over the same normalized box-score observation. It contains
   only players with provider-backed game-stat lines, not a full active or season roster.
 - Player detail returns one selected MLB batting/pitching line or one selected football player's
@@ -177,10 +185,12 @@ Interactive HTTP documentation is at `/docs`.
 - ESPN supplies pitch/action granularity for MLB and play granularity for football. Exact-identity
   MLB StatsAPI fallback supplies at-bat granularity. Each response reports the granularity,
   matching count, earlier/later availability, paging anchors, observation identity, and warnings.
-- Optional box-score fields unavailable from the provider are omitted. The `completeness` object,
-  `is_partial`, and `warnings` distinguish complete, partial, and unavailable sections. Baseball
-  inning runs retain semantic null only when a team has not batted in that inning; zero means a
-  completed scoreless inning.
+- Baseball plays label `event_kind`; substitutions carry a separate structured payload.
+  `outs_before` and `outs_after` prevent post-play state from being narrated as pre-play state.
+- Optional box-score fields unavailable from the provider are omitted. `completeness` identifies
+  exact missing required and optional fields; optional omissions do not make a section partial.
+  Baseball inning participation distinguishes `played`, `not_played`, `not_reached`, and `unknown`;
+  a final skipped home half renders as X without making an otherwise complete line score partial.
 - Baseball pitching exposes both integer `outs_recorded` and provider display notation such as
   `innings_pitched_display="1.1"`; consumers perform calculations with outs, not decimal math.
 - Scheduled/pregame provider placeholders are normalized to null in discovery and detail; baseball
@@ -189,11 +199,15 @@ Interactive HTTP documentation is at `/docs`.
 - ESPN is free, unauthenticated, undocumented, and has no SLA. MLB StatsAPI is the MLB-only
   fallback; NFL and NCAA failures return controlled unavailability without substitution.
 - Tavily research is blocked until one typed exact-game sports detail establishes league,
-  both teams, and date. It supplies game news, injuries, lineups, weather, and schedule context,
-  never structured sports state, statistics, or plays.
+  both teams, and date. It supplies game news, postgame recaps, injuries, lineups, weather, and
+  schedule context, never structured sports state, statistics, or plays.
   The server constructs the query and retains at most five HTTPS results naming both teams and the
   exact date with text relevant to the requested focus. Focus values are `injuries`, `lineups`,
-  `weather`, `venue_or_schedule`, and `other_game_news`.
+  `weather`, `venue_or_schedule`, `other_game_news`, and `postgame_recap`.
+- `source_policy="official_only"` restricts search and retained sources to league-official domains.
+  `result_status` distinguishes retained evidence from no qualifying sources. Injury return or
+  activation snippets carry a caution requiring official transaction, lineup, or structured
+  participation corroboration.
 - Tavily queries use the provider-established local game date without attaching the scheduled
   start's UTC clock. Results retain the exact UTC start as identity and are ordered by a transparent
   league-official/established-media/other heuristic before publication time and provider relevance.

@@ -100,6 +100,9 @@ The report keeps these clocks independent:
 Only scheduled start participates in event identity. Different trading or resolution clocks are
 reported with provenance but do not by themselves make the sporting event different or block an
 otherwise complete sports equivalence decision.
+Quote freshness also remains presentation evidence rather than contract identity:
+`timestamp_unavailable` is not treated as stale, and neither state can upgrade or reject a
+settlement-equivalence verdict.
 
 ## Generic compatibility
 

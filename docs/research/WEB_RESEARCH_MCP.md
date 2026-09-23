@@ -3,8 +3,8 @@
 ## Purpose
 
 The Tavily server supplies current public evidence that the market and sports-state providers do
-not contain: injuries, lineups, weather, venue or schedule changes, and other news about one exact
-game. Structured game state, statistics, and play history come from the `sports_state` tools,
+not contain: injuries, lineups, weather, venue or schedule changes, other news, and postgame recaps
+about one exact game. Structured game state, statistics, and play history come from the `sports_state` tools,
 never Tavily. It is corroborating research only. It cannot establish official game state, contract
 identity, contract equivalence, market settlement, an independent probability, or a position.
 
@@ -19,12 +19,15 @@ tavily_search_game_evidence(
   team_b,
   game_date,
   scheduled_start,
-  focus
+  focus,
+  source_policy="all"
 )
 ```
 
 `league` is `mlb`, `nfl`, or `ncaa_football`. `focus` is `injuries`, `lineups`, `weather`,
-`venue_or_schedule`, or `other_game_news`. Both teams, the local game date, and timezone-aware
+`venue_or_schedule`, `other_game_news`, or `postgame_recap`. `source_policy` is `all` or
+`official_only`; the latter restricts the Tavily request and retained results to league-official
+domains. Both teams, the local game date, and timezone-aware
 scheduled start must be copied from a typed market or exact-game sports-detail result. The server, not the
 model, constructs the web query.
 
@@ -37,7 +40,12 @@ requested focus; a ticket, hotel, or generic event page does not become injury o
 merely because it names the matchup and date. `other_game_news` remains broad after the
 identity/date check. The relationship is deliberately weaker than proof of one game when the teams
 have a same-day doubleheader; the copied scheduled start remains visible for that distinction. The
-result also reports rejected-result count, coverage, request ID, and an untrusted-content notice.
+result also reports rejected-result count, coverage, request ID, source policy, official-source
+count, and an untrusted-content notice. `result_status` distinguishes retained evidence from
+`no_qualifying_sources`; `empty_reason` states which bounded filters produced the empty result.
+Injury snippets that claim a return or activation carry an `evidence_cautions` entry requiring
+official transaction, lineup, or structured participation corroboration before the claim is
+presented as current fact.
 
 `game_date` is the provider-established local calendar date, while `scheduled_start` is the exact
 UTC instant used by the host identity gate. The tool does not receive the game's IANA timezone, so
@@ -50,7 +58,9 @@ date for a September 22 evening game. The exact UTC start remains present in the
 - The graph permits four market/state attempts plus at most two Tavily searches per turn.
 - Research is rejected before MCP invocation unless league, the unordered participant pair, local
   game date, and scheduled start match a typed detail observation from the same turn.
-- One tool call makes one basic Tavily request for exactly five results. Raw page content, generated
+- One tool call makes one basic Tavily request for exactly five results. Official-only requests add
+  the selected league's official domain to the provider request and apply the same restriction
+  locally. Raw page content, generated
   answers, images, crawl, map, research, and arbitrary extraction are disabled.
 - The server retains only HTTPS results that mention both teams and the exact requested date and
   whose title/snippet matches the requested evidence focus. Duplicate URLs, private IP URLs,
@@ -77,10 +87,10 @@ The implemented server omits extraction because bounded snippets carry the requi
 and dates. Arbitrary URL extraction would add prompt-injection surface and another latency/cost
 step. Any extraction extension requires a searched-URL allowlist and measured unmet need.
 
-The current fix intentionally keeps one request and the existing five-result budget. It does not
-add team-only searches, generic crawl/extraction, medical-record parsing, player-status conflict
-resolution, or page-update-time inference. Those changes require a new evidence relationship and
-measured recall/precision need; they are not hidden inside this bounded matchup search.
+The projection keeps one request and a five-result budget. It does not add team-only searches,
+generic crawl/extraction, medical-record parsing, full player-status resolution, or page-update-time
+inference. Corroboration cautions identify claims that exceed snippet authority without pretending
+to resolve them.
 
 ## Authentication and cost
 

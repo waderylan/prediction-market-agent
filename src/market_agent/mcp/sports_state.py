@@ -13,7 +13,8 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from market_agent.providers.game_state import (
-    BoxScore,
+    BoxScoreView,
+    BoxScoreViewName,
     FindGamesResult,
     GameState,
     PlayByPlay,
@@ -21,6 +22,8 @@ from market_agent.providers.game_state import (
     PlayerStats,
     SportsStateClient,
     SportsStateError,
+    TeamSide,
+    project_box_score,
 )
 from market_agent.providers.sports import League
 
@@ -137,21 +140,27 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
             raise _tool_error(error) from None
 
     @server.tool(annotations=annotations)
-    async def sports_state_get_box_score(game_ref: GameRef) -> BoxScore:
+    async def sports_state_get_box_score(
+        game_ref: GameRef,
+        view: BoxScoreViewName = "summary",
+        team_side: TeamSide = "both",
+    ) -> BoxScoreView:
         """Read one exact MLB, NFL, or NCAA football box score from a discovery game_ref.
         Copy game_ref unchanged from sports_state_find_games; never provide or construct a provider
-        identifier. Baseball returns inning-by-inning scoring, runs/hits/errors/left-on-base totals,
-        and game-only batting and pitching lines. Football returns period scoring, team statistics,
-        and provider-categorized player lines. Stable player IDs, source/retrieval provenance,
-        lifecycle-aware cache metadata, completeness, and warnings are included. Provider-omitted
-        optional statistics are omitted rather than filled from season totals. This tool excludes
-        play-by-play and does not use Tavily. ESPN is primary; MLB StatsAPI is an exact-identity
-        MLB-only fallback.
+        identifier. The default view="summary" returns the line score plus compact player leaders;
+        present that view and tell the user they can request view="full" or one available section.
+        Section views are line_score, batting, pitching, team_stats, and player_stats as applicable
+        to the sport. team_side can narrow player/team sections to away or home. Do not reconstruct
+        omitted sections. Inning participation distinguishes played, not-yet-reached, and
+        unnecessary home half-innings. Completeness identifies exact missing required and optional
+        fields. Season statistics and play-by-play are excluded. ESPN is primary; MLB StatsAPI is
+        an exact-identity MLB-only fallback.
         """
         assert active_client is not None
         try:
             async with asyncio.timeout(30):
-                return await active_client.get_box_score(game_ref)
+                full_box_score = await active_client.get_box_score(game_ref)
+                return project_box_score(full_box_score, view=view, team_side=team_side)
         except TimeoutError:
             raise _tool_error(
                 SportsStateError(
@@ -221,8 +230,11 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
         plays. before_play_id and after_play_id are mutually exclusive. limit is 1-50. Optional
         play_filter="scoring", period, and home/away team filters support focused inspection.
         Every play carries a stable provider-backed play_id, sequence, text, score, team when
-        supplied, and sport-specific context. ESPN provides pitch/action granularity for MLB and
-        play granularity for football; exact-identity MLB fallback provides at-bat granularity.
+        supplied, event_kind, and sport-specific context. Baseball context uses outs_before and
+        outs_after; never describe outs_after as pre-play state. Substitutions are labeled and
+        structured separately from pitches and plate appearances. ESPN provides pitch/action
+        granularity for MLB and play granularity for football; exact-identity MLB fallback provides
+        at-bat granularity.
         Results exclude odds, win probability, season statistics, and raw provider payloads.
         """
         assert active_client is not None

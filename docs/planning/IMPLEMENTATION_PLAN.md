@@ -28,6 +28,7 @@
 | 9. Bounded sports evidence research | Complete locally |
 | 9A. Multi-sport exact-game box scores | Complete locally |
 | 9B. Exact-game player and play history tools | Complete locally |
+| 9C. Agent-readable presentation and evidence semantics | Complete locally |
 | 10. Complete sports agent and forecast output | Planned |
 | 11. Unified multi-MCP sports intelligence brief | Tentative idea; optional and not required |
 | 12. Optional sports-research ledger | Optional |
@@ -149,10 +150,11 @@ Multi-server MCP client
 ### Tavily MCP
 
 - `tavily_search_game_evidence`
-  - Input: league, both exact canonical team names, one game date, scheduled start, and one
-    evidence focus.
+  - Input: league, both exact canonical team names, one game date, scheduled start, one evidence
+    focus, and an all-sources or league-official-only source policy.
   - Output: at most five typed same-matchup/date sources with title, HTTPS URL, publication date when
-    supplied, retrieval time, snippet, relevance score, and relationship.
+    supplied, retrieval time, snippet, relevance score, relationship, explicit empty status, and
+    corroboration cautions for return/activation claims.
 - Construct queries in the server instead of accepting arbitrary web queries.
 - Enforce a maximum of two searches in application state rather than relying only on the prompt.
 - Do not expose Tavily crawl, map, research, or arbitrary extraction tools.
@@ -162,6 +164,9 @@ Multi-server MCP client
 - `sports_state_find_games`
 - `sports_state_get_game_state`
 - `sports_state_get_box_score`
+  - Input: discovery `game_ref`, summary/full/section view, and optional team-side filter.
+  - Output: only the requested projection, available views, a follow-up tip, inning participation,
+    field-level completeness, cache identity, and provenance.
 - `sports_state_list_players`
 - `sports_state_get_player_stats`
 - `sports_state_get_play_by_play`
@@ -200,7 +205,8 @@ Multi-server MCP client
   - `volume`
   - consumer-facing `market_url`
   - provider API provenance URL
-  - nullable authoritative `quote_as_of`, `retrieved_at`, `provider_updated_at`, and stale reason
+  - nullable authoritative `quote_as_of`, `retrieved_at`, `provider_updated_at`, typed freshness,
+    and freshness reason
   - `observation_id`, `cache_hit`, and `cache_age_ms`
   - `settlement_value`, `winning_outcome`, and `resolved_at`
   - `retrieved_at`
@@ -208,8 +214,11 @@ Multi-server MCP client
   participants, NCAA divisions when known, full-game winner type, schedule evidence, and
   comparison eligibility with its reason.
 - Project search results as games with contracts nested beneath each game. A sports search limit
-  counts games, not contracts.
+  counts games, not contracts. `result_kind` and `contracts_location` tell clients whether to read
+  `games[].contracts`, `markets[]`, or clarification fields.
 - Keep scheduled start, trading close, expected resolution, and resolution deadline independent.
+- Distinguish current, stale, timestamp-unavailable, and not-trading quote states. Missing quote
+  time never proves staleness. Warn when provider trading close is unusually far after kickoff.
 - Omit inconsistent optional timing rather than presenting it as authoritative.
 - Allow unavailable fields to be null rather than inventing values, links, prices, times, or IDs.
 - Retain a bounded raw-provider payload inside the provider layer for debugging when appropriate;
@@ -1087,8 +1096,9 @@ only because it has already been implemented.
   statistics through one shared football contract.
 - Use ESPN as the primary provider and the existing exact-identity MLB StatsAPI path as the MLB
   fallback. Keep structured game statistics independent of Tavily.
-- Omit provider-unavailable optional statistics, retain semantic null inning values, exclude season
-  statistics and play-by-play, and expose section completeness and bounded warnings.
+- Omit provider-unavailable optional statistics, give null inning values explicit participation
+  semantics, separate required and optional field coverage, exclude season statistics and
+  play-by-play, and expose bounded field-specific warnings.
 - Cache live box scores for at most 10 seconds and final box scores for at most five minutes. Bind
   observation IDs to normalized snapshot content.
 - Teach the agent to choose state for the current situation and box score for team/player game
@@ -1164,6 +1174,55 @@ only because it has already been implemented.
   play history when eligible.
 - Unit, real MCP, stdio, scripted-agent, and bounded public-provider checks exercise the complete
   surface and its safety constraints.
+
+### Milestone 9C: Agent-Readable Presentation and Evidence Semantics
+
+#### Work
+
+- Give `sports_state_get_box_score` a compact default summary, an explicit full view, and
+  sport-applicable section views with optional away/home filtering.
+- Return a machine-readable follow-up tip so the agent presents the default summary and tells the
+  user that full and section-specific layouts are available without printing them automatically.
+- Represent each baseball inning half as played, not played, not reached, or unknown. Treat an
+  unnecessary final home half as complete line-score semantics.
+- Report missing required and optional box-score fields separately. Optional omissions never make
+  an otherwise complete section partial.
+- Expose baseball `outs_before` and `outs_after`; classify pitches, plate appearances,
+  substitutions, and other game actions; attach structured substitution participants when the
+  provider supplies them.
+- Declare market search result shape with `result_kind` and `contracts_location`.
+- Declare quote freshness as current, stale, timestamp unavailable, or not trading. Reserve stale
+  for an old authoritative quote timestamp and flag unusually late provider close timing.
+- Support postgame-recap research and an official-only source policy. Return an explicit
+  no-qualifying-sources status and require structured corroboration for snippet claims about a
+  player return or activation.
+- Validate each projection in the host and cover the behavior through unit, MCP schema, stdio, and
+  scripted-agent tests.
+
+#### Exit Criteria
+
+- An ordinary box-score request transfers only the summary and directs the agent to offer full or
+  section-specific follow-ups; explicit full/section calls return exactly the requested content.
+- A final skipped bottom half is rendered as not played and does not mark the line score partial.
+- Baseball play consumers cannot confuse post-event outs with pre-event state, and substitutions
+  are distinguishable without interpreting at-bat prose.
+- Completeness warnings name exact fields and separate required from optional omissions.
+- Sports and generic market searches identify their contract container without inference.
+- Missing quote timestamps are not labeled stale; truly old authoritative timestamps are.
+- Official-only and postgame-recap research retain the existing identity, URL, result, and search
+  budgets, and flagged return claims cannot be presented as confirmed without corroboration.
+- The offline quality gate passes with real MCP discovery/call coverage.
+
+#### Current State
+
+- **Status:** Complete locally.
+- Box-score, play-by-play, market, and research MCP schemas expose the presentation and evidence
+  semantics directly to any consuming agent.
+- Provider caches retain full normalized observations while public box-score calls project only the
+  requested view, preserving player lookup and observation identity.
+- Deterministic fixtures cover summary/full/section views, team filtering, skipped home halves,
+  required/optional field coverage, pre/post outs, substitutions, quote freshness, close timing,
+  result containers, official-only sources, empty evidence, recap focus, and corroboration cautions.
 
 ### Milestone 10: Complete Sports Agent Workflow and Forecast Output
 
