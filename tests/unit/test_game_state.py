@@ -478,6 +478,110 @@ async def test_pregame_box_score_does_not_expose_provider_placeholders_or_player
     }
 
 
+async def test_baseball_player_directory_and_detail_reuse_one_box_score_observation():
+    summary_calls = 0
+
+    def handler(request):
+        nonlocal summary_calls
+        if request.url.path.endswith("/summary"):
+            summary_calls += 1
+            return httpx.Response(200, json=baseball_box_summary())
+        return httpx.Response(200, json={"events": [mlb_event()]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client, "Yankees", "mlb")
+        game_ref = found.games[0].game_ref
+        players = await client.list_players(game_ref)
+        batter = await client.get_player_stats(game_ref, "b-25")
+        pitcher = await client.get_player_stats(game_ref, "p-25")
+    finally:
+        await http.aclose()
+
+    assert [(player.player_id, player.stat_groups) for player in players.players] == [
+        ("b-25", ["batting"]),
+        ("p-25", ["pitching"]),
+        ("b-10", ["batting"]),
+        ("p-10", ["pitching"]),
+    ]
+    assert batter.player_name == "Game Batter" and batter.team == "San Diego Padres"
+    assert batter.batting is not None and batter.batting.hits == 1
+    assert batter.pitching is None
+    assert pitcher.pitching is not None and pitcher.pitching.outs_recorded == 4
+    assert pitcher.batting is None
+    assert players.observation_id == batter.observation_id == pitcher.observation_id
+    assert batter.cache_hit and pitcher.cache_hit
+    assert summary_calls == 1
+
+
+@pytest.mark.parametrize("league", ["nfl", "ncaa_football"])
+async def test_football_player_directory_and_detail_return_only_selected_player(league):
+    event = scoreboard_event(game_status=completed_status())
+    if league == "ncaa_football":
+        event = scoreboard_event(
+            game_status=completed_status(),
+            teams=competitors(
+                home="Ohio State Buckeyes",
+                away="Michigan Wolverines",
+                home_id="194",
+                away_id="130",
+                home_score="10",
+                away_score="17",
+            ),
+        )
+        event["competitions"][0]["situation"] = None
+
+    def handler(request):
+        if request.url.path.endswith("/summary"):
+            return httpx.Response(200, json=football_box_summary(event))
+        return httpx.Response(200, json={"events": [event]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client, "all", league)
+        game_ref = found.games[0].game_ref
+        players = await client.list_players(game_ref)
+        selected = players.players[0]
+        stats = await client.get_player_stats(game_ref, selected.player_id)
+    finally:
+        await http.aclose()
+
+    assert len(players.players) == 2
+    assert selected.stat_groups == ["passing"]
+    assert stats.player_id == selected.player_id and stats.player_name == selected.name
+    assert stats.team == selected.team and stats.stat_groups is not None
+    assert stats.stat_groups[0].category == "passing"
+    assert stats.stat_groups[0].statistics[1].name == "passingYards"
+    assert stats.stat_groups[0].statistics[1].value == "250"
+    assert "player_stats" not in stats.model_dump(mode="json")
+
+
+async def test_player_lookup_rejects_invalid_or_missing_id_without_leaking_other_players():
+    summary_calls = 0
+
+    def handler(request):
+        nonlocal summary_calls
+        if request.url.path.endswith("/summary"):
+            summary_calls += 1
+            return httpx.Response(200, json=football_box_summary())
+        return httpx.Response(200, json={"events": [scoreboard_event()]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client)
+        with pytest.raises(SportsStateError) as invalid:
+            await client.get_player_stats(found.games[0].game_ref, "bad player id")
+        assert invalid.value.code == "invalid_player_id"
+        assert summary_calls == 0
+        with pytest.raises(SportsStateError) as missing:
+            await client.get_player_stats(found.games[0].game_ref, "missing-player")
+        assert missing.value.code == "player_not_found"
+    finally:
+        await http.aclose()
+
+    assert summary_calls == 1
+
+
 def test_baseball_phase_rejects_contradictory_state():
     with pytest.raises(ValueError, match="inning and half"):
         BaseballSituation(phase="active", half="top")

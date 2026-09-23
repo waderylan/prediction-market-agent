@@ -33,7 +33,13 @@ from market_agent.domain.matching import (
 from market_agent.logging import log_event
 from market_agent.mcp.common import MarketDetail, SearchResults
 from market_agent.mcp.kalshi import KalshiSearchResults, SeriesResults
-from market_agent.providers.game_state import BoxScore, FindGamesResult, GameState
+from market_agent.providers.game_state import (
+    BoxScore,
+    FindGamesResult,
+    GameState,
+    PlayerDirectory,
+    PlayerStats,
+)
 from market_agent.providers.research import GameResearchResult
 
 logger = logging.getLogger(__name__)
@@ -72,7 +78,10 @@ an explicitly requested analysis. First call sports_state_find_games with an exp
 IANA timezone, then copy one returned game_ref unchanged into the requested detail tool. Use
 sports_state_get_game_state for what is happening now: score, inning/count/runners/batter/pitcher,
 or football possession/down/distance/field position. Use sports_state_get_box_score for
-inning-or-period scoring, team statistics, and player batting/pitching or football stat lines.
+inning-or-period scoring and team statistics. For one player's game statistics, first use
+sports_state_list_players with the chosen game_ref, then copy the returned player_id unchanged
+with the same game_ref into sports_state_get_player_stats. The player directory contains only
+players with provider-backed game-stat lines and is not a season roster.
 Never construct a game_ref or pass an ESPN event ID, MLB gamePk, team, or date to a detail tool.
 Do not use Tavily for structured box-score statistics. If discovery returns multiple games,
 present the choices instead of selecting silently. Discovery is a lightweight game picker; always
@@ -160,6 +169,7 @@ class AgentState(MessagesState):
     details: list[dict[str, Any]]
     game_states: list[dict[str, Any]]
     box_scores: list[dict[str, Any]]
+    player_stats: list[dict[str, Any]]
     research_results: list[dict[str, Any]]
     matching_report: dict[str, Any] | None
     activity: list[dict[str, Any]]
@@ -201,6 +211,7 @@ def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | Non
         "most_recent_game_only",
         "continuation",
         "game_ref",
+        "player_id",
         "league",
         "compact",
         "team_a",
@@ -223,6 +234,8 @@ ToolResult = (
     | FindGamesResult
     | GameState
     | BoxScore
+    | PlayerDirectory
+    | PlayerStats
     | GameResearchResult
 )
 
@@ -251,6 +264,16 @@ def _tool_summary(validated: ToolResult) -> str:
             f"{validated.home_team.name}; source {validated.source}; "
             f"partial={str(validated.is_partial).lower()}."
         )
+    if isinstance(validated, PlayerDirectory):
+        return (
+            f"Found {len(validated.players)} player(s) with available {validated.sport} "
+            f"game-stat lines; source {validated.source}."
+        )
+    if isinstance(validated, PlayerStats):
+        return (
+            f"Retrieved {validated.player_name}'s {validated.sport} game statistics for "
+            f"{validated.team}; source {validated.source}."
+        )
     if isinstance(validated, SeriesResults):
         return f"Found {len(validated.series)} candidate series."
     if isinstance(validated, SearchResults):
@@ -277,6 +300,12 @@ def _tool_result_schema(
         return FindGamesResult
     if tool_name == "sports_state_get_game_state":
         return GameState
+    if tool_name == "sports_state_get_box_score":
+        return BoxScore
+    if tool_name == "sports_state_list_players":
+        return PlayerDirectory
+    if tool_name == "sports_state_get_player_stats":
+        return PlayerStats
     if tool_name == "kalshi_search_series":
         return SeriesResults
     if tool_name == "kalshi_search_markets":
@@ -293,10 +322,7 @@ def _validate_tool_result(
 ) -> ToolResult:
     artifact = result.artifact
     structured_content = artifact.get("structured_content") if isinstance(artifact, dict) else None
-    if tool_name == "sports_state_get_box_score" and isinstance(structured_content, dict):
-        validated: ToolResult = BoxScore.model_validate(structured_content)
-    else:
-        validated = _tool_result_schema(tool_name).model_validate(structured_content)
+    validated: ToolResult = _tool_result_schema(tool_name).model_validate(structured_content)
 
     if isinstance(validated, GameResearchResult):
         if (
@@ -329,6 +355,22 @@ def _validate_tool_result(
         if validated.sport != expected_sport:
             raise ValueError("Box-score league mismatch")
         return validated
+    if isinstance(validated, PlayerDirectory):
+        if validated.game_ref != arguments.get("game_ref"):
+            raise ValueError("Player-directory game reference mismatch")
+        expected_sport = "baseball" if validated.league == "mlb" else "football"
+        if validated.sport != expected_sport:
+            raise ValueError("Player-directory league mismatch")
+        return validated
+    if isinstance(validated, PlayerStats):
+        if validated.game_ref != arguments.get("game_ref"):
+            raise ValueError("Player-stat game reference mismatch")
+        if validated.player_id != arguments.get("player_id"):
+            raise ValueError("Player-stat identifier mismatch")
+        expected_sport = "baseball" if validated.league == "mlb" else "football"
+        if validated.sport != expected_sport:
+            raise ValueError("Player-stat league mismatch")
+        return validated
 
     markets = []
     if isinstance(validated, SearchResults):
@@ -358,18 +400,39 @@ def _record_box_score(box_scores: list[dict[str, Any]], score: BoxScore) -> list
     return [*retained, snapshot]
 
 
+def _record_player_stats(
+    player_stats: list[dict[str, Any]], stats: PlayerStats
+) -> list[dict[str, Any]]:
+    snapshot = stats.model_dump(mode="json")
+    retained = [
+        saved
+        for saved in player_stats
+        if (saved["game_ref"], saved["player_id"]) != (stats.game_ref, stats.player_id)
+    ]
+    return [*retained, snapshot]
+
+
 def _sports_state_notice(
-    states: list[dict[str, Any]], box_scores: list[dict[str, Any]]
+    states: list[dict[str, Any]],
+    box_scores: list[dict[str, Any]],
+    player_stats: list[dict[str, Any]],
 ) -> str | None:
-    if not states and not box_scores:
+    if not states and not box_scores and not player_stats:
         return None
-    observations: list[GameState | BoxScore] = [
+    observations: list[GameState | BoxScore | PlayerStats] = [
         *(GameState.model_validate(state) for state in states),
         *(BoxScore.model_validate(score) for score in box_scores),
+        *(PlayerStats.model_validate(stats) for stats in player_stats),
     ]
     latest = max(observations, key=lambda observation: observation.retrieved_at)
     label = (
-        "Game state" if states and not box_scores else "Box score" if box_scores else "Sports data"
+        "Game state"
+        if states and not box_scores and not player_stats
+        else "Player stats"
+        if player_stats and not states and not box_scores
+        else "Box score"
+        if box_scores and not states and not player_stats
+        else "Sports data"
     )
     return (
         f"- {label}: {latest.source} observed at {latest.retrieved_at.isoformat()}. "
@@ -396,6 +459,7 @@ def _research_context_matches(
     details: list[dict[str, Any]],
     game_states: list[dict[str, Any]],
     box_scores: list[dict[str, Any]],
+    player_stats: list[dict[str, Any]],
 ) -> bool:
     """Require research arguments to match a typed detail observation in this turn."""
 
@@ -447,6 +511,16 @@ def _research_context_matches(
             and abs((score.scheduled_start - requested_start).total_seconds()) <= 60
         ):
             return True
+    for saved in player_stats:
+        stats = PlayerStats.model_validate(saved)
+        if (
+            stats.league == requested_league
+            and {stats.home_team.name.casefold(), stats.away_team.name.casefold()}
+            == requested_teams
+            and stats.local_date == requested_date
+            and abs((stats.scheduled_start - requested_start).total_seconds()) <= 60
+        ):
+            return True
     return False
 
 
@@ -491,6 +565,7 @@ def _matching_report(
     details: list[dict[str, Any]],
     game_states: list[dict[str, Any]],
     box_scores: list[dict[str, Any]],
+    player_stats: list[dict[str, Any]],
 ) -> MatchingReport | None:
     # The per-turn tool budget bounds this list to four snapshots.
     contracts = [ContractEvidence.model_validate(saved) for saved in details]
@@ -509,6 +584,19 @@ def _matching_report(
             scheduled_start=score.scheduled_start,
             retrieved_at=score.retrieved_at,
             lifecycle=score.lifecycle,
+        )
+    for saved in player_stats:
+        stats = PlayerStats.model_validate(saved)
+        games_by_ref[stats.game_ref] = GameEvidence(
+            league=stats.league,
+            game_ref=stats.game_ref,
+            source=stats.source,
+            provider_game_id=stats.provider_game_id,
+            home_team=stats.home_team.name,
+            away_team=stats.away_team.name,
+            scheduled_start=stats.scheduled_start,
+            retrieved_at=stats.retrieved_at,
+            lifecycle=stats.lifecycle,
         )
     report = match_candidates(
         [market for market in contracts if market.platform == Platform.POLYMARKET],
@@ -594,6 +682,7 @@ class ChatAgent:
             details = list(state["details"])
             game_states = list(state["game_states"])
             box_scores = list(state["box_scores"])
+            player_stats = list(state["player_stats"])
             research_results = list(state["research_results"])
             matching_report = state["matching_report"]
             activity = list(state["activity"])
@@ -620,7 +709,7 @@ class ChatAgent:
                             content = "Research search budget reached. Use available sources."
                             summary = "Research search budget reached before this call could run."
                         elif not _research_context_matches(
-                            call["args"], details, game_states, box_scores
+                            call["args"], details, game_states, box_scores, player_stats
                         ):
                             allowed = False
                             activity_status = "skipped"
@@ -654,7 +743,9 @@ class ChatAgent:
                                 summary = _tool_summary(validated)
                                 if isinstance(validated, MarketDetail):
                                     details = _record_market_detail(details, validated)
-                                    report = _matching_report(details, game_states, box_scores)
+                                    report = _matching_report(
+                                        details, game_states, box_scores, player_stats
+                                    )
                                     additions: dict[str, Any] = {
                                         "market": validated.model_dump(mode="json")
                                     }
@@ -675,7 +766,9 @@ class ChatAgent:
                                         content = json.dumps(additions)
                                 elif isinstance(validated, GameState):
                                     game_states = _record_game_state(game_states, validated)
-                                    report = _matching_report(details, game_states, box_scores)
+                                    report = _matching_report(
+                                        details, game_states, box_scores, player_stats
+                                    )
                                     additions = {
                                         "game_state": validated.model_dump(mode="json"),
                                         "market_settlement_notice": (
@@ -689,9 +782,27 @@ class ChatAgent:
                                     content = json.dumps(additions)
                                 elif isinstance(validated, BoxScore):
                                     box_scores = _record_box_score(box_scores, validated)
-                                    report = _matching_report(details, game_states, box_scores)
+                                    report = _matching_report(
+                                        details, game_states, box_scores, player_stats
+                                    )
                                     additions = {
                                         "box_score": validated.model_dump(mode="json"),
+                                        "market_settlement_notice": (
+                                            "Sporting statistics do not establish market "
+                                            "settlement or contract equivalence."
+                                        ),
+                                    }
+                                    if report is not None:
+                                        matching_report = report.model_dump(mode="json")
+                                        additions["matching_report"] = matching_report
+                                    content = json.dumps(additions)
+                                elif isinstance(validated, PlayerStats):
+                                    player_stats = _record_player_stats(player_stats, validated)
+                                    report = _matching_report(
+                                        details, game_states, box_scores, player_stats
+                                    )
+                                    additions = {
+                                        "player_stats": validated.model_dump(mode="json"),
                                         "market_settlement_notice": (
                                             "Sporting statistics do not establish market "
                                             "settlement or contract equivalence."
@@ -751,6 +862,7 @@ class ChatAgent:
                 "details": details,
                 "game_states": game_states,
                 "box_scores": box_scores,
+                "player_stats": player_stats,
                 "research_results": research_results,
                 "matching_report": matching_report,
                 "activity": activity,
@@ -826,6 +938,7 @@ class ChatAgent:
                             "details": [],
                             "game_states": [],
                             "box_scores": [],
+                            "player_stats": [],
                             "research_results": [],
                             "matching_report": None,
                             "activity": [],
@@ -839,7 +952,9 @@ class ChatAgent:
                         )
                         answer = notice + "\n\n" + answer
                     if sports_notice := _sports_state_notice(
-                        result.get("game_states", []), result.get("box_scores", [])
+                        result.get("game_states", []),
+                        result.get("box_scores", []),
+                        result.get("player_stats", []),
                     ):
                         answer = sports_notice + "\n\n" + answer
                     if research_notice := _research_notice(result.get("research_results", [])):

@@ -13,8 +13,10 @@ Shared cities and ambiguous abbreviations produce clarification choices.
 For a current score, start with
 `sports_state_find_games(query="Yankees", league="mlb", timezone="America/Los_Angeles")`,
 then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
-Use the same reference with `sports_state_get_box_score` for inning or period scoring, team totals,
-and player game statistics. Structured sports statistics never require Tavily.
+Use the same reference with `sports_state_get_box_score` for inning or period scoring and team
+totals. For one player's game line, call `sports_state_list_players`, then copy its stable
+`player_id` into `sports_state_get_player_stats` with the same `game_ref`. Structured sports
+statistics never require Tavily.
 
 ## What is implemented
 
@@ -111,6 +113,8 @@ Interactive HTTP documentation is at `/docs`.
 | `sports_state_find_games` | `query`, required `league` and IANA `timezone`; optional exact `local_date`, game `limit=5`, `compact=false` |
 | `sports_state_get_game_state` | Exact opaque `game_ref` copied unchanged from discovery |
 | `sports_state_get_box_score` | Exact opaque `game_ref` copied unchanged from discovery; no other selector |
+| `sports_state_list_players` | Exact opaque `game_ref`; returns compact player IDs, names, teams, and available game-stat groups |
+| `sports_state_get_player_stats` | Exact opaque `game_ref` plus one unchanged `player_id` returned by the player-list tool |
 | `tavily_search_game_evidence` | Exact `league`, `team_a`, `team_b`, `game_date`, `scheduled_start`, and focus copied from market/game detail |
 
 - Limits are strict integers from 1 through 10 in the client-visible MCP schema.
@@ -159,6 +163,10 @@ Interactive HTTP documentation is at `/docs`.
 - Box score returns MLB inning scoring, team totals, batting lines, and pitching lines, or
   NFL/NCAA period scoring, team statistics, and categorized player statistics. It excludes
   play-by-play and season statistics.
+- Player listing is a compact lookup over the same normalized box-score observation. It contains
+  only players with provider-backed game-stat lines, not a full active or season roster.
+- Player detail returns one selected MLB batting/pitching line or one selected football player's
+  categorized lines. It omits unrelated players and reuses the box-score cache and observation ID.
 - Optional box-score fields unavailable from the provider are omitted. The `completeness` object,
   `is_partial`, and `warnings` distinguish complete, partial, and unavailable sections. Baseball
   inning runs retain semantic null only when a team has not batted in that inning; zero means a

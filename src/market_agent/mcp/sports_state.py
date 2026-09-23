@@ -16,6 +16,8 @@ from market_agent.providers.game_state import (
     BoxScore,
     FindGamesResult,
     GameState,
+    PlayerDirectory,
+    PlayerStats,
     SportsStateClient,
     SportsStateError,
 )
@@ -26,6 +28,7 @@ Timezone = Annotated[str, Field(strict=True, min_length=1, max_length=100, patte
 Limit = Annotated[int, Field(strict=True, ge=1, le=10)]
 Compact = Annotated[bool, Field(strict=True)]
 GameRef = Annotated[str, Field(strict=True, min_length=1, max_length=2048, pattern=r"\S")]
+PlayerId = Annotated[str, Field(strict=True, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$")]
 
 
 def _tool_error(error: SportsStateError) -> ToolError:
@@ -153,12 +156,58 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
         except SportsStateError as error:
             raise _tool_error(error) from None
 
+    @server.tool(annotations=annotations)
+    async def sports_state_list_players(game_ref: GameRef) -> PlayerDirectory:
+        """List players with available game-stat lines for one discovery game_ref.
+        The result is a compact lookup directory: stable provider player_id, player name, team,
+        side, and available stat groups. It is not a full active or season roster. Copy one
+        returned player_id unchanged with the same game_ref into
+        sports_state_get_player_stats. The directory reuses the exact normalized box-score
+        observation, cache, identity checks, and MLB fallback without exposing the full box score.
+        """
+        assert active_client is not None
+        try:
+            async with asyncio.timeout(30):
+                return await active_client.list_players(game_ref)
+        except TimeoutError:
+            raise _tool_error(
+                SportsStateError(
+                    "tool_timeout", "sports_state_list_players exceeded its 30-second budget"
+                )
+            ) from None
+        except SportsStateError as error:
+            raise _tool_error(error) from None
+
+    @server.tool(annotations=annotations)
+    async def sports_state_get_player_stats(game_ref: GameRef, player_id: PlayerId) -> PlayerStats:
+        """Read one player's game-only statistics from an exact discovery game_ref.
+        First call sports_state_list_players and copy its player_id unchanged. MLB returns that
+        player's batting and/or pitching line. NFL and NCAA football return only that player's
+        available categorized stat groups. The result omits every unrelated player, season
+        statistics, and play-by-play. It reuses the same provider observation and safety bounds
+        as sports_state_get_box_score; ESPN is primary and MLB fallback remains exact-identity.
+        """
+        assert active_client is not None
+        try:
+            async with asyncio.timeout(30):
+                return await active_client.get_player_stats(game_ref, player_id)
+        except TimeoutError:
+            raise _tool_error(
+                SportsStateError(
+                    "tool_timeout", "sports_state_get_player_stats exceeded its 30-second budget"
+                )
+            ) from None
+        except SportsStateError as error:
+            raise _tool_error(error) from None
+
     # The bundled FastMCP generator validates unexpected kwargs at call time but omits the
     # equivalent JSON Schema keyword. Publish that constraint so agents can see it at discovery.
     for tool_name in (
         "sports_state_find_games",
         "sports_state_get_game_state",
         "sports_state_get_box_score",
+        "sports_state_list_players",
+        "sports_state_get_player_stats",
     ):
         registered = server._tool_manager.get_tool(tool_name)  # noqa: SLF001
         assert registered is not None

@@ -23,7 +23,8 @@ FastAPI/LangGraph application invokes all four servers through real MCP and reta
 context.
 
 The sports-state MCP separately finds a supported game by team, league, one local calendar day,
-and timezone, then reads current state or a box score through an opaque discovery reference.
+and timezone, then reads current state, a box score, a compact player directory, or one player's
+game statistics through an opaque discovery reference.
 ESPN is the primary free source. MLB StatsAPI is an MLB-only fallback after exact team/date/start
 matching; NFL and NCAA football fail honestly when ESPN is unavailable. The result includes score,
 lifecycle, observation provenance, and either one nullable league-specific situation object or a
@@ -31,6 +32,9 @@ sport-specific game-only box score. MLB box scores contain inning/team/batting/p
 NFL and NCAA box scores contain period/team/player statistics. Provider-unavailable optional
 statistics are omitted and reported through completeness metadata. The service does not provide
 odds, forecasts, contract identity, settlement, season-stat substitutions, or play-by-play.
+The player directory exposes stable provider IDs only for players with game-stat lines. Player
+detail returns one selected player's lines from the same cached observation without returning
+unrelated players.
 
 The Tavily MCP adds bounded current evidence only after one exact game is identified. It searches
 for injuries, lineups, weather, venue/schedule changes, or other game news; retains at most five
@@ -49,6 +53,7 @@ Representative requests:
 - Who has possession in the Falcons game, and what are the down and distance?
 - Get the Yankees box score. Who has a hit and how many strikeouts does the starter have?
 - Show period scoring and player statistics for this returned NFL or NCAA football game.
+- List the players with statistics in this game, then show only Aaron Judge's game line.
 
 Results describe discovered contracts, not a claim that a particular game is currently listed.
 Multiple event IDs require selection before discussing a singular game.

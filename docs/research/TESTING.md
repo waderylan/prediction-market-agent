@@ -22,8 +22,8 @@ No test requires a particular game to be open.
 |---|---|
 | `unit/test_sports.py` | Exact aliases, two-team provider queries, local dates/ranges, selectors, grouping, continuation, lifecycle, settlement, coverage, cancellation, malformed data, quote semantics |
 | `integration/test_sports_mcp.py` | Actual tools/list schemas and tools/call results, invalid limit rejection, clarification without HTTP, safe errors, agent schema consumption, typed cross-market sports report |
-| `unit/test_game_state.py` | Game identity/state parsing, lifecycle, situation nulls/bounds, refs, cache, retry/size limits, cancellation, MLB fallback |
-| `integration/test_game_state_mcp.py` | Third server tools/list and tools/call, strict schemas, errors, agent routing, market/game identity, settlement separation |
+| `unit/test_game_state.py` | Game identity/state parsing, lifecycle, situation nulls/bounds, refs, box/player projections, cache, retry/size limits, cancellation, MLB fallback |
+| `integration/test_game_state_mcp.py` | Third server tools/list and tools/call, strict state/box/player schemas, errors, agent routing, market/game identity, settlement separation |
 | `live/test_game_state_mcp_live.py` | Current ESPN/MLB compatibility through the independent stdio process across all three leagues |
 | `live/test_sports_mcp_live.py` | Independent stdio processes, current public API compatibility, searches across MLB/NFL/NCAA, detail retrieval when a candidate exists |
 | `unit/test_research.py` | Fixed Tavily request shape, local-date query construction, authority ordering, key/keyless authentication, game/date/focus filtering, URL safety, provenance, sanitization, malformed data |
@@ -94,6 +94,9 @@ The game-state suite additionally verifies:
   between final score, contract equivalence, and prediction-market settlement.
 - Exact-reference box scores for MLB, NFL, and NCAA football through unit, MCP, stdio, and agent
   paths; the tool accepts no selector beyond `game_ref`.
+- Compact available-player lookup and single-player game-stat detail for every supported league;
+  stable player IDs bind selection, unrelated player lines stay out of detail, and list/detail
+  reuse one box-score observation inside the cache window.
 - MLB inning null semantics, team totals, game-only batting/pitching fields, stable player IDs,
   integer outs normalization, ESPN partial-field reporting, and exact MLB StatsAPI fallback.
 - Football period scoring, named team statistics, categorized stable-player statistics, completed
@@ -121,7 +124,8 @@ Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
 These are bounded public reads. Sports tests check all supported leagues, schema discovery,
-`limit=20` rejection, coverage bounds, and current-state plus box-score detail for returned candidates.
+`limit=20` rejection, coverage bounds, and current-state, box-score, player-list, and single-player
+detail for returned candidates.
 An empty current result is valid; exact historical/open-game identity belongs in fixtures.
 
 A real-market replay over ten prior-day NCAA games and ten current-day games from each of NFL and

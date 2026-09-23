@@ -2,8 +2,8 @@
 
 ## Product boundary
 
-The student-authored `sports_state` stdio process answers two exact-game questions: what is
-happening now, and how are the teams and players performing? It supports MLB, NFL, and NCAA
+The student-authored `sports_state` stdio process answers exact-game questions about current state,
+team performance, and individual player performance. It supports MLB, NFL, and NCAA
 Division I football. It does not expose odds, win probability, projections, news, standings,
 season statistics, prediction-market contracts, settlement, trading, accounts, polling, or
 notifications.
@@ -132,6 +132,40 @@ The endpoint includes no play-by-play or pitch history. Current score, inning/co
 active players belong to `sports_state_get_game_state`; chronological events belong to a separate
 play surface when the product needs one. Tavily is never a source for structured game statistics.
 
+### `sports_state_list_players`
+
+Input:
+
+- `game_ref`: one opaque value copied unchanged from discovery.
+
+The result is a compact lookup directory derived from the same normalized box-score observation.
+Each entry contains a stable provider `player_id`, name, canonical team, home/away side, and the
+available game-stat groups. Baseball groups are batting and pitching; football groups retain the
+provider categories such as passing, rushing, receiving, defense, returns, kicking, and punting.
+
+The directory contains only players with provider-backed game-stat lines. It is not an active,
+pregame, depth-chart, or season roster. Duplicate appearances across football categories or a
+baseball batting/pitching role are collapsed under one player ID. Conflicting name or team identity
+for one ID rejects the response instead of merging it.
+
+### `sports_state_get_player_stats`
+
+Inputs:
+
+- `game_ref`: one opaque value copied unchanged from discovery.
+- `player_id`: one stable identifier copied unchanged from `sports_state_list_players` for that
+  same game reference.
+
+The result contains the exact game identity and provenance plus only the selected player's game
+statistics. MLB returns batting and/or pitching lines. NFL and NCAA football return categorized
+stat groups for that player. Unrelated player rows, team aggregates, line scoring, season fields,
+and play-by-play are absent. Invalid player-ID syntax is rejected before provider I/O;
+`player_not_found` identifies a valid ID that has no line in the exact game.
+
+Player listing and detail reuse the box-score request, lifecycle-aware cache, exact identity
+validation, completeness state, warnings, fallback policy, retrieval time, and observation ID. A
+list-followed-by-detail flow normally performs one provider summary request inside the cache window.
+
 ## Identity and opaque references
 
 Discovery references carry only version, source namespace, league, ESPN event ID, scheduled start,
@@ -223,6 +257,7 @@ MCP tool errors contain compact JSON with `error.code`, safe `message`, and call
   `unknown_provider_team`.
 - `response_identity_mismatch`.
 - `mlb_fallback_ambiguous`, `game_state_unavailable`, and `box_score_unavailable`.
+- `invalid_player_id` and `player_not_found`.
 
 Transport/HTTP failure, tool execution error, and malformed/schema-invalid response are tested
 independently. Error text excludes provider bodies, prompts, credentials, and opaque references.
@@ -233,8 +268,10 @@ result count where available, and sanitized error class. Stdout remains MCP prot
 
 The model selects game-state tools semantically. `sports_state_get_game_state` answers score,
 lifecycle, and current-situation requests. `sports_state_get_box_score` answers inning or period
-scoring, team totals, and player game-stat requests. It must discover before either detail call and
-ask the user to select when multiple games remain plausible.
+scoring and team totals. For one player's game statistics, the model lists players, resolves the
+requested name to a returned ID, then requests only that player's detail. It must discover before
+detail calls and ask the user to select when multiple games or same-name player choices remain
+plausible.
 
 When market and game detail coexist, the host independently checks league, both participants,
 scheduled start within 30 minutes, and provider-backed references. The model receives typed
@@ -253,11 +290,13 @@ Deterministic tests cover all lifecycle values, exact aliases, NCAA ambiguity, d
 timezone rollover, null situation fields, impossible bounds, reference edits, response identity,
 cache identity/TTL, response limits, retries, cancellation, malformed siblings/roots, exact MLB
 fallback, fallback ambiguity, provider conflict warnings, MLB batting/pitching normalization,
-season-stat exclusion, and the shared NFL/NCAA football box-score model.
+season-stat exclusion, the shared NFL/NCAA football box-score model, compact player selection,
+multi-category player aggregation, missing-player errors, and cache/observation reuse.
 
 Real MCP tests exercise `tools/list`, strict schemas, `tools/call`, discovery-before-detail, stable
 errors, host validation, semantic routing, no-tool behavior, market/game identity checks, and an
 independent stdio process. Opt-in public checks query all three leagues and retrieve exact state
-and box scores when a current game is available; an empty slate is valid. Current provider checks
-cover completed MLB, NFL, and NCAA football games plus live MLB. ESPN can omit individual fields
+box scores, player directories, and individual player lines when a current game is available; an
+empty slate is valid. Current provider checks cover completed MLB, NFL, and NCAA football games
+plus live MLB. ESPN can omit individual fields
 during transitions, and its undocumented schema may change without notice.

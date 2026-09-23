@@ -64,6 +64,15 @@ BOX_SCORE_USAGE = (
     "player lines. Unavailable optional fields are omitted, semantic inning nulls mean a team has "
     "not batted, and season statistics and play-by-play are not included."
 )
+PLAYER_DIRECTORY_USAGE = (
+    "Available players are the provider-backed participants with game-stat lines in this exact "
+    "box-score observation. Copy one player_id unchanged into "
+    "sports_state_get_player_stats; this is not a season roster."
+)
+PLAYER_STATS_USAGE = (
+    "Player statistics are a narrow projection of one exact-game box-score observation. "
+    "They contain game-only provider fields, not season statistics or play-by-play."
+)
 
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_SCOREBOARD_EVENTS = 200
@@ -459,6 +468,69 @@ class BoxScore(_BoxScoreBase):
             )
         if not valid:
             raise ValueError("box-score sections do not match the sport")
+        return self
+
+
+class AvailablePlayer(BaseModel):
+    """Compact selector for one player with provider-backed game statistics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    player_id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    team: str = Field(min_length=1, max_length=200)
+    team_side: Literal["away", "home"]
+    stat_groups: list[str] = Field(min_length=1, max_length=20)
+
+
+class PlayerDirectory(_BoxScoreBase):
+    """Players selectable from one exact normalized box-score observation."""
+
+    sport: Literal["baseball", "football"]
+    players: list[AvailablePlayer] = Field(max_length=200)
+    player_stats_completeness: CompletenessStatus
+    usage_note: str = Field(default=PLAYER_DIRECTORY_USAGE, max_length=500)
+
+
+class FootballPlayerStatGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str = Field(min_length=1, max_length=100)
+    statistics: list[FootballStatistic] = Field(max_length=30)
+
+
+class PlayerStats(_BoxScoreBase):
+    """One player's game-only statistics from an exact box-score observation."""
+
+    sport: Literal["baseball", "football"]
+    player_id: str = Field(min_length=1, max_length=100)
+    player_name: str = Field(min_length=1, max_length=200)
+    team: str = Field(min_length=1, max_length=200)
+    team_side: Literal["away", "home"]
+    batting: BatterLine | None = Field(default=None, exclude_if=lambda value: value is None)
+    pitching: PitcherLine | None = Field(default=None, exclude_if=lambda value: value is None)
+    stat_groups: list[FootballPlayerStatGroup] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    usage_note: str = Field(default=PLAYER_STATS_USAGE, max_length=500)
+
+    @model_validator(mode="after")
+    def valid_sport_sections(self) -> Self:
+        if self.sport == "baseball":
+            valid = (
+                self.league == "mlb"
+                and (self.batting is not None or self.pitching is not None)
+                and self.stat_groups is None
+            )
+        else:
+            valid = (
+                self.league in {"nfl", "ncaa_football"}
+                and self.batting is None
+                and self.pitching is None
+                and bool(self.stat_groups)
+            )
+        if not valid:
+            raise ValueError("player-stat sections do not match the sport")
         return self
 
 
@@ -1147,6 +1219,216 @@ def _box_score_observation_id(box_score: BoxScore) -> str:
 
 def _finalize_box_score(box_score: BoxScore) -> BoxScore:
     return box_score.model_copy(update={"observation_id": _box_score_observation_id(box_score)})
+
+
+def _player_projection_data(box_score: BoxScore) -> dict[str, Any]:
+    fields = set(_BoxScoreBase.model_fields) - {"usage_note"}
+    return box_score.model_dump(include=fields)
+
+
+def _player_completeness(box_score: BoxScore) -> CompletenessStatus:
+    if isinstance(box_score.completeness, FootballBoxScoreCompleteness):
+        return box_score.completeness.player_stats
+    values = {box_score.completeness.batting, box_score.completeness.pitching}
+    if values == {"unavailable"}:
+        return "unavailable"
+    if values == {"complete"}:
+        return "complete"
+    return "partial"
+
+
+def list_box_score_players(box_score: BoxScore) -> PlayerDirectory:
+    """Build a compact, de-duplicated player selector from one box-score snapshot."""
+
+    indexed: dict[str, AvailablePlayer] = {}
+
+    def remember(
+        *, player_id: str, name: str, team: str, team_side: Literal["away", "home"], role: str
+    ) -> None:
+        current = indexed.get(player_id)
+        if current is None:
+            indexed[player_id] = AvailablePlayer(
+                player_id=player_id,
+                name=name,
+                team=team,
+                team_side=team_side,
+                stat_groups=[role],
+            )
+            return
+        if (current.name, current.team, current.team_side) != (name, team, team_side):
+            raise StateValidationError(
+                "malformed_response", "one provider player ID has conflicting game identities"
+            )
+        if role not in current.stat_groups:
+            indexed[player_id] = current.model_copy(
+                update={"stat_groups": [*current.stat_groups, role]}
+            )
+
+    if box_score.sport == "baseball":
+        assert box_score.batting is not None and box_score.pitching is not None
+        for batting_line in box_score.batting.away:
+            remember(
+                player_id=batting_line.player_id,
+                name=batting_line.name,
+                team=box_score.away_team.name,
+                team_side="away",
+                role="batting",
+            )
+        for batting_line in box_score.batting.home:
+            remember(
+                player_id=batting_line.player_id,
+                name=batting_line.name,
+                team=box_score.home_team.name,
+                team_side="home",
+                role="batting",
+            )
+        for pitcher_line in box_score.pitching.away:
+            remember(
+                player_id=pitcher_line.player_id,
+                name=pitcher_line.name,
+                team=box_score.away_team.name,
+                team_side="away",
+                role="pitching",
+            )
+        for pitcher_line in box_score.pitching.home:
+            remember(
+                player_id=pitcher_line.player_id,
+                name=pitcher_line.name,
+                team=box_score.home_team.name,
+                team_side="home",
+                role="pitching",
+            )
+    else:
+        assert box_score.player_stats is not None
+
+        def remember_groups(
+            side: Literal["away", "home"], team: str, groups: list[FootballPlayerGroup]
+        ) -> None:
+            for group in groups:
+                for player in group.players:
+                    remember(
+                        player_id=player.player_id,
+                        name=player.name,
+                        team=team,
+                        team_side=side,
+                        role=group.category,
+                    )
+
+        remember_groups("away", box_score.away_team.name, box_score.player_stats.away)
+        remember_groups("home", box_score.home_team.name, box_score.player_stats.home)
+    players = sorted(
+        indexed.values(),
+        key=lambda player: (
+            0 if player.team_side == "away" else 1,
+            player.name.casefold(),
+            player.player_id,
+        ),
+    )
+    if len(players) > 200:
+        raise StateValidationError(
+            "response_too_large", "box score contains more than 200 distinct players"
+        )
+    return PlayerDirectory(
+        **_player_projection_data(box_score),
+        sport=box_score.sport,
+        players=players,
+        player_stats_completeness=_player_completeness(box_score),
+    )
+
+
+def project_player_stats(box_score: BoxScore, player_id: str) -> PlayerStats:
+    """Select one player without exposing unrelated box-score rows to the caller."""
+
+    if box_score.sport == "baseball":
+        assert box_score.batting is not None and box_score.pitching is not None
+        matches: list[tuple[str, Literal["away", "home"], BatterLine | PitcherLine, str]] = []
+        matches.extend(
+            (box_score.away_team.name, "away", line, "batting")
+            for line in box_score.batting.away
+            if line.player_id == player_id
+        )
+        matches.extend(
+            (box_score.home_team.name, "home", line, "batting")
+            for line in box_score.batting.home
+            if line.player_id == player_id
+        )
+        matches.extend(
+            (box_score.away_team.name, "away", line, "pitching")
+            for line in box_score.pitching.away
+            if line.player_id == player_id
+        )
+        matches.extend(
+            (box_score.home_team.name, "home", line, "pitching")
+            for line in box_score.pitching.home
+            if line.player_id == player_id
+        )
+        if not matches:
+            raise SportsStateError(
+                "player_not_found",
+                "player_id is not present in this game's available statistic lines",
+                fields={"player_id": player_id},
+            )
+        identities = {(team, side, line.name) for team, side, line, _ in matches}
+        if len(identities) != 1:
+            raise StateValidationError(
+                "malformed_response", "one provider player ID has conflicting game identities"
+            )
+        team, side, name = next(iter(identities))
+        batting = next((line for _, _, line, role in matches if role == "batting"), None)
+        pitching = next((line for _, _, line, role in matches if role == "pitching"), None)
+        return PlayerStats(
+            **_player_projection_data(box_score),
+            sport="baseball",
+            player_id=player_id,
+            player_name=name,
+            team=team,
+            team_side=side,
+            batting=batting if isinstance(batting, BatterLine) else None,
+            pitching=pitching if isinstance(pitching, PitcherLine) else None,
+        )
+
+    assert box_score.player_stats is not None
+    found_name: str | None = None
+    found_team: str | None = None
+    found_side: Literal["away", "home"] | None = None
+    stat_groups: list[FootballPlayerStatGroup] = []
+
+    def collect(
+        side: Literal["away", "home"], team: str, groups: list[FootballPlayerGroup]
+    ) -> None:
+        nonlocal found_name, found_team, found_side
+        for group in groups:
+            for player in group.players:
+                if player.player_id != player_id:
+                    continue
+                identity = (player.name, team, side)
+                if found_name is not None and identity != (found_name, found_team, found_side):
+                    raise StateValidationError(
+                        "malformed_response",
+                        "one provider player ID has conflicting game identities",
+                    )
+                found_name, found_team, found_side = identity
+                stat_groups.append(
+                    FootballPlayerStatGroup(category=group.category, statistics=player.statistics)
+                )
+
+    collect("away", box_score.away_team.name, box_score.player_stats.away)
+    collect("home", box_score.home_team.name, box_score.player_stats.home)
+    if found_name is None or found_team is None or found_side is None:
+        raise SportsStateError(
+            "player_not_found",
+            "player_id is not present in this game's available statistic lines",
+            fields={"player_id": player_id},
+        )
+    return PlayerStats(
+        **_player_projection_data(box_score),
+        sport="football",
+        player_id=player_id,
+        player_name=found_name,
+        team=found_team,
+        team_side=found_side,
+        stat_groups=stat_groups,
+    )
 
 
 def _stat_map(group: dict[str, Any], label: str) -> dict[str, Any]:
@@ -2665,6 +2947,25 @@ class SportsStateClient:
             if reference.league != "mlb":
                 raise primary_error
             return await self._mlb_box_score_fallback(game_ref, reference, primary_error)
+
+    async def list_players(self, game_ref: str) -> PlayerDirectory:
+        """List compact player selectors from the exact game's normalized box score."""
+
+        return list_box_score_players(await self.get_box_score(game_ref))
+
+    async def get_player_stats(self, game_ref: str, player_id: str) -> PlayerStats:
+        """Return one player's game-only lines without exposing unrelated players."""
+
+        if (
+            not isinstance(player_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}", player_id) is None
+        ):
+            raise SportsStateError(
+                "invalid_player_id",
+                "player_id must be copied unchanged from sports_state_list_players",
+                fields={"player_id": "invalid"},
+            )
+        return project_player_stats(await self.get_box_score(game_ref), player_id)
 
     async def _mlb_box_score_fallback(
         self,

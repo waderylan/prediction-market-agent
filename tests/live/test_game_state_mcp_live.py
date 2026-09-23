@@ -29,6 +29,8 @@ async def test_game_state_stdio_live_all_supported_leagues():
             "sports_state_find_games",
             "sports_state_get_game_state",
             "sports_state_get_box_score",
+            "sports_state_list_players",
+            "sports_state_get_player_stats",
         }
         assert tools["sports_state_find_games"].inputSchema["additionalProperties"] is False
         assert (
@@ -120,3 +122,28 @@ async def test_game_state_stdio_live_all_supported_leagues():
                             assert player["outs_recorded"] >= 0
             else:
                 assert {"line_score", "team_stats", "player_stats"} <= set(box_score)
+            players = await session.call_tool(
+                "sports_state_list_players", {"game_ref": game["game_ref"]}
+            )
+            assert not players.isError
+            validate(players.structuredContent, tools["sports_state_list_players"].outputSchema)
+            directory = players.structuredContent
+            assert directory["game_ref"] == game["game_ref"]
+            assert directory["observation_id"] == box_score["observation_id"]
+            if directory["players"]:
+                selected = directory["players"][0]
+                player = await session.call_tool(
+                    "sports_state_get_player_stats",
+                    {
+                        "game_ref": game["game_ref"],
+                        "player_id": selected["player_id"],
+                    },
+                )
+                assert not player.isError
+                validate(
+                    player.structuredContent,
+                    tools["sports_state_get_player_stats"].outputSchema,
+                )
+                assert player.structuredContent["player_id"] == selected["player_id"]
+                assert player.structuredContent["team"] == selected["team"]
+                assert player.structuredContent["observation_id"] == box_score["observation_id"]
