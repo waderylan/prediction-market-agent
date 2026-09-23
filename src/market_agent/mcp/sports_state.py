@@ -68,7 +68,17 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
                 yield
             active_client = None
 
-    server = FastMCP("Sports game detail", lifespan=lifespan, log_level="CRITICAL")
+    server = FastMCP(
+        "Sports game detail",
+        instructions=(
+            "Read-only exact-game sports data for MLB, NFL, and NCAA Division I football. Call "
+            "sports_state_find_games first with a league and IANA timezone, then copy one returned "
+            "game_ref unchanged into state, box-score, player, or play tools. This server does not "
+            "supply market prices, contract rules, settlement, or web research."
+        ),
+        lifespan=lifespan,
+        log_level="CRITICAL",
+    )
     annotations = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True)
 
     @server.tool(annotations=annotations)

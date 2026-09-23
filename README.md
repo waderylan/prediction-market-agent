@@ -1,262 +1,162 @@
-# Sports Prediction-Market Research
+# Market Lens
 
-A read-only CSCI 599 course project for sports prediction-market research on Kalshi and
-Polymarket. Initial support covers MLB, NFL, and NCAA Division I football game winners.
-Four application MCP servers provide market discovery on each platform, exact-game state,
-statistics, and play history from ESPN with an exact-identity MLB StatsAPI fallback, and bounded
-Tavily research for one identified game. None place orders or access accounts.
+Market Lens answers sports questions with game data, prediction-market contracts, and current web
+evidence in one conversation. It resolves the exact game first, calls only the sources needed for
+the question, and keeps scores, market prices, contract rules, and settlement evidence separate.
 
-Start with `kalshi_search_markets(query="Yankees")` or
-`polymarket_search_markets(query="Chiefs vs Bills")`. No exchange taxonomy or constructed
-ticker is required. For college football, use a school name and `league="ncaa_football"`.
-Shared cities and ambiguous abbreviations produce clarification choices.
-For a current score, start with
-`sports_state_find_games(query="Yankees", league="mlb", timezone="America/Los_Angeles")`,
-then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
-Use the same reference with `sports_state_get_box_score`; its default `summary` view returns the
-line score and compact leaders. Request `view="full"` for the complete layout or select
-`line_score`, `batting`, `pitching`, `team_stats`, or `player_stats`, with optional team-side
-filtering. For one player's game line, call `sports_state_list_players`, then copy its stable
-`player_id` into `sports_state_get_player_stats` with the same `game_ref`. Structured sports
-statistics never require Tavily.
-Use `sports_state_get_play_by_play` for a bounded chronological play window. Copy returned play
-IDs into `before_play_id` to page backward or `after_play_id` to retrieve only later unseen plays.
+The application covers MLB, NFL, and NCAA Division I football. It is read-only: it does not place
+orders, access market accounts, generate an independent win probability, or make betting picks.
 
-## What is implemented
+## What it answers
 
-| Capability | Current behavior |
+- What is the score, inning, count, or down and distance for this game?
+- Show the box score, one player's game line, or the latest five plays.
+- Find the Kalshi or Polymarket full-game-winner contract for this matchup.
+- Compare two market contracts only when their event and settlement terms support comparison.
+- Build a sourced game brief with current state, market snapshots, injuries, lineups, weather, or
+  schedule news.
+- Continue with a follow-up such as "show only the Padres pitchers" without resolving the game
+  again.
+
+A narrow question uses the minimum useful tools. A broad request can combine all four independent
+MCP servers. If a provider fails, the answer identifies the missing source and retains verified
+evidence from the others.
+
+## Why it is useful
+
+Sports information is split across scoreboards, statistical feeds, market listings, contract
+rules, and news reports. Similar labels do not guarantee that those sources refer to the same game
+or settle under the same conditions. Market Lens performs that identity work before synthesis:
+
+- Opaque provider IDs and game references are discovered, copied, and validated rather than
+  guessed.
+- Every observation carries its source and retrieval or quote time.
+- A deterministic matcher checks league, participants, scheduled start, named outcomes, and
+  available settlement terms before the model explains a comparison.
+- Separate provider calls remain separate snapshots.
+- A sporting result does not establish prediction-market settlement.
+- Missing timestamps, incomplete rules, provider errors, and weak research evidence remain visible
+  instead of being converted into confident prose.
+
+## System design
+
+The primary product is a FastAPI service backed by a LangGraph reasoning loop. LangGraph owns
+session memory, source availability, tool budgets, host-side schema validation, and final answer
+synthesis. Four independent MCP servers expose focused, typed tools:
+
+| Source | Responsibility |
 |---|---|
-| Four independent MCP servers | Kalshi, Polymarket, exact-game sports detail, and bounded Tavily research; real stdio discovery and calls |
-| Sports discovery | MLB, NFL, NCAA Division I FBS/FCS; full-game winners only |
-| Team identity | Exact aliases from a reviewed provider catalog; same-city teams stay distinct |
-| Candidate selection | Results group both outcome contracts by game; separate event IDs preserve doubleheaders |
-| Dates | Exact local dates and ranges matched against provider game-start time in an IANA timezone; next/most-recent selection |
-| Prices | Authoritative quote clocks when available; distinct current, stale, timestamp-unavailable, and not-trading states; explicit observation identity/cache reuse |
-| Coverage | Actual pages/events/contracts scanned, partial-result warnings, truncation, continuation evidence, and scoped totals |
-| Contract detail | Rules, game/close/resolution clocks, consumer links, and explicit settlement results |
-| Current game state | ESPN scores/lifecycle/situations; MLB StatsAPI fallback after exact identity matching |
-| Exact-game box scores | Default summary plus full/section views, team-side filtering, inning participation, and field-level completeness from the discovery `game_ref` |
-| Player and play detail | Compact player selection, single-player game lines, and stable-ID play windows with pre/post-event outs, structured substitutions, paging, and focused filters |
-| Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
-| Current web evidence | At most two game-scoped Tavily searches; official-only policy, postgame recaps, exact participant/date/focus filtering, provenance, explicit empty status, and corroboration cautions |
-| Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
-| Comparison boundary | Typed event, named-outcome, and settlement checks run before synthesis for supported full-game winners |
-| Comparison policy | Deterministic identity plus core settlement checks; unsupported or differing full rules cannot authorize price comparison |
+| Kalshi MCP | Sports contract discovery, exact contract detail, prices, rules, links, and settlement fields |
+| Polymarket MCP | Sports contract discovery through Gamma, exact detail, prices, rules, links, and settlement fields |
+| Sports-state MCP | Exact-game state, box scores, player game statistics, and bounded play history |
+| Tavily MCP | At most two identity-bound searches for injuries, lineups, weather, schedule changes, game news, or recaps |
 
-The unified all-in-one information workflow, an optional saved-research ledger, and Cloud Run
-deployment are **future work**. Independent forecasting and betting recommendations are outside the
-product scope. The matcher
-establishes equivalence when complete supplied full-game-winner
-identity, named-outcome mapping, game-winner type, postponement/cancellation terms, and exact full
-rules agree. Missing or differently worded rules remain ambiguous unless a core settlement conflict
-already proves the contracts different. Sports-state data is optional corroboration, not proof of
-contract equivalence or settlement.
-A sporting result does not establish prediction-market settlement, even when the game is final.
-The [Milestone 8A evaluation](docs/research/MATCHING_VALUE_EVALUATION.md) found no safe equivalent
-pair in its real-market sample. It removed Jev and reduced matching to this deterministic subset.
+Independent calls from one reasoning step execute concurrently. Identifier-dependent detail and
+research calls wait until discovery establishes the required identity. Each turn allows eight
+market or sports-state calls and two Tavily searches.
 
-The product can expand to additional sports and contract types, including spreads, totals,
-props, and futures. These require verified provider mappings, typed models, settlement
-checks, and tests; they are not enabled by adding team aliases. See the
-[implementation plan](docs/planning/IMPLEMENTATION_PLAN.md) for acceptance criteria.
+### Trust boundaries
 
-Read [Sports market MCP design](docs/research/SPORTS_MCP.md) for market discovery,
-[Sports-state MCP design](docs/research/GAME_STATE_MCP.md) for state, statistics, and play contracts, and
-[Tavily research MCP design](docs/research/WEB_RESEARCH_MCP.md) for current-evidence identity,
-budgets, provenance, trust boundaries, errors, and provider limitations.
+- ESPN public JSON is the primary sports-state source. It is free, unauthenticated, undocumented,
+  and has no SLA.
+- MLB StatsAPI is an MLB-only fallback after exact game identity checks. NFL and NCAA football do
+  not receive a substituted fallback.
+- Market prices are provider observations, not model forecasts. Quote time and retrieval time are
+  different fields.
+- Tavily titles and snippets are bounded, untrusted evidence. They cannot establish structured
+  game state, contract equivalence, or settlement.
+- Contract rules are also untrusted input. Truncated or differing rules cannot support a complete
+  equivalence decision.
 
-## Setup and run
+## Run locally
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Requirements: Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```powershell
 uv sync --all-extras
 Copy-Item .env.example .env
 ```
 
-Keep credentials in the ignored `.env`. The four MCP servers need no exchange credentials.
-`TAVILY_API_KEY` is optional; leave it blank for Tavily's keyless search mode or configure a key
-for account-backed usage:
-
-```powershell
-uv run python -m market_agent.mcp.kalshi
-uv run python -m market_agent.mcp.polymarket
-uv run python -m market_agent.mcp.sports_state
-uv run python -m market_agent.mcp.tavily
-```
-
-These commands speak MCP on stdin/stdout; use an MCP client rather than an HTTP browser.
-The packaged [server manifest](src/market_agent/mcp/servers.json) configures all four processes.
-
-For the conversational application, configure `OPENAI_API_KEY` and run:
+Set `OPENAI_API_KEY` in the ignored `.env`, then start the service:
 
 ```powershell
 uv run python main.py
 ```
 
-The application binds to `0.0.0.0:$PORT` (default 8080). Its assignment endpoint is:
+The application listens on `0.0.0.0:$PORT`, with port 8080 as the default. Interactive API
+documentation is available at `/docs`.
 
-```text
+### API
+
+```http
 POST /chat
-{"query": "Find Kalshi Yankees game-winner markets", "session_id": "sports-1"}
+Content-Type: application/json
 
-Response:
-{"response": "..."}
+{
+  "query": "Give me a sourced Yankees game brief",
+  "session_id": "sports-1"
+}
 ```
 
-Reuse a session ID for follow-ups; use a new, unguessable ID for a new conversation.
-IDs are not authentication. LangGraph memory lasts for the process lifetime.
-Interactive HTTP documentation is at `/docs`.
+```json
+{"response":"..."}
+```
 
-## Tool reference
+Reuse a session ID for follow-ups. Use a new, unguessable ID for a separate conversation. Session
+IDs are not authentication, and the in-memory LangGraph checkpointer lasts for the process
+lifetime.
 
-| Tool | Inputs |
-|---|---|
-| `kalshi_search_markets` | `query`, `status="open"`, game `limit=5`; optional league, local date/range, timezone, next/recent selector, continuation, series |
-| `kalshi_search_series` | `query`, optional exact `category` and `tags`, `limit=5` |
-| `kalshi_get_market` | Exact returned uppercase `market_id` |
-| `polymarket_search_markets` | `query`, `status="open"`, game `limit=5`; optional league, local date/range, timezone, next/recent selector, continuation |
-| `polymarket_get_market` | Exact returned numeric Gamma `market_id` |
-| `sports_state_find_games` | `query`, required `league` and IANA `timezone`; optional exact `local_date`, game `limit=5`, `compact=false` |
-| `sports_state_get_game_state` | Exact opaque `game_ref` copied unchanged from discovery |
-| `sports_state_get_box_score` | Exact opaque `game_ref`; `view=summary` by default, optional full/section view and `team_side=both|away|home` |
-| `sports_state_list_players` | Exact opaque `game_ref`; returns compact player IDs, names, teams, and available game-stat groups |
-| `sports_state_get_player_stats` | Exact opaque `game_ref` plus one unchanged `player_id` returned by the player-list tool |
-| `sports_state_get_play_by_play` | Exact opaque `game_ref`; optional `limit=1..50`, mutually exclusive before/after play ID, scoring, period, and home/away filters |
-| `tavily_search_game_evidence` | Exact game identity, focus, and optional `source_policy=all|official_only` copied from market/game detail |
-
-- Limits are strict integers from 1 through 10 in the client-visible MCP schema.
-- League values are `mlb`, `nfl`, and `ncaa_football`.
-- `local_date`, `date_from`, and `date_to` are scheduled calendar dates in `timezone`
-  (an IANA name such as `America/Los_Angeles`). `event_date` remains an exact-date alias.
-- `next_game_only` and `most_recent_game_only` are mutually exclusive. Sports `limit` counts
-  games; each `games[]` entry contains its returned `contracts[]`.
-- Market discovery declares `result_kind` and `contracts_location`. Sports contracts live under
-  `games[].contracts`; generic topic results live under `markets[]`.
-- Sports discovery accepts full-game winners; it does not substitute a spread, total,
-  partial-game winner, player prop, season series, or future.
-- Clarification results include `clarification` and `choices`; they do not trigger upstream requests.
-- Every game has a localized kickoff label and `pregame`, `live`, `awaiting_resolution`, or
-  `settled` state. Two games on the same day remain separate.
-- Pass `discovery.next_cursor` back as `continuation` to read the next bounded page.
-- Continuations are opaque and request-bound. Provider, query, league, status, calendar filters,
-  and selectors are validated before any upstream request; do not edit or cross-use cursors.
-- Caller-correctable failures are MCP tool errors containing JSON with stable `error.code`,
-  `message`, and `fields`. Correct the named fields before retrying the call.
-- `discovery.discarded_record_count` and `warnings` report malformed/oversized individual provider
-  records. Valid candidates from the same structurally valid page are still returned.
-- Explicit series discovery is an optional precision control, not a prerequisite for an
-  ordinary sports query.
-- `quote_as_of` is an authoritative provider quote clock or null; it never aliases `retrieved_at`.
-  `quote_freshness` distinguishes `current`, `stale`, `timestamp_unavailable`, and `not_trading`.
-  Missing quote timing is unknown freshness, not stale. `provider_updated_at` remains provider
-  record metadata. `observation_id`, `cache_hit`, and `cache_age_ms` identify explicit 30-second
-  normalized-observation reuse across search/detail.
-- `timing_warning` identifies a provider close more than 24 hours after scheduled start without
-  treating trading close as kickoff or declaring the contract invalid.
-- Sports contracts retain `timezone`, `local_date`, and `scheduled_start_local` in their normalized
-  `sports` object, including an immediate detail call after search.
-- Fetch details before interpreting settlement rules. Resolved details expose
-  `settlement_value`, `winning_outcome`, and `resolved_at`; prices are not settlement evidence.
-- Game-state discovery checks one requested local day and at most two adjacent UTC boundary pages;
-  it never scans a season. Omitting `local_date` uses and discloses today in the requested timezone.
-- Game-state discovery is a lightweight picker. Use `query="all"` for a bounded same-day league
-  slate of at most 10 games; this is not exhaustive pagination or a season scan. Its `usage_note`
-  directs callers to detail for authoritative normalized state fields.
-- Set `compact=true` for multi-game selection results containing only teams, timing, lifecycle, and
-  `game_ref`; league/timezone/date remain at result root. Clarifications use
-  `discovery_mode="clarification"` and machine-ready queries.
-- `coverage.utc_boundary_check` explains when two ESPN UTC pages were needed to cover one local
-  calendar day. It does not indicate that discovery widened the requested local date.
-- `game_ref` is restart-safe, versioned, checksummed, and bound to the ESPN game, league, teams,
-  scheduled start, and timezone. It is not a credential and must not be edited or reconstructed.
-  Rediscovery in another timezone intentionally returns a different reference.
-- Game state returns one baseball or football situation object. Missing possession, count, outs,
-  bases, players, timeouts, or field position remain null rather than being inferred.
-- Box-score `view=summary` returns scoring and compact leaders and includes a follow-up tip for
-  full or section-specific layouts. `view=full` returns every sport-applicable section; narrow
-  views and `team_side` avoid transferring unrelated rows. Play-by-play and season statistics are
-  excluded.
-- Player listing is a compact lookup over the same normalized box-score observation. It contains
-  only players with provider-backed game-stat lines, not a full active or season roster.
-- Player detail returns one selected MLB batting/pitching line or one selected football player's
-  categorized lines. It omits unrelated players and reuses the box-score cache and observation ID.
-- Play-by-play returns chronological bounded windows with stable provider-backed play IDs. The
-  default is the latest 20 plays; `before_play_id` pages backward and `after_play_id` returns later
-  unseen plays. Optional scoring, period, and home/away filters apply before the 1-50 result limit.
-- ESPN supplies pitch/action granularity for MLB and play granularity for football. Exact-identity
-  MLB StatsAPI fallback supplies at-bat granularity. Each response reports the granularity,
-  matching count, earlier/later availability, paging anchors, observation identity, and warnings.
-- Baseball plays label `event_kind`; substitutions carry a separate structured payload.
-  `outs_before` and `outs_after` prevent post-play state from being narrated as pre-play state.
-- Optional box-score fields unavailable from the provider are omitted. `completeness` identifies
-  exact missing required and optional fields; optional omissions do not make a section partial.
-  Baseball inning participation distinguishes `played`, `not_played`, `not_reached`, and `unknown`;
-  a final skipped home half renders as X without making an otherwise complete line score partial.
-- Baseball pitching exposes both integer `outs_recorded` and provider display notation such as
-  `innings_pitched_display="1.1"`; consumers perform calculations with outs, not decimal math.
-- Scheduled/pregame provider placeholders are normalized to null in discovery and detail; baseball
-  `half` is `unknown` until an inning exists. Baseball `phase` distinguishes `not_started`, active
-  play, provider transitions, completed games, and unavailable situation data.
-- ESPN is free, unauthenticated, undocumented, and has no SLA. MLB StatsAPI is the MLB-only
-  fallback; NFL and NCAA failures return controlled unavailability without substitution.
-- Tavily research is blocked until one typed exact-game sports detail establishes league,
-  both teams, and date. It supplies game news, postgame recaps, injuries, lineups, weather, and
-  schedule context, never structured sports state, statistics, or plays.
-  The server constructs the query and retains at most five HTTPS results naming both teams and the
-  exact date with text relevant to the requested focus. Focus values are `injuries`, `lineups`,
-  `weather`, `venue_or_schedule`, `other_game_news`, and `postgame_recap`.
-- `source_policy="official_only"` restricts search and retained sources to league-official domains.
-  `result_status` distinguishes retained evidence from no qualifying sources. Injury return or
-  activation snippets carry a caution requiring official transaction, lineup, or structured
-  participation corroboration.
-- Tavily queries use the provider-established local game date without attaching the scheduled
-  start's UTC clock. Results retain the exact UTC start as identity and are ordered by a transparent
-  league-official/established-media/other heuristic before publication time and provider relevance.
-- Each turn permits at most two Tavily searches in addition to four market/state attempts. Tavily
-  titles and snippets are bounded untrusted data. Returned URLs are listed deterministically;
-  research cannot establish game state, contract equivalence, settlement, or a forecast.
-- Generic extract, crawl, map, and research tools are not exposed. Search snippets met the tested
-  Milestone 9 need without an arbitrary URL-fetch surface.
-- `retrieved_at` is this service's observation time. Cached state keeps that original time and
-  exposes `observation_id`, `cache_hit`, and `cache_age_ms`.
-- Live discovery and detail are separate observations and can drift between calls. Detail is
-  authoritative for normalized live state; do not merge live fields as one transactional snapshot.
-- Empty bounded discovery is not proof of absence. Polymarket automatically checks its league
-  catalog when exhausted text search yields no qualifying game and page budget remains.
-- Polymarket matchup discovery sends both resolved participants using the provider's league-specific
-  title form. Supplied local dates remain hard game-start filters rather than ranking hints.
-
-## Local inspection UI
+### Inspection UI
 
 ```powershell
 uv run python scripts/run_chat_ui.py
 ```
 
-This starts Market Lens at `http://127.0.0.1:3000`, the FastAPI backend, and the local
-Codex test gateway. The gateway supplies model decisions; the application still owns
-LangGraph memory and performs real MCP calls. The UI shows actual tool activity and
-supports session follow-ups. Ctrl+C stops the local processes.
+This starts Market Lens at `http://127.0.0.1:3000`, the FastAPI backend, and a local Codex model
+gateway. The application still owns LangGraph memory and MCP execution. The UI displays the actual
+tool activity for each turn. The gateway uses local CLI authentication and is not included as a
+production backend.
 
-The default local test model is `gpt-5.6-sol` with medium effort. UI controls also support
-the configured Terra/Luna options and reasoning levels. This development gateway uses local
-CLI authentication and stays outside the deployment image. It is not a production API backend.
-Use `--no-browser` or `--port 3001` on the runner as needed.
+## Test the MCP workflow in Codex
 
-For separate gateway/backend terminals:
+The repository includes [the sports-information skill](.agents/skills/sports-information/SKILL.md).
+Codex discovers it from the repository and uses the configured `kalshi`, `polymarket`,
+`sports_state`, and `tavily` MCP connections.
 
 ```powershell
-uv run python scripts/codex_gateway.py
-# In another terminal:
-$env:OPENAI_API_KEY = "local-codex-placeholder"
-$env:OPENAI_BASE_URL = "http://127.0.0.1:8091/v1"
-$env:LLM_TIMEOUT_SECONDS = "120"
-uv run python main.py
+codex exec '$sports-information Find today''s MLB games in UTC. Use sports state only.'
 ```
 
-Clear these overrides before using the configured cloud model.
+This path is a direct MCP test surface. It checks tool discovery, routing instructions, schemas,
+and provider behavior inside a normal Codex conversation. It does not exercise the application's
+LangGraph memory, host-side deterministic matcher, per-turn budgets, or `/chat` contract. The
+FastAPI and LangGraph path remains the product and assignment implementation.
+
+## MCP tool surface
+
+| Tool | Purpose |
+|---|---|
+| `kalshi_search_markets` | Find Kalshi candidates by ordinary team or matchup text |
+| `kalshi_search_series` | Narrow discovery with an exact Kalshi sports series |
+| `kalshi_get_market` | Retrieve one returned Kalshi ticker |
+| `polymarket_search_markets` | Find Polymarket candidates by ordinary team or matchup text |
+| `polymarket_get_market` | Retrieve one returned numeric Gamma market ID |
+| `sports_state_find_games` | Resolve one game by query, league, local date, and IANA timezone |
+| `sports_state_get_game_state` | Read score, lifecycle, and sport-specific situation |
+| `sports_state_get_box_score` | Read a summary, full layout, or one box-score section |
+| `sports_state_list_players` | List players with provider-backed game-stat lines |
+| `sports_state_get_player_stats` | Read one returned player's game statistics |
+| `sports_state_get_play_by_play` | Read a chronological, paged window of plays |
+| `tavily_search_game_evidence` | Search current evidence for one established game identity |
+
+Market IDs, `game_ref`, player IDs, and play IDs are opaque. Consumers copy returned values
+unchanged. Sports discovery supports full-game winners; spreads, totals, props, partial-game
+winners, series, and futures require separate schemas and settlement rules.
 
 ## Verification
+
+The default test suite uses recorded HTTP fixtures and scripted model decisions while exercising
+real in-memory MCP sessions:
 
 ```powershell
 uv run pytest -m "not live_smoke"
@@ -265,124 +165,106 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
-The deterministic suite uses fixture HTTP and scripted model replies while exercising real
-MCP sessions and the agent. It does not require a currently open game.
-
-Bounded public checks:
+Bounded public-provider checks are opt-in:
 
 ```powershell
 $env:RUN_LIVE_SMOKE = "1"
-uv run pytest tests/live/test_game_state_mcp_live.py tests/live/test_sports_mcp_live.py tests/live/test_tavily_mcp_live.py tests/live/test_market_clients_live.py tests/live/test_kalshi_mcp_live.py tests/live/test_polymarket_mcp_live.py
+uv run pytest tests/live
 Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
-The sports live checks discover schemas, reject an invalid discovery limit, search all three
-supported leagues, retrieve exact state, box scores, player detail, and play windows when
-available, and make one bounded real Tavily MCP call. Empty current slates or evidence sets are
-valid. They do not fabricate an expected open game. See [Testing](docs/research/TESTING.md) for test boundaries
-and [Provider contracts](docs/research/MARKET_API_FEASIBILITY.md) for primary sources.
+The live checks accept empty slates and evidence sets. They validate schemas and bounded provider
+behavior without assuming that a specific game or market is open. Real-model checks are separate:
+set `RUN_LIVE_AGENT=1` and run `tests/live/test_chat_live.py` with a configured model backend.
 
-Real-model checks are separate: configure a backend, set `RUN_LIVE_AGENT=1`, and run
-`tests/live/test_chat_live.py`. Scripted-model tests establish schema consumption and control
-flow, not model selection quality.
-
-## Container and deployment
+## Container and Cloud Run
 
 ```powershell
 docker build -t market-agent:local .
 docker run --rm -p 8080:8080 --env-file .env market-agent:local
 ```
 
-The multi-stage image installs locked runtime dependencies and runs as UID 10001.
-It includes the four application MCP servers and requires no Node runtime. For Docker Desktop with
-the host test gateway, override `OPENAI_BASE_URL=http://host.docker.internal:8091/v1`
-and use a local placeholder API key.
+The multi-stage image installs locked runtime dependencies, runs as UID 10001, and includes all
+four Python MCP processes. It requires no Node runtime.
 
-Cloud Run is not deployed. Deployment remains an assignment deliverable:
-build the image, publish it to Artifact Registry, deploy with runtime environment variables,
-one worker and `--max-instances 1`, then verify the live `POST /chat` URL and memory.
-The [assignment](docs/assignment/Assignment_1_Description.md) supplies the deployment commands
-and required submission contract. Never deploy the local CLI gateway or copy local credentials
-into an image.
+Cloud Run deployment uses one worker and `--max-instances 1` so the assignment's in-process session
+memory remains coherent within the service instance. Deployment requires an Artifact Registry
+image and runtime environment variables. The local Codex gateway and local credentials never enter
+the image. The live Cloud Run URL is a remaining submission deliverable.
 
-Public market, ESPN, and MLB StatsAPI calls use no account credentials in this implementation.
-The game-state providers are free but supply no availability guarantee. LLM usage, Cloud Run,
-builds, image storage, and keyed Tavily searches can incur provider charges. The implemented
-basic search uses one Tavily credit; keyless availability and limits are provider-controlled.
-There is no continuous polling or background research. No latency or bandwidth improvement is
-claimed without measurement.
+Public market, ESPN, and MLB StatsAPI requests require no account credentials. Model inference,
+Cloud Run, Cloud Build, Artifact Registry storage, and keyed Tavily searches can incur provider
+charges. The service performs no continuous polling or background research.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     U[User] -->|query and session_id| F[FastAPI POST /chat]
-    F -->|response| U
-    F -->|invoke| G[LangGraph reasoning loop]
-    G -->|final message| F
-    G <--> L[Configured cloud LLM or local test gateway]
-    G <--> M[InMemorySaver by session_id]
-    G --> C[Deterministic contract check]
-    C -->|typed verdict or safe ambiguity| G
+    F --> G[LangGraph agent]
+    G <--> L[Configured LLM]
+    G <--> M[InMemorySaver]
+    G --> V[Host validation and deterministic matching]
     G --> A[MCP client adapter]
-    A <-->|stdio tools/list, tools/call, results| K[Kalshi MCP]
-    A <-->|separate stdio session and results| P[Polymarket MCP]
-    A <-->|separate stdio session and results| SS[Sports-state MCP]
-    A <-->|separate stdio session and typed evidence| TV[Tavily game research MCP]
-    K --> S[Exact sports identity and projections]
-    P --> S
-    SS --> S
-    K <-->|bounded GET and response| KA[Public Kalshi API]
-    P <-->|bounded GET and response| PA[Public Gamma API]
-    SS <-->|primary bounded GET| ESPN[ESPN public JSON]
-    SS -.->|MLB-only exact fallback| MLB[MLB StatsAPI]
-    TV <-->|one bounded search| TA[Tavily Search API]
+    A <--> K[Kalshi MCP]
+    A <--> P[Polymarket MCP]
+    A <--> S[Sports-state MCP]
+    A <--> T[Tavily MCP]
+    K --> KA[Kalshi API]
+    P --> PA[Polymarket Gamma API]
+    S --> ESPN[ESPN public JSON]
+    S -. MLB fallback .-> MLB[MLB StatsAPI]
+    T --> TA[Tavily Search API]
+    G --> F
+    F --> U
 ```
 
 ```mermaid
 flowchart LR
-    Q[Query and session context] --> R[LLM reasoning]
-    R --> T[Tool selection]
-    T --> C[MCP tools/call]
-    C --> S[Server validation and bounded provider requests]
-    S --> V[Structured result or controlled error]
-    V --> H[Host schema and sports identity validation]
-    H --> R
-    R -->|Answer ready or tool budget exhausted| O[LLM synthesis and response]
+    Q[Question and session context] --> R[Reason about required sources]
+    R --> D[Discover exact game and market candidates]
+    D --> I{One identity established?}
+    I -->|No| C[Return choices or clarification]
+    I -->|Yes| E[Run independent detail calls concurrently]
+    E --> H[Validate typed evidence and matching report]
+    H --> W[Optional bounded web research]
+    W --> O[Source-attributed answer]
+    H --> O
 ```
 
 ```mermaid
 flowchart LR
-    ENV[Ignored local .env / shell variables] --> LOCAL[Local Docker or Python]
-    IMG[Multi-stage Docker image with 4 stdio MCP processes] --> LOCAL
-    LOCAL --> DEV[Optional host test gateway]
-    IMG -. Planned .-> AR[Artifact Registry]
-    AR -. Planned .-> CR[Cloud Run: one instance]
-    DOTENV[Ignored local .env] -. source into shell .-> SEC[Shell variables]
-    SEC -. Planned --set-env-vars .-> CR
-    CR -. Planned .-> URL[Live URL: deployment required]
+    ENV[Runtime environment variables] --> APP[Containerized FastAPI service]
+    IMG[Non-root image with 4 MCP servers] --> APP
+    APP --> EXT[Public data providers and model API]
+    IMG -. publish target .-> AR[Artifact Registry]
+    AR -. deployment target .-> CR[Cloud Run, one instance]
+    CR -. exposes .-> URL[Public POST /chat URL]
+    DEV[Local Codex gateway] -. development only .-> APP
 ```
 
-The servers are student-authored using the official
-[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk).
-The Tavily projection uses the [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search)
-and adapts keyless access from the [official Tavily MCP server](https://github.com/tavily-ai/tavily-mcp).
-The application uses [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview),
-[FastAPI](https://fastapi.tiangolo.com/), and
-[langchain-mcp-adapters](https://github.com/langchain-ai/langchain-mcp-adapters).
+## Assignment context
 
-## Documentation map
+This repository implements CSCI 599 Assignment 1: a deployed tool-using agent with MCP integration
+and conversational memory. The product design extends the assignment's minimum contract with
+typed sports data, source provenance, deterministic market checks, and direct Codex testing.
 
-- [Sports MCP design and catalog maintenance](docs/research/SPORTS_MCP.md)
-- [Sports game-detail MCP design](docs/research/GAME_STATE_MCP.md)
-- [Bounded Tavily research MCP design](docs/research/WEB_RESEARCH_MCP.md)
+- [Assignment implementation and submission mapping](docs/assignment/IMPLEMENTATION_ALIGNMENT.md)
+- [Canonical assignment description](docs/assignment/Assignment_1_Description.md)
 - [Runtime architecture](docs/research/MCP_VERTICAL_SLICE.md)
-- [Provider contracts and field mapping](docs/research/MARKET_API_FEASIBILITY.md)
-- [Current matching and future sports comparison](docs/research/CONTRACT_MATCHING.md)
-- [Testing](docs/research/TESTING.md)
+- [Testing strategy](docs/research/TESTING.md)
 - [Product scope](docs/planning/PROJECT_PROPOSAL.md)
-- [Remaining implementation plan](docs/planning/IMPLEMENTATION_PLAN.md)
+- [Implementation milestones](docs/planning/IMPLEMENTATION_PLAN.md)
 
-`PROCESS_LOG.md` is Rylan Wade's personal reflection and remains a required submission
-artifact. `AI_TRANSCRIPT.md` is separate automatic development evidence, governed by
-`AGENTS.md`; it does not replace personal authorship.
+`PROCESS_LOG.md` is Rylan Wade's personal reflection. `AI_TRANSCRIPT.md` is separate development
+evidence governed by `AGENTS.md`; it does not replace personal authorship.
+
+## Technical references
+
+- [Sports market MCP design](docs/research/SPORTS_MCP.md)
+- [Sports-state MCP design](docs/research/GAME_STATE_MCP.md)
+- [Tavily research MCP design](docs/research/WEB_RESEARCH_MCP.md)
+- [Contract matching](docs/research/CONTRACT_MATCHING.md)
+- [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+- [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview)
+- [FastAPI](https://fastapi.tiangolo.com/)

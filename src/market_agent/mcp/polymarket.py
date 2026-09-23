@@ -39,7 +39,17 @@ def create_server(client: PolymarketClient | None = None) -> FastMCP[Any]:
                 yield
             active_client = None
 
-    server = FastMCP("Polymarket", lifespan=lifespan, log_level="CRITICAL")
+    server = FastMCP(
+        "Polymarket",
+        instructions=(
+            "Read-only Polymarket market discovery and detail. Search ordinary topics, teams, or "
+            "matchups first, then copy an exact returned numeric Gamma market ID into detail. "
+            "Never substitute a slug, event ID, or token ID. This server does not supply scores, "
+            "statistics, web research, trading, or account access."
+        ),
+        lifespan=lifespan,
+        log_level="CRITICAL",
+    )
     annotations = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True)
 
     @server.tool(annotations=annotations)

@@ -55,7 +55,7 @@ date for a September 22 evening game. The exact UTC start remains present in the
 
 ## Safety and budgets
 
-- The graph permits four market/state attempts plus at most two Tavily searches per turn.
+- The graph permits eight market/state attempts plus at most two Tavily searches per turn.
 - Research is rejected before MCP invocation unless league, the unordered participant pair, local
   game date, and scheduled start match a typed detail observation from the same turn.
 - One tool call makes one basic Tavily request for exactly five results. Official-only requests add

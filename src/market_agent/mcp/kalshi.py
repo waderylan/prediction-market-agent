@@ -62,7 +62,17 @@ def create_server(client: KalshiClient | None = None) -> FastMCP[Any]:
                 yield
             active_client = None
 
-    server = FastMCP("Kalshi", lifespan=lifespan, log_level="CRITICAL")
+    server = FastMCP(
+        "Kalshi",
+        instructions=(
+            "Read-only Kalshi market discovery and detail. Search ordinary topics, teams, or "
+            "matchups first, then copy an exact returned ticker into detail. Never construct a "
+            "ticker. Sports results group contracts by game. This server does not supply scores, "
+            "statistics, web research, trading, or account access."
+        ),
+        lifespan=lifespan,
+        log_level="CRITICAL",
+    )
     annotations = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True)
 
     @server.tool(annotations=annotations)

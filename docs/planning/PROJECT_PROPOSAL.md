@@ -20,7 +20,9 @@ alongside canonical participants, localized kickoff, game lifecycle, quote fresh
 discovery coverage. Exact local dates, ranges, next/recent selection, and continuation cursors keep
 common searches direct. A detail call supplies settlement rules and explicit resolution. The
 FastAPI/LangGraph application invokes all four servers through real MCP and retains session
-context.
+context. It routes narrow questions to the minimum useful source set and can build one sourced game
+brief from exact-game state, both market platforms, and bounded web evidence. Independent calls in
+one reasoning step run concurrently after required identifiers are established.
 
 The sports-state MCP separately finds a supported game by team, league, one local calendar day,
 and timezone, then reads current state, a box score, a compact player directory, or one player's
@@ -85,13 +87,18 @@ NCAA scope uses provider-backed Division I participants and preserves FBS/FCS cl
 School abbreviations, shared nicknames, and ambiguous competitions require clarification.
 The server never silently maps a school into another competition.
 
-## Future product work
+## Product workflow
 
-The next sports capability is a unified all-in-one information workflow. It will route each request
-to the minimum useful combination of the implemented market, game-state, statistics, play-history,
-deterministic comparison, and bounded research paths, then synthesize a source-attributed answer or
-game brief. It must preserve exact game identity, observation times, provider boundaries, and useful
-partial results when one source is unavailable.
+The unified all-in-one information workflow routes each request to the minimum useful combination
+of market, game-state, statistics, play-history, deterministic comparison, and bounded research
+paths. It synthesizes a source-attributed direct answer or game brief while preserving exact game
+identity, observation times, provider boundaries, and useful partial results when one source is
+unavailable.
+
+The FastAPI and LangGraph application is the primary product path. A repository Codex skill lets a
+developer test the same four configured MCPs directly in interactive or headless Codex. That path
+tests MCP behavior and routing instructions; it does not replace LangGraph memory, host-side
+validation and matching, per-turn budgets, or the required HTTP endpoint.
 
 Later optional work includes an explicitly requested saved research snapshot. It is not a current
 capability.
@@ -128,4 +135,4 @@ cannot enable a league, spread, total, prop, or future by itself.
 
 See [Sports market MCP design](../research/SPORTS_MCP.md),
 [game-state MCP design](../research/GAME_STATE_MCP.md), and
-[Remaining work](IMPLEMENTATION_PLAN.md) for future acceptance criteria.
+[implementation milestones](IMPLEMENTATION_PLAN.md) for acceptance criteria.

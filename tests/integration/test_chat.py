@@ -5,14 +5,14 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import Field
 
-from market_agent.agent import ChatAgent
+from market_agent.agent import MAX_DATA_TOOL_CALLS, ChatAgent
 from market_agent.app import create_app
 from market_agent.mcp.polymarket import create_server
 from market_agent.providers import PolymarketClient
@@ -141,6 +141,24 @@ def test_no_tool_memory_and_isolation(connections, caplog):
     assert not any(isinstance(m, ToolMessage) for turn in model.observed for m in turn)
 
 
+def test_system_prompt_declares_partial_source_availability(connections):
+    def answer(messages):
+        prompt = next(message.content for message in messages if isinstance(message, SystemMessage))
+        assert "available=polymarket" in prompt
+        assert "unavailable=kalshi, sports_state, tavily" in prompt
+        return AIMessage("Polymarket is available; the other requested sources are unavailable.")
+
+    model = ScriptedModel(replies=[answer])
+    with TestClient(create_app(ChatAgent(model, connections()))) as client:
+        response = client.post(
+            "/chat",
+            json={"query": "Which sources can answer this?", "session_id": "sources"},
+        )
+
+    assert response.status_code == 200
+    assert "Polymarket is available" in response.json()["response"]
+
+
 def test_http_selects_allowlisted_model_and_effort(connections):
     model = ScriptedModel(replies=[AIMessage("Selected")])
     body = {
@@ -194,7 +212,7 @@ def test_inspection_endpoint_distinguishes_no_tool_and_failure(connections):
         )
     activity = response.json()["activity"]
     assert activity[0]["status"] == "error"
-    assert activity[0]["summary"] == "The market tool failed or returned invalid data."
+    assert activity[0]["summary"] == "The polymarket tool failed or returned invalid data."
     assert "sensitive diagnostic" not in response.text
 
 
@@ -246,7 +264,7 @@ def test_invalid_http(connections, body):
 async def test_tool_budget_and_reset(connections):
     model = ScriptedModel(
         replies=[
-            *[tool_call(call_id=str(i)) for i in range(4)],
+            *[tool_call(call_id=str(i)) for i in range(MAX_DATA_TOOL_CALLS)],
             AIMessage("Limit reached"),
             tool_call(),
             AIMessage("Next turn"),
@@ -255,7 +273,10 @@ async def test_tool_budget_and_reset(connections):
     agent = ChatAgent(model, connections())
     assert await agent.chat("Research", "a") == "Limit reached"
     assert await agent.chat("Refresh", "a") == "Next turn"
-    assert len([m for m in model.observed[4] if isinstance(m, ToolMessage)]) == 4
+    assert (
+        len([m for m in model.observed[MAX_DATA_TOOL_CALLS] if isinstance(m, ToolMessage)])
+        == MAX_DATA_TOOL_CALLS
+    )
 
 
 async def test_model_failure_and_session_recovery(connections):

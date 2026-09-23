@@ -29,8 +29,8 @@
 | 9A. Multi-sport exact-game box scores | Complete locally |
 | 9B. Exact-game player and play history tools | Complete locally |
 | 9C. Agent-readable presentation and evidence semantics | Complete locally |
-| 10. Unified multi-MCP sports information assistant | Planned |
-| 11. Unified sports intelligence brief | Absorbed into Milestone 10 |
+| 10. Unified multi-MCP sports information assistant | Complete locally |
+| 11. Unified sports intelligence brief | Integrated into Milestone 10 |
 | 12. Optional sports-research snapshot ledger | Optional |
 | 13. Failure handling and verification | In progress across implemented layers |
 | 14. Cloud Run and submission | Required |
@@ -1236,6 +1236,10 @@ only because it has already been implemented.
   market trading state, contract equivalence, and market settlement separate.
 - Prefer a direct answer tailored to the question over a mandatory report template. Produce a
   fuller game brief only when the user asks broadly or when several sources are materially useful.
+- Keep the FastAPI and LangGraph application as the primary product and assignment implementation.
+  A repository Codex skill provides a secondary direct-MCP test surface for interactive and
+  headless checks. Direct Codex sessions do not claim LangGraph memory, host-side matching, tool
+  budgets, or HTTP endpoint coverage.
 
 #### Work
 
@@ -1301,6 +1305,22 @@ only because it has already been implemented.
   unhandled error or unsupported substitution.
 - The agent handles arbitrary reasonable in-scope queries rather than memorized examples.
 - Responses never present an agent-generated betting pick or independent win probability.
+- A fresh headless Codex session discovers the repository skill and exercises a configured MCP
+  using the same identity-first routing rules, with the direct-MCP limitations stated explicitly.
+
+#### Current State
+
+- **Status:** Complete locally.
+- The LangGraph prompt routes narrow questions to the minimum source set and broad game briefs to
+  sports state, both market platforms, and bounded research when those sources add evidence.
+- Each turn supports eight market/state calls and two research searches. Independent calls in one
+  reasoning step execute concurrently; identifier-dependent calls remain ordered across steps.
+- The host identifies available and unavailable MCP sources per request, preserves partial
+  answers, validates typed results, and produces deterministic contract and game matching reports.
+- Real-MCP integration coverage exercises all four servers in one sourced brief and verifies the
+  exact call sequence, research gate, matching report, provenance notices, and call budgets.
+- `.agents/skills/sports-information/SKILL.md` supplies the direct Codex workflow without
+  representing it as a substitute for the application path.
 
 #### Pivot Point
 
@@ -1312,10 +1332,11 @@ only because it has already been implemented.
   event identity, or failure behavior.
 - Never collapse the independent MCP servers into one provider facade merely to simplify routing.
 
-### Milestone 11: Unified Sports Intelligence Brief — Absorbed into Milestone 10
+### Milestone 11: Integrated into Milestone 10
 
-- The previously tentative unified-brief concept is now the committed Milestone 10 product scope.
-- Do not create a separate implementation milestone or duplicate workflow for this capability.
+- Milestone 10 contains the unified game brief as one response mode within the broader
+  question-routing workflow.
+- No separate implementation milestone or duplicate workflow is required for this capability.
 
 ### Milestone 12: Optional SQLite Sports-Research Snapshot Ledger
 

@@ -33,6 +33,7 @@ No test requires a particular game to be open.
 | MCP integration tests | Discovery/detail, input/output schema validation, oversized data, lifecycle and partial server availability |
 | `unit/test_matching.py` | Generic and sports-aware deterministic matching, typed market/game identity, dangerous near-matches, conservative ambiguity |
 | `integration/test_chat.py`, `integration/test_stdio.py` | Graph control flow, memory, real adapter/subprocess invocation, dependency failure |
+| Headless Codex with `.agents/skills/sports-information` | Repository skill discovery and direct routing to the user's configured MCP servers |
 
 The sports suite specifically verifies:
 
@@ -157,6 +158,16 @@ and reduced matching to the proven deterministic subset.
 
 Real-model checks use `RUN_LIVE_AGENT=1` and a configured backend with
 `tests/live/test_chat_live.py`. They can incur model costs and are separate from provider checks.
+
+Direct Codex checks run from the repository with a fresh session:
+
+```powershell
+codex exec '$sports-information Find today''s MLB games in UTC. Use sports state only.'
+```
+
+This check establishes repository skill discovery and direct MCP behavior. It does not execute the
+LangGraph graph, application checkpointer, host-side deterministic matcher, per-turn budgets, or
+FastAPI endpoint. Those remain covered by application tests and deployment acceptance.
 
 Cloud Run acceptance remains required: verify the deployed URL, arbitrary reasonable queries,
 session recall, all four MCP servers, and controlled failure cases. Local tests do not establish

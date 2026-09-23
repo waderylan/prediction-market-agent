@@ -12,6 +12,7 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp.shared.memory import create_connected_server_and_client_session
 from test_chat import ScriptedModel, tool_call
 from test_sports_mcp import connection as market_connection
+from test_sports_mcp import tavily_connection
 
 from market_agent.agent import ChatAgent
 from market_agent.mcp.sports_state import create_server
@@ -730,3 +731,114 @@ async def test_agent_verifies_market_and_game_identity_before_combining():
     assert report[0]["observed_at"]
     assert report[0]["use_together"] is True
     assert "does not establish contract equivalence" in report[0]["scope"]
+
+
+async def test_agent_builds_one_brief_from_all_four_mcp_sources():
+    @asynccontextmanager
+    async def connect():
+        async with AsyncExitStack() as stack:
+            polymarket, _ = await stack.enter_async_context(market_connection("polymarket"))
+            kalshi, _ = await stack.enter_async_context(market_connection("kalshi"))
+            state, _ = await stack.enter_async_context(protocol(league="mlb"))
+            research, research_calls = await stack.enter_async_context(tavily_connection())
+            connect.research_calls = research_calls
+            yield [
+                *(await load_mcp_tools(polymarket)),
+                *(await load_mcp_tools(kalshi)),
+                *(await load_mcp_tools(state)),
+                *(await load_mcp_tools(research)),
+            ]
+
+    connect.research_calls = []
+    find_args = {
+        "query": "Yankees vs Padres",
+        "league": "mlb",
+        "timezone": "UTC",
+        "local_date": "2026-09-20",
+    }
+    async with protocol(league="mlb") as (session, _):
+        found = await session.call_tool("sports_state_find_games", find_args)
+        game_ref = found.structuredContent["games"][0]["game_ref"]
+
+    model = ScriptedModel(
+        replies=[
+            AIMessage(
+                "",
+                tool_calls=[
+                    {
+                        "name": "sports_state_find_games",
+                        "args": find_args,
+                        "id": "state-search",
+                    },
+                    {
+                        "name": "polymarket_search_markets",
+                        "args": {"query": "Yankees vs Padres"},
+                        "id": "polymarket-search",
+                    },
+                    {
+                        "name": "kalshi_search_markets",
+                        "args": {"query": "Yankees vs Padres"},
+                        "id": "kalshi-search",
+                    },
+                ],
+            ),
+            AIMessage(
+                "",
+                tool_calls=[
+                    {
+                        "name": "sports_state_get_game_state",
+                        "args": {"game_ref": game_ref},
+                        "id": "state-detail",
+                    },
+                    {
+                        "name": "polymarket_get_market",
+                        "args": {"market_id": "201"},
+                        "id": "polymarket-detail",
+                    },
+                    {
+                        "name": "kalshi_get_market",
+                        "args": {"market_id": "KXMLBGAME-OPAQUE-0"},
+                        "id": "kalshi-detail",
+                    },
+                ],
+            ),
+            tool_call(
+                "tavily_search_game_evidence",
+                {
+                    "league": "mlb",
+                    "team_a": "New York Yankees",
+                    "team_b": "San Diego Padres",
+                    "game_date": "2026-09-20",
+                    "scheduled_start": "2026-09-20T00:10:00Z",
+                    "focus": "injuries",
+                },
+                "research",
+            ),
+            AIMessage(
+                "Yankees lead 3-2 in the sixth. Both market snapshots and one injury source "
+                "are attached. No independent pick is offered."
+            ),
+        ]
+    )
+
+    turn = await ChatAgent(model, connect).chat_detailed(
+        "Give me a complete Yankees vs Padres game brief", "unified-brief"
+    )
+
+    assert [activity.server for activity in turn.activity] == [
+        "sports_state",
+        "polymarket",
+        "kalshi",
+        "sports_state",
+        "polymarket",
+        "kalshi",
+        "tavily",
+    ]
+    assert all(activity.status == "success" for activity in turn.activity)
+    assert len(connect.research_calls) == 1
+    assert "Tavily research: 1 bounded search" in turn.response
+    assert "does not establish prediction-market settlement" in turn.response
+    assert "https://sports.example/yankees-padres" in turn.response
+    final_tools = [item for item in model.observed[-1] if isinstance(item, ToolMessage)]
+    assert len(final_tools) == 7
+    assert any("matching_report" in item.content for item in final_tools)

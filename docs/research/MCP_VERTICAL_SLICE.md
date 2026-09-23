@@ -31,10 +31,12 @@ does not install a second FastMCP framework or emulate JSON-RPC in application c
 
 ## Tool execution and validation
 
-The model chooses tools semantically. The graph permits four market/state attempts plus two Tavily
-searches, then performs a final synthesis without bound tools. Separate per-turn counters prevent
-repeated model requests from bypassing either budget. Tool arguments are validated by the MCP
-schema, and structured results are validated again by the host before model use.
+The model chooses tools semantically. The graph permits eight market/state attempts plus two Tavily
+searches, then performs a final synthesis without bound tools. Independent calls from one model
+message execute concurrently; detail and research calls that depend on discovered identifiers run
+in later reasoning steps. Separate per-turn counters prevent repeated model requests from bypassing
+either budget. Tool arguments are validated by the MCP schema, and structured results are validated
+again by the host before model use.
 
 The host checks provider identity and requested detail IDs. Each tool result has bounded
 models with decimal strings and explicit nulls. Detail rules are limited to 12,000 characters
@@ -127,6 +129,12 @@ real-market value; the primary model may explain but cannot upgrade an ambiguous
 The local UI starts the HTTP application and an optional host Codex gateway. The gateway
 only supplies model decisions. The application still owns memory and MCP calls.
 CLI authentication remains outside the container.
+
+The repository sports-information skill provides a second local test surface for Codex clients
+that already have the four MCP servers configured. Interactive and headless Codex sessions can
+exercise tool discovery, routing, schemas, and provider behavior directly. This path does not run
+the LangGraph graph, checkpointer, host matcher, call budgets, or FastAPI contract and is not the
+deployed product.
 
 The Docker image uses locked runtime dependencies, contains the four application MCP modules and
 their reference data, runs as a non-root user, and reads `PORT`.

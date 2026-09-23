@@ -34,6 +34,8 @@ def test_readme_documents_verified_game_state_surface_and_three_diagrams():
     assert "tavily_search_game_evidence" in readme
     assert "Tavily research MCP design" in readme
     assert "both Python MCP servers" not in readme
+    assert "sports-information skill" in readme
+    assert "FastAPI and LangGraph path remains the product" in readme
 
 
 def test_project_documents_match_current_capability_and_future_boundaries():
@@ -55,9 +57,11 @@ def test_project_documents_match_current_capability_and_future_boundaries():
     assert "| 8. Jev sports-contract equivalence | Removed by Milestone 8A |" in plan
     assert "| 9. Bounded sports evidence research | Complete locally |" in plan
     assert "| 9A. Multi-sport exact-game box scores | Complete locally |" in plan
-    assert "| 10. Unified multi-MCP sports information assistant | Planned |" in plan
+    assert "| 10. Unified multi-MCP sports information assistant | Complete locally |" in plan
     assert "Complete Sports Agent Workflow and Forecast Output" not in plan
     assert "unified all-in-one information workflow" in proposal
+    assert ".agents/skills/sports-information/SKILL.md" in plan
+    assert "eight market/state attempts" in runtime
     assert "four separate Python stdio processes" in runtime
     assert "Milestone 8A" in runtime
     assert "live/test_game_state_mcp_live.py" in testing
