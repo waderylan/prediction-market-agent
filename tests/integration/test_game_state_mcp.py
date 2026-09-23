@@ -86,7 +86,48 @@ def _event():
 
 def _summary():
     event = _event()
-    return {"header": {"id": event["id"], "competitions": event["competitions"]}}
+    competition = event["competitions"][0]
+    for competitor in competition["competitors"]:
+        competitor["linescores"] = [
+            {"displayValue": value}
+            for value in ([7, 3, 7] if competitor["homeAway"] == "away" else [0, 3, 7])
+        ]
+    return {
+        "header": {"id": event["id"], "competitions": event["competitions"]},
+        "boxscore": {
+            "teams": [
+                {
+                    "team": competitor["team"],
+                    "statistics": [
+                        {"name": "totalYards", "label": "Total Yards", "displayValue": "325"}
+                    ],
+                }
+                for competitor in competition["competitors"]
+            ],
+            "players": [
+                {
+                    "team": competitor["team"],
+                    "statistics": [
+                        {
+                            "name": "passing",
+                            "keys": ["passingYards"],
+                            "labels": ["YDS"],
+                            "athletes": [
+                                {
+                                    "athlete": {
+                                        "id": f"qb-{competitor['team']['id']}",
+                                        "displayName": "Test Quarterback",
+                                    },
+                                    "stats": ["250"],
+                                }
+                            ],
+                        }
+                    ],
+                }
+                for competitor in competition["competitors"]
+            ],
+        },
+    }
 
 
 def _mlb_event():
@@ -150,7 +191,11 @@ async def protocol(mode="success", league="nfl"):
 async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
     async with protocol() as (session, calls):
         tools = {tool.name: tool for tool in (await session.list_tools()).tools}
-        assert set(tools) == {"sports_state_find_games", "sports_state_get_game_state"}
+        assert set(tools) == {
+            "sports_state_find_games",
+            "sports_state_get_game_state",
+            "sports_state_get_box_score",
+        }
         find_schema = tools["sports_state_find_games"].inputSchema
         assert find_schema["additionalProperties"] is False
         assert set(find_schema["required"]) == {"query", "league", "timezone"}
@@ -161,6 +206,9 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         detail_schema = tools["sports_state_get_game_state"].inputSchema
         assert detail_schema["additionalProperties"] is False
         assert detail_schema["required"] == ["game_ref"]
+        box_schema = tools["sports_state_get_box_score"].inputSchema
+        assert box_schema["additionalProperties"] is False
+        assert box_schema["required"] == ["game_ref"]
 
         bad = await session.call_tool(
             "sports_state_find_games",
@@ -232,6 +280,19 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         )
         assert sum(request.url.path.endswith("/summary") for request in calls) == 1
 
+        box = await session.call_tool("sports_state_get_box_score", {"game_ref": game["game_ref"]})
+        assert not box.isError
+        validate(box.structuredContent, tools["sports_state_get_box_score"].outputSchema)
+        assert box.structuredContent["sport"] == "football"
+        assert box.structuredContent["line_score"]["periods"][0] == {
+            "period": 1,
+            "away_points": 7,
+            "home_points": 0,
+        }
+        assert box.structuredContent["player_stats"]["away"][0]["category"] == "passing"
+        assert box.structuredContent["is_partial"] is True
+        assert sum(request.url.path.endswith("/summary") for request in calls) == 2
+
 
 async def test_invalid_reference_is_stable_error_before_provider_io():
     async with protocol() as (session, calls):
@@ -283,7 +344,7 @@ async def test_identity_conflict_is_controlled_and_session_survives():
         ref = found.structuredContent["games"][0]["game_ref"]
         detail = await session.call_tool("sports_state_get_game_state", {"game_ref": ref})
         assert detail.isError and "response_identity_mismatch" in str(detail)
-        assert len((await session.list_tools()).tools) == 2
+        assert len((await session.list_tools()).tools) == 3
 
 
 async def test_agent_selects_game_state_tools_and_enforces_result_notice():
@@ -326,6 +387,48 @@ async def test_agent_selects_game_state_tools_and_enforces_result_notice():
     messages = [message for message in model.observed[-1] if isinstance(message, ToolMessage)]
     assert len(messages) == 2 and all(message.status == "success" for message in messages)
     assert json.loads(messages[-1].content)["game_state"]["source"] == "espn"
+
+
+async def test_agent_selects_box_score_and_records_typed_result():
+    @asynccontextmanager
+    async def connect():
+        async with protocol() as (session, _):
+            yield await load_mcp_tools(session)
+
+    async with protocol() as (session, _):
+        found = await session.call_tool(
+            "sports_state_find_games",
+            {
+                "query": "Falcons",
+                "league": "nfl",
+                "timezone": "UTC",
+                "local_date": "2026-09-20",
+            },
+        )
+        game_ref = found.structuredContent["games"][0]["game_ref"]
+    model = ScriptedModel(
+        replies=[
+            tool_call(
+                "sports_state_find_games",
+                {
+                    "query": "Falcons",
+                    "league": "nfl",
+                    "timezone": "UTC",
+                    "local_date": "2026-09-20",
+                },
+                "box-search",
+            ),
+            tool_call("sports_state_get_box_score", {"game_ref": game_ref}, "box-detail"),
+            AIMessage("The teams have 325 total yards each."),
+        ]
+    )
+    response = await ChatAgent(model, connect).chat("Get the box score", "box-score")
+    assert response.startswith("- Box score: espn observed at ")
+    assert response.endswith("The teams have 325 total yards each.")
+    messages = [message for message in model.observed[-1] if isinstance(message, ToolMessage)]
+    result = json.loads(messages[-1].content)
+    assert result["box_score"]["sport"] == "football"
+    assert result["box_score"]["game_ref"] == game_ref
 
 
 async def test_irrelevant_question_uses_no_game_state_tool():

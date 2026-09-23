@@ -33,7 +33,7 @@ from market_agent.domain.matching import (
 from market_agent.logging import log_event
 from market_agent.mcp.common import MarketDetail, SearchResults
 from market_agent.mcp.kalshi import KalshiSearchResults, SeriesResults
-from market_agent.providers.game_state import FindGamesResult, GameState
+from market_agent.providers.game_state import BoxScore, FindGamesResult, GameState
 from market_agent.providers.research import GameResearchResult
 
 logger = logging.getLogger(__name__)
@@ -66,12 +66,17 @@ selection_required is true, present discovery.matching_events labels and event I
 choosing silently. Treat discovery warnings as skipped unsafe records, not proof that valid returned
 games are unusable. Tool errors with JSON error.code and fields identify arguments to correct; do
 not retry the same invalid arguments or switch providers.
-Use sports_state tools only for a requested current/recent game score, lifecycle, or in-game
-situation, or when that state is necessary for an explicitly requested analysis. First call
-sports_state_find_games with an explicit league and IANA timezone, then copy one returned game_ref
-unchanged into sports_state_get_game_state. Never construct a game_ref or pass an ESPN event ID or
-MLB gamePk. If discovery returns multiple games, present the choices instead of selecting silently.
-Discovery is a lightweight game picker; always use detail for current score and situation fields.
+Use sports_state tools only for a requested current/recent game score, lifecycle, in-game
+situation, box score, team totals, or player game statistics, or when that state is necessary for
+an explicitly requested analysis. First call sports_state_find_games with an explicit league and
+IANA timezone, then copy one returned game_ref unchanged into the requested detail tool. Use
+sports_state_get_game_state for what is happening now: score, inning/count/runners/batter/pitcher,
+or football possession/down/distance/field position. Use sports_state_get_box_score for
+inning-or-period scoring, team statistics, and player batting/pitching or football stat lines.
+Never construct a game_ref or pass an ESPN event ID, MLB gamePk, team, or date to a detail tool.
+Do not use Tavily for structured box-score statistics. If discovery returns multiple games,
+present the choices instead of selecting silently. Discovery is a lightweight game picker; always
+use the appropriate detail tool for authoritative current state or box-score fields.
 When discovery requests clarification, show its exact retry guidance and choices. References are
 timezone-scoped, so reuse the reference from the chosen discovery response without comparing token
 text across timezone searches. For a same-day league slate, use query="all"; it is bounded to ten
@@ -83,8 +88,11 @@ observation. Market tools remain authoritative for contract identity, prices, ru
 settlement. The host supplies typed market-to-game checks inside matching_report when market and
 game observations coexist; never combine mismatched or insufficient identities. Sports-state data
 is optional corroboration and is not required for market-to-market matching. A final score never
-proves market settlement or contract equivalence. Name the game-state source and retrieved_at
-observation time, and disclose missing, stale, fallback, or conflicting state.
+proves market settlement or contract equivalence. Name the sports-state source and retrieved_at
+observation time, and disclose missing, partial, stale, fallback, or conflicting data. Box-score
+fields are game-only; never substitute season statistics. Provider-omitted optional box-score
+fields are absent and completeness metadata names partial sections. Play-by-play is outside the
+box-score tool.
 Use tavily_search_game_evidence only for an explicitly requested game analysis after one exact
 sports event is established by market detail or game-state detail. Copy league, both canonical team
 names, game_date, and scheduled_start from that typed result without guessing. Choose a narrow
@@ -150,6 +158,7 @@ class AgentState(MessagesState):
     research_searches: int
     details: list[dict[str, Any]]
     game_states: list[dict[str, Any]]
+    box_scores: list[dict[str, Any]]
     research_results: list[dict[str, Any]]
     matching_report: dict[str, Any] | None
     activity: list[dict[str, Any]]
@@ -207,7 +216,13 @@ def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | Non
 
 
 ToolResult = (
-    SearchResults | MarketDetail | SeriesResults | FindGamesResult | GameState | GameResearchResult
+    SearchResults
+    | MarketDetail
+    | SeriesResults
+    | FindGamesResult
+    | GameState
+    | BoxScore
+    | GameResearchResult
 )
 
 
@@ -228,6 +243,12 @@ def _tool_summary(validated: ToolResult) -> str:
             f"Observed {validated.away_team} at {validated.home_team}: "
             f"{validated.away_score}-{validated.home_score}, {validated.lifecycle}; "
             f"source {validated.source}."
+        )
+    if isinstance(validated, BoxScore):
+        return (
+            f"Retrieved {validated.sport} box score for {validated.away_team.name} at "
+            f"{validated.home_team.name}; source {validated.source}; "
+            f"partial={str(validated.is_partial).lower()}."
         )
     if isinstance(validated, SeriesResults):
         return f"Found {len(validated.series)} candidate series."
@@ -271,7 +292,10 @@ def _validate_tool_result(
 ) -> ToolResult:
     artifact = result.artifact
     structured_content = artifact.get("structured_content") if isinstance(artifact, dict) else None
-    validated = _tool_result_schema(tool_name).model_validate(structured_content)
+    if tool_name == "sports_state_get_box_score" and isinstance(structured_content, dict):
+        validated: ToolResult = BoxScore.model_validate(structured_content)
+    else:
+        validated = _tool_result_schema(tool_name).model_validate(structured_content)
 
     if isinstance(validated, GameResearchResult):
         if (
@@ -297,6 +321,13 @@ def _validate_tool_result(
         if validated.situation.sport != expected_sport:
             raise ValueError("Game situation league mismatch")
         return validated
+    if isinstance(validated, BoxScore):
+        if validated.game_ref != arguments.get("game_ref"):
+            raise ValueError("Box-score game reference mismatch")
+        expected_sport = "baseball" if validated.league == "mlb" else "football"
+        if validated.sport != expected_sport:
+            raise ValueError("Box-score league mismatch")
+        return validated
 
     markets = []
     if isinstance(validated, SearchResults):
@@ -320,12 +351,27 @@ def _record_game_state(game_states: list[dict[str, Any]], state: GameState) -> l
     return [*retained, snapshot]
 
 
-def _game_state_notice(states: list[dict[str, Any]]) -> str | None:
-    if not states:
+def _record_box_score(box_scores: list[dict[str, Any]], score: BoxScore) -> list[dict[str, Any]]:
+    snapshot = score.model_dump(mode="json")
+    retained = [saved for saved in box_scores if saved["game_ref"] != score.game_ref]
+    return [*retained, snapshot]
+
+
+def _sports_state_notice(
+    states: list[dict[str, Any]], box_scores: list[dict[str, Any]]
+) -> str | None:
+    if not states and not box_scores:
         return None
-    latest = GameState.model_validate(states[-1])
+    observations: list[GameState | BoxScore] = [
+        *(GameState.model_validate(state) for state in states),
+        *(BoxScore.model_validate(score) for score in box_scores),
+    ]
+    latest = max(observations, key=lambda observation: observation.retrieved_at)
+    label = (
+        "Game state" if states and not box_scores else "Box score" if box_scores else "Sports data"
+    )
     return (
-        f"- Game state: {latest.source} observed at {latest.retrieved_at.isoformat()}. "
+        f"- {label}: {latest.source} observed at {latest.retrieved_at.isoformat()}. "
         "This sporting result does not establish prediction-market settlement or "
         "contract equivalence."
     )
@@ -348,6 +394,7 @@ def _research_context_matches(
     arguments: dict[str, Any],
     details: list[dict[str, Any]],
     game_states: list[dict[str, Any]],
+    box_scores: list[dict[str, Any]],
 ) -> bool:
     """Require research arguments to match a typed detail observation in this turn."""
 
@@ -387,6 +434,16 @@ def _research_context_matches(
             and {state.home_team.casefold(), state.away_team.casefold()} == requested_teams
             and state.local_date == requested_date
             and abs((state.scheduled_start - requested_start).total_seconds()) <= 60
+        ):
+            return True
+    for saved in box_scores:
+        score = BoxScore.model_validate(saved)
+        if (
+            score.league == requested_league
+            and {score.home_team.name.casefold(), score.away_team.name.casefold()}
+            == requested_teams
+            and score.local_date == requested_date
+            and abs((score.scheduled_start - requested_start).total_seconds()) <= 60
         ):
             return True
     return False
@@ -430,11 +487,28 @@ def _research_notice(results: list[dict[str, Any]]) -> str | None:
 
 
 def _matching_report(
-    details: list[dict[str, Any]], game_states: list[dict[str, Any]]
+    details: list[dict[str, Any]],
+    game_states: list[dict[str, Any]],
+    box_scores: list[dict[str, Any]],
 ) -> MatchingReport | None:
     # The per-turn tool budget bounds this list to four snapshots.
     contracts = [ContractEvidence.model_validate(saved) for saved in details]
-    games = [GameEvidence.model_validate(saved) for saved in game_states]
+    games_by_ref: dict[str, GameEvidence] = {}
+    for saved in game_states:
+        games_by_ref[saved["game_ref"]] = GameEvidence.model_validate(saved)
+    for saved in box_scores:
+        score = BoxScore.model_validate(saved)
+        games_by_ref[score.game_ref] = GameEvidence(
+            league=score.league,
+            game_ref=score.game_ref,
+            source=score.source,
+            provider_game_id=score.provider_game_id,
+            home_team=score.home_team.name,
+            away_team=score.away_team.name,
+            scheduled_start=score.scheduled_start,
+            retrieved_at=score.retrieved_at,
+            lifecycle=score.lifecycle,
+        )
     report = match_candidates(
         [market for market in contracts if market.platform == Platform.POLYMARKET],
         [market for market in contracts if market.platform == Platform.KALSHI],
@@ -443,7 +517,7 @@ def _matching_report(
             for saved in details
             if saved["rules_truncated"]
         },
-        games=games,
+        games=list(games_by_ref.values()),
     )
     return report if report.pairs or report.market_to_game else None
 
@@ -518,6 +592,7 @@ class ChatAgent:
             research_searches = state["research_searches"]
             details = list(state["details"])
             game_states = list(state["game_states"])
+            box_scores = list(state["box_scores"])
             research_results = list(state["research_results"])
             matching_report = state["matching_report"]
             activity = list(state["activity"])
@@ -543,7 +618,9 @@ class ChatAgent:
                             activity_status = "skipped"
                             content = "Research search budget reached. Use available sources."
                             summary = "Research search budget reached before this call could run."
-                        elif not _research_context_matches(call["args"], details, game_states):
+                        elif not _research_context_matches(
+                            call["args"], details, game_states, box_scores
+                        ):
                             allowed = False
                             activity_status = "skipped"
                             content = (
@@ -576,7 +653,7 @@ class ChatAgent:
                                 summary = _tool_summary(validated)
                                 if isinstance(validated, MarketDetail):
                                     details = _record_market_detail(details, validated)
-                                    report = _matching_report(details, game_states)
+                                    report = _matching_report(details, game_states, box_scores)
                                     additions: dict[str, Any] = {
                                         "market": validated.model_dump(mode="json")
                                     }
@@ -597,12 +674,26 @@ class ChatAgent:
                                         content = json.dumps(additions)
                                 elif isinstance(validated, GameState):
                                     game_states = _record_game_state(game_states, validated)
-                                    report = _matching_report(details, game_states)
+                                    report = _matching_report(details, game_states, box_scores)
                                     additions = {
                                         "game_state": validated.model_dump(mode="json"),
                                         "market_settlement_notice": (
                                             "Sporting state does not establish market settlement "
                                             "or contract equivalence."
+                                        ),
+                                    }
+                                    if report is not None:
+                                        matching_report = report.model_dump(mode="json")
+                                        additions["matching_report"] = matching_report
+                                    content = json.dumps(additions)
+                                elif isinstance(validated, BoxScore):
+                                    box_scores = _record_box_score(box_scores, validated)
+                                    report = _matching_report(details, game_states, box_scores)
+                                    additions = {
+                                        "box_score": validated.model_dump(mode="json"),
+                                        "market_settlement_notice": (
+                                            "Sporting statistics do not establish market "
+                                            "settlement or contract equivalence."
                                         ),
                                     }
                                     if report is not None:
@@ -658,6 +749,7 @@ class ChatAgent:
                 "research_searches": research_searches,
                 "details": details,
                 "game_states": game_states,
+                "box_scores": box_scores,
                 "research_results": research_results,
                 "matching_report": matching_report,
                 "activity": activity,
@@ -732,6 +824,7 @@ class ChatAgent:
                             "research_searches": 0,
                             "details": [],
                             "game_states": [],
+                            "box_scores": [],
                             "research_results": [],
                             "matching_report": None,
                             "activity": [],
@@ -744,8 +837,10 @@ class ChatAgent:
                             MatchingReport.model_validate(result["matching_report"])
                         )
                         answer = notice + "\n\n" + answer
-                    if game_notice := _game_state_notice(result.get("game_states", [])):
-                        answer = game_notice + "\n\n" + answer
+                    if sports_notice := _sports_state_notice(
+                        result.get("game_states", []), result.get("box_scores", [])
+                    ):
+                        answer = sports_notice + "\n\n" + answer
                     if research_notice := _research_notice(result.get("research_results", [])):
                         answer = research_notice + "\n\n" + answer
                     return ChatTurn(response=answer, activity=result["activity"])

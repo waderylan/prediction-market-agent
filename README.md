@@ -2,9 +2,9 @@
 
 A read-only CSCI 599 course project for sports prediction-market research on Kalshi and
 Polymarket. Initial support covers MLB, NFL, and NCAA Division I football game winners.
-Four application MCP servers provide market discovery on each platform, current game state from
-ESPN with an exact-identity MLB StatsAPI fallback, and bounded Tavily research for one identified
-game. None place orders or access accounts.
+Four application MCP servers provide market discovery on each platform, current game state and
+box scores from ESPN with an exact-identity MLB StatsAPI fallback, and bounded Tavily research for
+one identified game. None place orders or access accounts.
 
 Start with `kalshi_search_markets(query="Yankees")` or
 `polymarket_search_markets(query="Chiefs vs Bills")`. No exchange taxonomy or constructed
@@ -13,12 +13,14 @@ Shared cities and ambiguous abbreviations produce clarification choices.
 For a current score, start with
 `sports_state_find_games(query="Yankees", league="mlb", timezone="America/Los_Angeles")`,
 then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
+Use the same reference with `sports_state_get_box_score` for inning or period scoring, team totals,
+and player game statistics. Structured sports statistics never require Tavily.
 
 ## What is implemented
 
 | Capability | Current behavior |
 |---|---|
-| Four independent MCP servers | Kalshi, Polymarket, sports game state, and bounded Tavily research; real stdio discovery and calls |
+| Four independent MCP servers | Kalshi, Polymarket, sports state/box scores, and bounded Tavily research; real stdio discovery and calls |
 | Sports discovery | MLB, NFL, NCAA Division I FBS/FCS; full-game winners only |
 | Team identity | Exact aliases from a reviewed provider catalog; same-city teams stay distinct |
 | Candidate selection | Results group both outcome contracts by game; separate event IDs preserve doubleheaders |
@@ -27,6 +29,7 @@ then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
 | Coverage | Actual pages/events/contracts scanned, partial-result warnings, truncation, continuation evidence, and scoped totals |
 | Contract detail | Rules, game/close/resolution clocks, consumer links, and explicit settlement results |
 | Current game state | ESPN scores/lifecycle/situations; MLB StatsAPI fallback after exact identity matching |
+| Exact-game box scores | MLB inning/team/batting/pitching lines and NFL/NCAA period/team/player statistics from the discovery `game_ref` |
 | Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
 | Current web evidence | At most two game-scoped Tavily searches; five inspected results each; exact participant/date filtering and source provenance |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
@@ -49,7 +52,7 @@ checks, and tests; they are not enabled by adding team aliases. See the
 [implementation plan](docs/planning/IMPLEMENTATION_PLAN.md) for acceptance criteria.
 
 Read [Sports market MCP design](docs/research/SPORTS_MCP.md) for market discovery,
-[Game-state MCP design](docs/research/GAME_STATE_MCP.md) for live-state contracts, and
+[Sports-state MCP design](docs/research/GAME_STATE_MCP.md) for live-state and box-score contracts, and
 [Tavily research MCP design](docs/research/WEB_RESEARCH_MCP.md) for current-evidence identity,
 budgets, provenance, trust boundaries, errors, and provider limitations.
 
@@ -107,6 +110,7 @@ Interactive HTTP documentation is at `/docs`.
 | `polymarket_get_market` | Exact returned numeric Gamma `market_id` |
 | `sports_state_find_games` | `query`, required `league` and IANA `timezone`; optional exact `local_date`, game `limit=5`, `compact=false` |
 | `sports_state_get_game_state` | Exact opaque `game_ref` copied unchanged from discovery |
+| `sports_state_get_box_score` | Exact opaque `game_ref` copied unchanged from discovery; no other selector |
 | `tavily_search_game_evidence` | Exact `league`, `team_a`, `team_b`, `game_date`, `scheduled_start`, and focus copied from market/game detail |
 
 - Limits are strict integers from 1 through 10 in the client-visible MCP schema.
@@ -152,12 +156,23 @@ Interactive HTTP documentation is at `/docs`.
   Rediscovery in another timezone intentionally returns a different reference.
 - Game state returns one baseball or football situation object. Missing possession, count, outs,
   bases, players, timeouts, or field position remain null rather than being inferred.
+- Box score returns MLB inning scoring, team totals, batting lines, and pitching lines, or
+  NFL/NCAA period scoring, team statistics, and categorized player statistics. It excludes
+  play-by-play and season statistics.
+- Optional box-score fields unavailable from the provider are omitted. The `completeness` object,
+  `is_partial`, and `warnings` distinguish complete, partial, and unavailable sections. Baseball
+  inning runs retain semantic null only when a team has not batted in that inning; zero means a
+  completed scoreless inning.
+- Baseball pitching exposes both integer `outs_recorded` and provider display notation such as
+  `innings_pitched_display="1.1"`; consumers perform calculations with outs, not decimal math.
 - Scheduled/pregame provider placeholders are normalized to null in discovery and detail; baseball
   `half` is `unknown` until an inning exists. Baseball `phase` distinguishes `not_started`, active
   play, provider transitions, completed games, and unavailable situation data.
 - ESPN is free, unauthenticated, undocumented, and has no SLA. MLB StatsAPI is the MLB-only
   fallback; NFL and NCAA failures return controlled unavailability without substitution.
-- Tavily research is blocked until one typed game detail establishes league, both teams, and date.
+- Tavily research is blocked until one typed game-state or box-score detail establishes league,
+  both teams, and date. It supplies game news, injuries, lineups, weather, and schedule context,
+  never structured box-score data.
   The server constructs the query and retains at most five HTTPS results naming both teams and the
   exact date. Focus values are `injuries`, `lineups`, `weather`, `venue_or_schedule`, and
   `other_game_news`.
@@ -222,10 +237,10 @@ uv run pytest tests/live/test_game_state_mcp_live.py tests/live/test_sports_mcp_
 Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
-The sports live checks discover schemas, reject `limit=20`, search all three supported
-leagues, retrieve a returned contract or game state when available, and make one bounded real
-Tavily MCP call. Empty current slates or evidence sets are valid. They do not fabricate an expected
-open game. See [Testing](docs/research/TESTING.md) for test boundaries
+The sports live checks discover schemas, reject `limit=20`, search all three supported leagues,
+retrieve exact game state and box scores when available, and make one bounded real Tavily MCP
+call. Empty current slates or evidence sets are valid. They do not fabricate an expected open
+game. See [Testing](docs/research/TESTING.md) for test boundaries
 and [Provider contracts](docs/research/MARKET_API_FEASIBILITY.md) for primary sources.
 
 Real-model checks are separate: configure a backend, set `RUN_LIVE_AGENT=1`, and run
@@ -320,7 +335,7 @@ The application uses [LangGraph](https://docs.langchain.com/oss/python/langgraph
 ## Documentation map
 
 - [Sports MCP design and catalog maintenance](docs/research/SPORTS_MCP.md)
-- [Sports game-state MCP design](docs/research/GAME_STATE_MCP.md)
+- [Sports state and box-score MCP design](docs/research/GAME_STATE_MCP.md)
 - [Bounded Tavily research MCP design](docs/research/WEB_RESEARCH_MCP.md)
 - [Runtime architecture](docs/research/MCP_VERTICAL_SLICE.md)
 - [Provider contracts and field mapping](docs/research/MARKET_API_FEASIBILITY.md)

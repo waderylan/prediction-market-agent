@@ -23,11 +23,14 @@ FastAPI/LangGraph application invokes all four servers through real MCP and reta
 context.
 
 The sports-state MCP separately finds a supported game by team, league, one local calendar day,
-and timezone, then reads one current normalized snapshot through an opaque discovery reference.
+and timezone, then reads current state or a box score through an opaque discovery reference.
 ESPN is the primary free source. MLB StatsAPI is an MLB-only fallback after exact team/date/start
 matching; NFL and NCAA football fail honestly when ESPN is unavailable. The result includes score,
-lifecycle, observation provenance, and one nullable league-specific situation object. It does not
-provide odds, forecasts, contract identity, or settlement.
+lifecycle, observation provenance, and either one nullable league-specific situation object or a
+sport-specific game-only box score. MLB box scores contain inning/team/batting/pitching lines;
+NFL and NCAA box scores contain period/team/player statistics. Provider-unavailable optional
+statistics are omitted and reported through completeness metadata. The service does not provide
+odds, forecasts, contract identity, settlement, season-stat substitutions, or play-by-play.
 
 The Tavily MCP adds bounded current evidence only after one exact game is identified. It searches
 for injuries, lineups, weather, venue/schedule changes, or other game news; retains at most five
@@ -44,6 +47,8 @@ Representative requests:
 - Which game does that price refer to, when was the quote observed, and is it stale?
 - What is the Yankees score and inning right now in America/Los_Angeles?
 - Who has possession in the Falcons game, and what are the down and distance?
+- Get the Yankees box score. Who has a hit and how many strikeouts does the starter have?
+- Show period scoring and player statistics for this returned NFL or NCAA football game.
 
 Results describe discovered contracts, not a claim that a particular game is currently listed.
 Multiple event IDs require selection before discussing a singular game.

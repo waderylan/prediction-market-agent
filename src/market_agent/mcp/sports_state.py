@@ -1,4 +1,4 @@
-"""Independent read-only sports game-state stdio MCP server."""
+"""Independent read-only sports state and box-score stdio MCP server."""
 
 import asyncio
 import json
@@ -13,6 +13,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from market_agent.providers.game_state import (
+    BoxScore,
     FindGamesResult,
     GameState,
     SportsStateClient,
@@ -57,7 +58,7 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
                 yield
             active_client = None
 
-    server = FastMCP("Sports game state", lifespan=lifespan, log_level="CRITICAL")
+    server = FastMCP("Sports state and box scores", lifespan=lifespan, log_level="CRITICAL")
     annotations = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True)
 
     @server.tool(annotations=annotations)
@@ -75,10 +76,11 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
         provider-backed game choices. Use query="all" for a bounded same-day league slate (at
         most ten games); it is not a season scan or exhaustive pagination surface. Set compact=true
         to return only selection identity, timing, lifecycle, and game_ref for each candidate.
-        Copy one returned game_ref unchanged into sports_state_get_game_state for authoritative
-        normalized state fields. Ambiguous teams return choices and exact retry guidance without
-        provider I/O. References are scoped to the requested timezone. This tool does not return
-        odds, forecasts, contract rules, or market settlement.
+        Copy one returned game_ref unchanged into sports_state_get_game_state for the current
+        situation or sports_state_get_box_score for line scoring and team/player game statistics.
+        Ambiguous teams return choices and exact retry guidance without provider I/O. References
+        are scoped to the requested timezone. This tool does not return odds, forecasts, contract
+        rules, or market settlement.
         """
         assert active_client is not None
         try:
@@ -102,14 +104,16 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
 
     @server.tool(annotations=annotations)
     async def sports_state_get_game_state(game_ref: GameRef) -> GameState:
-        """Read one current normalized game snapshot from an unchanged discovery game_ref.
+        """Read the live score and situation from an unchanged discovery game_ref.
         The opaque reference is checksummed and restart-safe; never construct it from an ESPN ID,
         MLB gamePk, team, date, market ID, or prior knowledge. Returns common score/lifecycle data
-        and exactly one league-specific situation object. This detail response, not discovery, is
-        authoritative for normalized state fields. Scheduled/pregame placeholders and unavailable
-        fields are null, not inferred. ESPN is primary; exact-identity MLB StatsAPI fallback is
-        MLB-only. A final sporting result does not establish prediction-market settlement or
-        contract equivalence.
+        plus the current baseball inning/count/runners/batter/pitcher or football possession,
+        down, distance, field position, and timeouts. Use sports_state_get_box_score instead for
+        period scoring, team totals, and player statistics. This detail response, not discovery,
+        is authoritative for normalized state fields. Scheduled/pregame placeholders and
+        unavailable fields are null, not inferred. ESPN is primary; exact-identity MLB StatsAPI
+        fallback is MLB-only. A final sporting result does not establish prediction-market
+        settlement or contract equivalence.
         """
         assert active_client is not None
         try:
@@ -124,9 +128,38 @@ def create_server(client: SportsStateClient | None = None) -> FastMCP[Any]:
         except SportsStateError as error:
             raise _tool_error(error) from None
 
+    @server.tool(annotations=annotations)
+    async def sports_state_get_box_score(game_ref: GameRef) -> BoxScore:
+        """Read one exact MLB, NFL, or NCAA football box score from a discovery game_ref.
+        Copy game_ref unchanged from sports_state_find_games; never provide or construct a provider
+        identifier. Baseball returns inning-by-inning scoring, runs/hits/errors/left-on-base totals,
+        and game-only batting and pitching lines. Football returns period scoring, team statistics,
+        and provider-categorized player lines. Stable player IDs, source/retrieval provenance,
+        lifecycle-aware cache metadata, completeness, and warnings are included. Provider-omitted
+        optional statistics are omitted rather than filled from season totals. This tool excludes
+        play-by-play and does not use Tavily. ESPN is primary; MLB StatsAPI is an exact-identity
+        MLB-only fallback.
+        """
+        assert active_client is not None
+        try:
+            async with asyncio.timeout(30):
+                return await active_client.get_box_score(game_ref)
+        except TimeoutError:
+            raise _tool_error(
+                SportsStateError(
+                    "tool_timeout", "sports_state_get_box_score exceeded its 30-second budget"
+                )
+            ) from None
+        except SportsStateError as error:
+            raise _tool_error(error) from None
+
     # The bundled FastMCP generator validates unexpected kwargs at call time but omits the
     # equivalent JSON Schema keyword. Publish that constraint so agents can see it at discovery.
-    for tool_name in ("sports_state_find_games", "sports_state_get_game_state"):
+    for tool_name in (
+        "sports_state_find_games",
+        "sports_state_get_game_state",
+        "sports_state_get_box_score",
+    ):
         registered = server._tool_manager.get_tool(tool_name)  # noqa: SLF001
         assert registered is not None
         registered.parameters["additionalProperties"] = False

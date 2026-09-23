@@ -2,10 +2,11 @@
 
 ## Product boundary
 
-The student-authored `sports_state` stdio process answers one narrow question: what is the
-provider-reported state of a supported game now? It supports MLB, NFL, and NCAA Division I
-football. It does not expose odds, win probability, projections, news, standings, rosters, full
-box scores, prediction-market contracts, settlement, trading, accounts, polling, or notifications.
+The student-authored `sports_state` stdio process answers two exact-game questions: what is
+happening now, and how are the teams and players performing? It supports MLB, NFL, and NCAA
+Division I football. It does not expose odds, win probability, projections, news, standings,
+season statistics, prediction-market contracts, settlement, trading, accounts, polling, or
+notifications.
 
 Game state is independent evidence. Even `lifecycle="final"` establishes only the attributed
 sporting observation. It never proves that a Kalshi or Polymarket contract is equivalent,
@@ -98,6 +99,39 @@ one base key is present, present bases are occupied and omitted sibling bases ar
 batter and pitcher `playerId` values are resolved only through explicit names in the same bounded
 summary box score or roster; unresolved or conflicting IDs remain null.
 
+### `sports_state_get_box_score`
+
+Input:
+
+- `game_ref`: one opaque value copied unchanged from discovery. Team names, dates, ESPN IDs, MLB
+  IDs, provider selectors, modes, and projection controls are not accepted.
+
+The result shares exact game identity, source URL, lifecycle, teams, scores, observation time and
+ID, cache metadata, warnings, and an explicit `completeness` object with the state tool. It is
+sport-discriminated:
+
+- MLB returns `line_score.innings`, team runs/hits/errors/left-on-base when supplied, `batting`
+  by team, and `pitching` by team. Batter lines carry stable provider player IDs and game-only
+  lineup, position, and counting statistics. Pitcher lines carry stable provider IDs, appearance
+  order, `outs_recorded`, provider `innings_pitched_display`, and game-only counting statistics.
+- NFL and NCAA football return `line_score.periods`, named team statistics, and player statistics
+  grouped by provider categories such as passing, rushing, receiving, defense, returns, kicking,
+  and punting. The same football model applies to both leagues.
+
+Optional statistics absent from a provider response are omitted rather than serialized as
+permanent null fields. `completeness` reports each section as `complete`, `partial`, or
+`unavailable`; `is_partial` and warnings make omissions visible. Pregame player arrays remain
+empty and unavailable. The parser never fills game fields with season statistics.
+
+Inning scoring is the intentional exception to omission semantics. A null home-inning value in
+the top half means the home team has not batted; zero means it completed the inning without a run.
+Pitching calculations use `outs_recorded`: display `1.1` means four outs, not 1.1 mathematical
+innings.
+
+The endpoint includes no play-by-play or pitch history. Current score, inning/count/runners and
+active players belong to `sports_state_get_game_state`; chronological events belong to a separate
+play surface when the product needs one. Tavily is never a source for structured game statistics.
+
 ## Identity and opaque references
 
 Discovery references carry only version, source namespace, league, ESPN event ID, scheduled start,
@@ -134,8 +168,8 @@ Display text only refines compatible states such as halftime. Score never determ
 Nonzero does not imply live, and 0-0 does not imply scheduled.
 
 `retrieved_at` is when this service observed the response. It is never relabeled as a provider
-update clock. `provider_updated_at` remains null unless a future verified response supplies an
-authoritative state-update timestamp. Scores are nonnegative integers or null. Impossible down,
+update clock. `provider_updated_at` is omitted from box scores unless the provider supplies an
+authoritative state-update timestamp. Scores are nonnegative integers or unavailable. Impossible down,
 outs, count, score, participant, or identity values reject exact detail. In a safe scoreboard
 envelope, malformed sibling events are skipped with bounded discard warnings.
 
@@ -156,20 +190,25 @@ envelope, malformed sibling events are skipped with bounded discard warnings.
 | Returned games | 10 |
 | Warnings | 20 |
 | State text | 1,000 characters per bounded field |
-| Cache | 256 normalized detail snapshots |
+| Cache | Separate 256-entry normalized state and box-score caches |
 
 External cancellation propagates. No background request, polling task, WebSocket, or provider
 disconnect operation exists.
 
 ## Cache semantics
 
-The detail cache uses the provider's `Cache-Control: max-age` when present, capped at:
+The detail caches use the provider's `Cache-Control: max-age` when present. State caps are:
 
 - 5 seconds for live, halftime, delayed, suspended, or unknown state.
 - 30 seconds for scheduled or pregame state.
 - 5 minutes for final, postponed, or cancelled state.
 
-Each normalized detail receives an `observation_id`. A cache hit retains the original
+Box-score caps are 10 seconds for live, halftime, delayed, suspended, or unknown games; 30 seconds
+for scheduled or pregame games; and 5 minutes for final, postponed, or cancelled games.
+
+Each normalized state receives an observation ID. A box-score observation ID is a deterministic
+hash of the normalized provider snapshot, so unchanged data retains its ID after cache expiry and
+an underlying scoring or statistics change produces a new ID. A cache hit retains the original
 `retrieved_at` and observation ID and changes only `cache_hit` and `cache_age_ms`. Cache expiry
 causes a new provider observation; data is never restamped merely because it was read again.
 
@@ -183,7 +222,7 @@ MCP tool errors contain compact JSON with `error.code`, safe `message`, and call
 - `malformed_response`, `response_too_large`, `impossible_state`, and
   `unknown_provider_team`.
 - `response_identity_mismatch`.
-- `mlb_fallback_ambiguous` and `game_state_unavailable`.
+- `mlb_fallback_ambiguous`, `game_state_unavailable`, and `box_score_unavailable`.
 
 Transport/HTTP failure, tool execution error, and malformed/schema-invalid response are tested
 independently. Error text excludes provider bodies, prompts, credentials, and opaque references.
@@ -192,8 +231,10 @@ result count where available, and sanitized error class. Stdout remains MCP prot
 
 ## Agent consumption
 
-The model selects game-state tools semantically for score, lifecycle, or situation requests. It
-must discover before detail and ask the user to select when multiple games remain plausible.
+The model selects game-state tools semantically. `sports_state_get_game_state` answers score,
+lifecycle, and current-situation requests. `sports_state_get_box_score` answers inning or period
+scoring, team totals, and player game-stat requests. It must discover before either detail call and
+ask the user to select when multiple games remain plausible.
 
 When market and game detail coexist, the host independently checks league, both participants,
 scheduled start within 30 minutes, and provider-backed references. The model receives typed
@@ -211,14 +252,12 @@ equivalence.
 Deterministic tests cover all lifecycle values, exact aliases, NCAA ambiguity, doubleheaders,
 timezone rollover, null situation fields, impossible bounds, reference edits, response identity,
 cache identity/TTL, response limits, retries, cancellation, malformed siblings/roots, exact MLB
-fallback, fallback ambiguity, and provider conflict warnings.
+fallback, fallback ambiguity, provider conflict warnings, MLB batting/pitching normalization,
+season-stat exclusion, and the shared NFL/NCAA football box-score model.
 
 Real MCP tests exercise `tools/list`, strict schemas, `tools/call`, discovery-before-detail, stable
 errors, host validation, semantic routing, no-tool behavior, market/game identity checks, and an
 independent stdio process. Opt-in public checks query all three leagues and retrieve exact state
-when a current game is available; an empty slate is valid.
-
-On 2026-09-20, the project `httpx` stack observed HTTP 200 from all three ESPN scoreboards and MLB
-StatsAPI. Live MLB exposed inning/count/out/base/player fields. Live NFL exposed possession,
-down/distance, field position, score, period, clock, and last play. ESPN can omit individual
-situation fields during transitions, and its undocumented schema may change without notice.
+and box scores when a current game is available; an empty slate is valid. Current provider checks
+cover completed MLB, NFL, and NCAA football games plus live MLB. ESPN can omit individual fields
+during transitions, and its undocumented schema may change without notice.
