@@ -3,7 +3,7 @@
 ## Product boundary
 
 The student-authored `sports_state` stdio process answers exact-game questions about current state,
-team performance, and individual player performance. It supports MLB, NFL, and NCAA
+team performance, individual player performance, and chronological plays. It supports MLB, NFL, and NCAA
 Division I football. It does not expose odds, win probability, projections, news, standings,
 season statistics, prediction-market contracts, settlement, trading, accounts, polling, or
 notifications.
@@ -129,8 +129,8 @@ Pitching calculations use `outs_recorded`: display `1.1` means four outs, not 1.
 innings.
 
 The endpoint includes no play-by-play or pitch history. Current score, inning/count/runners and
-active players belong to `sports_state_get_game_state`; chronological events belong to a separate
-play surface when the product needs one. Tavily is never a source for structured game statistics.
+active players belong to `sports_state_get_game_state`; chronological events belong to
+`sports_state_get_play_by_play`. Tavily is never a source for structured game statistics.
 
 ### `sports_state_list_players`
 
@@ -165,6 +165,38 @@ and play-by-play are absent. Invalid player-ID syntax is rejected before provide
 Player listing and detail reuse the box-score request, lifecycle-aware cache, exact identity
 validation, completeness state, warnings, fallback policy, retrieval time, and observation ID. A
 list-followed-by-detail flow normally performs one provider summary request inside the cache window.
+
+### `sports_state_get_play_by_play`
+
+Inputs:
+
+- `game_ref`: one opaque value copied unchanged from discovery.
+- `limit`: integer 1-50, default 20.
+- `before_play_id`: optional stable ID used to page toward earlier plays.
+- `after_play_id`: optional stable ID used to request only later, unseen plays.
+- `play_filter`: `all` or `scoring`, default `all`.
+- `period`: optional period or inning number, 1-30.
+- `team`: optional `away` or `home` side filter.
+
+`before_play_id` and `after_play_id` are mutually exclusive. With neither anchor, the tool returns
+the latest matching window. Every returned window remains chronological. `first_play_id` and
+`next_before_play_id` support backward inspection; `last_play_id` and `resume_after_play_id`
+provide a checkpoint for a later call. `has_earlier` and `has_later` describe matching plays outside
+the window. An anchor must identify a play in the exact current game observation, including when
+other filters exclude that anchor from the returned subset.
+
+Each play includes its stable provider-backed ID, feed sequence, period, clock, bounded text,
+scoring flag, supplied score, attributed team/side, wall-clock time when available, and one
+sport-specific context object. MLB context can include pitch count, outs, pitch type, runners,
+and at-bat ID. Football context can include down, distance, field position, yards, turnover, and
+penalty. Optional provider fields stay null; prose is never parsed to invent structured values.
+
+ESPN supplies pitch/action granularity for MLB and play granularity for NFL and NCAA football. An
+exact-identity MLB StatsAPI fallback supplies at-bat granularity after ESPN transport, HTTP, or
+schema failure. `granularity` exposes that distinction. The service normalizes at most 1,000
+provider plays and returns at most 50. Malformed individual plays are discarded with bounded
+warnings; malformed identity, participants, lifecycle, or the enclosing response rejects the
+feed. Raw provider payloads, win probability, odds, and season statistics are absent.
 
 ## Identity and opaque references
 
@@ -224,7 +256,9 @@ envelope, malformed sibling events are skipped with bounded discard warnings.
 | Returned games | 10 |
 | Warnings | 20 |
 | State text | 1,000 characters per bounded field |
-| Cache | Separate 256-entry normalized state and box-score caches |
+| Provider plays normalized | 1,000 |
+| Plays returned | 50 |
+| Cache | Separate 256-entry normalized state, box-score, and play-feed caches |
 
 External cancellation propagates. No background request, polling task, WebSocket, or provider
 disconnect operation exists.
@@ -238,13 +272,16 @@ The detail caches use the provider's `Cache-Control: max-age` when present. Stat
 - 5 minutes for final, postponed, or cancelled state.
 
 Box-score caps are 10 seconds for live, halftime, delayed, suspended, or unknown games; 30 seconds
-for scheduled or pregame games; and 5 minutes for final, postponed, or cancelled games.
+for scheduled or pregame games; and 5 minutes for final, postponed, or cancelled games. Play-feed
+caps are 5 seconds for live, halftime, delayed, suspended, or unknown games; 30 seconds for
+scheduled or pregame games; and 5 minutes for final, postponed, or cancelled games.
 
-Each normalized state receives an observation ID. A box-score observation ID is a deterministic
-hash of the normalized provider snapshot, so unchanged data retains its ID after cache expiry and
-an underlying scoring or statistics change produces a new ID. A cache hit retains the original
-`retrieved_at` and observation ID and changes only `cache_hit` and `cache_age_ms`. Cache expiry
-causes a new provider observation; data is never restamped merely because it was read again.
+Each normalized state receives an observation ID. Box-score and play-feed observation IDs are
+deterministic hashes of their normalized provider snapshots, so unchanged data retains its ID
+after cache expiry and an underlying statistics or play change produces a new ID. Different play
+windows and filters over one cached feed retain the feed observation ID. A cache hit retains the
+original `retrieved_at` and observation ID and changes only `cache_hit` and `cache_age_ms`. Cache
+expiry causes a new provider observation; data is never restamped merely because it was read again.
 
 ## Stable errors
 
@@ -258,6 +295,8 @@ MCP tool errors contain compact JSON with `error.code`, safe `message`, and call
 - `response_identity_mismatch`.
 - `mlb_fallback_ambiguous`, `game_state_unavailable`, and `box_score_unavailable`.
 - `invalid_player_id` and `player_not_found`.
+- `invalid_play_limit`, `conflicting_play_anchors`, `invalid_play_id`, `invalid_play_filter`,
+  `invalid_period`, `invalid_team_filter`, `play_not_found`, and `play_by_play_unavailable`.
 
 Transport/HTTP failure, tool execution error, and malformed/schema-invalid response are tested
 independently. Error text excludes provider bodies, prompts, credentials, and opaque references.
@@ -271,7 +310,10 @@ lifecycle, and current-situation requests. `sports_state_get_box_score` answers 
 scoring and team totals. For one player's game statistics, the model lists players, resolves the
 requested name to a returned ID, then requests only that player's detail. It must discover before
 detail calls and ask the user to select when multiple games or same-name player choices remain
-plausible.
+plausible. For chronological events, it requests a bounded play window, retains the returned play
+IDs as checkpoints, pages backward with `before_play_id`, and resumes live inspection with
+`after_play_id`. Scoring, period, and team filters narrow the provider-backed feed without prose
+search or a full-box-score transfer.
 
 When market and game detail coexist, the host independently checks league, both participants,
 scheduled start within 30 minutes, and provider-backed references. The model receives typed
@@ -291,12 +333,14 @@ timezone rollover, null situation fields, impossible bounds, reference edits, re
 cache identity/TTL, response limits, retries, cancellation, malformed siblings/roots, exact MLB
 fallback, fallback ambiguity, provider conflict warnings, MLB batting/pitching normalization,
 season-stat exclusion, the shared NFL/NCAA football box-score model, compact player selection,
-multi-category player aggregation, missing-player errors, and cache/observation reuse.
+multi-category player aggregation, missing-player errors, stable play IDs, backward and forward
+play windows, focused play filters, malformed-play isolation, MLB at-bat fallback, and
+cache/observation reuse.
 
 Real MCP tests exercise `tools/list`, strict schemas, `tools/call`, discovery-before-detail, stable
 errors, host validation, semantic routing, no-tool behavior, market/game identity checks, and an
-independent stdio process. Opt-in public checks query all three leagues and retrieve exact state
-box scores, player directories, and individual player lines when a current game is available; an
-empty slate is valid. Current provider checks cover completed MLB, NFL, and NCAA football games
-plus live MLB. ESPN can omit individual fields
-during transitions, and its undocumented schema may change without notice.
+independent stdio process. Opt-in public checks query all three leagues and retrieve exact state,
+box scores, player directories, individual player lines, and bounded play windows when a current
+game is available; an empty slate is valid. Provider checks cover completed MLB, NFL, and NCAA
+football games plus live MLB. ESPN can omit individual fields during transitions, and its
+undocumented schema may change without notice.

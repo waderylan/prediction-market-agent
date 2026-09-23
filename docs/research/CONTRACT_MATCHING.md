@@ -73,8 +73,8 @@ strict: it accepts false rejection risk rather than creating an unmeasured false
 
 ### Market-to-game identity
 
-Sports-state evidence is incorporated only when the user request already required exact current
-state or box-score detail. Each typed `MarketGameAssessment` includes:
+Sports-state evidence is incorporated only when the user request requires exact-game sports
+detail. Each typed `MarketGameAssessment` includes:
 
 - Market platform and ID.
 - Opaque game reference, source, observation time, and sporting lifecycle.

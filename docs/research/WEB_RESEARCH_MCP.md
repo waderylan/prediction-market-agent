@@ -4,8 +4,8 @@
 
 The Tavily server supplies current public evidence that the market and sports-state providers do
 not contain: injuries, lineups, weather, venue or schedule changes, and other news about one exact
-game. Structured line scores and player/team game statistics come from
-`sports_state_get_box_score`, never Tavily. It is corroborating research only. It cannot establish official game state, contract
+game. Structured game state, statistics, and play history come from the `sports_state` tools,
+never Tavily. It is corroborating research only. It cannot establish official game state, contract
 identity, contract equivalence, market settlement, an independent probability, or a position.
 
 ## MCP surface
@@ -25,7 +25,7 @@ tavily_search_game_evidence(
 
 `league` is `mlb`, `nfl`, or `ncaa_football`. `focus` is `injuries`, `lineups`, `weather`,
 `venue_or_schedule`, or `other_game_news`. Both teams, the local game date, and timezone-aware
-scheduled start must be copied from a typed market-detail, game-state, or box-score result. The server, not the
+scheduled start must be copied from a typed market or exact-game sports-detail result. The server, not the
 model, constructs the web query.
 
 The result contains at most five sources. Each source preserves title, public HTTPS URL,
@@ -105,7 +105,7 @@ Show the retained and rejected result counts, then cite every retained URL.
 ```
 
 A direct MCP call relies on the supplied typed identity. The conversational agent adds the stronger
-host check that requires those values to match a market-detail, game-state, or box-score observation first.
+host check that requires those values to match a market or exact-game sports-detail observation first.
 
 Primary references:
 

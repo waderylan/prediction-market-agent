@@ -31,6 +31,7 @@ async def test_game_state_stdio_live_all_supported_leagues():
             "sports_state_get_box_score",
             "sports_state_list_players",
             "sports_state_get_player_stats",
+            "sports_state_get_play_by_play",
         }
         assert tools["sports_state_find_games"].inputSchema["additionalProperties"] is False
         assert (
@@ -147,3 +148,26 @@ async def test_game_state_stdio_live_all_supported_leagues():
                 assert player.structuredContent["player_id"] == selected["player_id"]
                 assert player.structuredContent["team"] == selected["team"]
                 assert player.structuredContent["observation_id"] == box_score["observation_id"]
+            plays = await session.call_tool(
+                "sports_state_get_play_by_play",
+                {"game_ref": game["game_ref"], "limit": 5},
+            )
+            assert not plays.isError
+            validate(plays.structuredContent, tools["sports_state_get_play_by_play"].outputSchema)
+            play_window = plays.structuredContent
+            assert play_window["game_ref"] == game["game_ref"]
+            assert len(play_window["plays"]) <= 5
+            assert play_window["total_plays"] >= len(play_window["plays"])
+            if play_window["plays"]:
+                assert play_window["first_play_id"] == play_window["plays"][0]["play_id"]
+                assert play_window["last_play_id"] == play_window["plays"][-1]["play_id"]
+                after = await session.call_tool(
+                    "sports_state_get_play_by_play",
+                    {
+                        "game_ref": game["game_ref"],
+                        "after_play_id": play_window["resume_after_play_id"],
+                        "limit": 5,
+                    },
+                )
+                assert not after.isError
+                assert after.structuredContent["plays"] == []

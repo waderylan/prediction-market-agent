@@ -21,6 +21,7 @@ def test_readme_documents_verified_game_state_surface_and_three_diagrams():
     assert "sports_state_get_box_score" in readme
     assert "sports_state_list_players" in readme
     assert "sports_state_get_player_stats" in readme
+    assert "sports_state_get_play_by_play" in readme
     assert "ESPN public JSON" in readme
     assert "MLB StatsAPI" in readme
     assert "undocumented" in readme and "no SLA" in readme
@@ -71,6 +72,7 @@ def test_project_documents_match_current_capability_and_future_boundaries():
         "sports_state_get_box_score",
         "sports_state_list_players",
         "sports_state_get_player_stats",
+        "sports_state_get_play_by_play",
         "5 MiB",
         "Maximum 2",
         "30 seconds",

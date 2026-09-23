@@ -84,6 +84,7 @@ async def test_sports_state_server_starts_as_independent_stdio_process():
         "sports_state_get_box_score",
         "sports_state_list_players",
         "sports_state_get_player_stats",
+        "sports_state_get_play_by_play",
     }
 
 

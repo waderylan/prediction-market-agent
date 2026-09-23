@@ -1,4 +1,4 @@
-"""Bounded current state and box scores from ESPN with an MLB-only fallback."""
+"""Bounded exact-game state, statistics, and plays with an MLB-only fallback."""
 
 from __future__ import annotations
 
@@ -73,9 +73,15 @@ PLAYER_STATS_USAGE = (
     "Player statistics are a narrow projection of one exact-game box-score observation. "
     "They contain game-only provider fields, not season statistics or play-by-play."
 )
+PLAY_BY_PLAY_USAGE = (
+    "Plays are chronological and carry stable provider-backed play_id values. Use the first "
+    "returned ID as before_play_id to page backward or resume_after_play_id as after_play_id to "
+    "request only later unseen plays. This is game history, not market settlement evidence."
+)
 
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_SCOREBOARD_EVENTS = 200
+MAX_PLAYS = 1000
 MAX_CACHE_ENTRIES = 256
 MAX_TEXT = 1000
 REF_DOMAIN = b"sports-state-game-ref-v1\x00"
@@ -534,6 +540,158 @@ class PlayerStats(_BoxScoreBase):
         return self
 
 
+class BaseballPlayContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sport: Literal["baseball"] = "baseball"
+    half: HalfInning
+    balls: int | None = Field(default=None, ge=0, le=4, exclude_if=lambda value: value is None)
+    strikes: int | None = Field(default=None, ge=0, le=3, exclude_if=lambda value: value is None)
+    outs: int | None = Field(default=None, ge=0, le=3, exclude_if=lambda value: value is None)
+    at_bat_id: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+
+
+class FootballPlayContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sport: Literal["football"] = "football"
+    down: int | None = Field(default=None, ge=1, le=4, exclude_if=lambda value: value is None)
+    distance: int | None = Field(default=None, ge=0, le=100, exclude_if=lambda value: value is None)
+    field_position: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+    yards: int | None = Field(default=None, ge=-200, le=200, exclude_if=lambda value: value is None)
+    turnover: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+    penalty: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class GamePlay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    play_id: str = Field(min_length=1, max_length=100)
+    sequence: int = Field(ge=1, le=MAX_PLAYS)
+    provider_sequence: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+    period: int | None = Field(default=None, ge=1, le=30, exclude_if=lambda value: value is None)
+    period_label: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+    clock: str | None = Field(default=None, max_length=100, exclude_if=lambda value: value is None)
+    play_type: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+    text: str = Field(min_length=1, max_length=MAX_TEXT)
+    team: str | None = Field(default=None, max_length=200, exclude_if=lambda value: value is None)
+    team_side: Literal["away", "home"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    scoring_play: bool
+    away_score: int | None = Field(default=None, ge=0, exclude_if=lambda value: value is None)
+    home_score: int | None = Field(default=None, ge=0, exclude_if=lambda value: value is None)
+    wallclock: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    context: BaseballPlayContext | FootballPlayContext
+
+    @field_validator("wallclock")
+    @classmethod
+    def aware_wallclock(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("play wallclock must include a timezone")
+        return value
+
+
+class _PlayFeed(_BoxScoreBase):
+    sport: Literal["baseball", "football"]
+    granularity: Literal["pitch_or_action", "play", "at_bat"]
+    plays: list[GamePlay] = Field(max_length=MAX_PLAYS)
+    usage_note: str = Field(default=PLAY_BY_PLAY_USAGE, max_length=500)
+
+
+class PlayByPlay(_BoxScoreBase):
+    """Bounded play window with stable anchors for paging and unseen-play retrieval."""
+
+    sport: Literal["baseball", "football"]
+    granularity: Literal["pitch_or_action", "play", "at_bat"]
+    anchor_mode: Literal["latest", "before", "after"]
+    anchor_play_id: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+    requested_limit: int = Field(ge=1, le=50)
+    play_filter: Literal["all", "scoring"]
+    period_filter: int | None = Field(
+        default=None, ge=1, le=30, exclude_if=lambda value: value is None
+    )
+    team_filter: Literal["away", "home"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    total_plays: int = Field(ge=0, le=MAX_PLAYS)
+    matching_plays: int = Field(ge=0, le=MAX_PLAYS)
+    plays: list[GamePlay] = Field(max_length=50)
+    first_play_id: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+    last_play_id: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+    has_earlier: bool
+    has_later: bool
+    next_before_play_id: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+    resume_after_play_id: str | None = Field(
+        default=None, max_length=100, exclude_if=lambda value: value is None
+    )
+    usage_note: str = Field(default=PLAY_BY_PLAY_USAGE, max_length=500)
+
+    @model_validator(mode="after")
+    def consistent_window(self) -> Self:
+        if len(self.plays) > self.requested_limit:
+            raise ValueError("play window exceeds requested limit")
+        ids = [play.play_id for play in self.plays]
+        if len(ids) != len(set(ids)):
+            raise ValueError("play window contains duplicate IDs")
+        if any(
+            left.sequence >= right.sequence
+            for left, right in zip(self.plays, self.plays[1:], strict=False)
+        ):
+            raise ValueError("play window is not chronological")
+        if any(play.context.sport != self.sport for play in self.plays):
+            raise ValueError("play context does not match feed sport")
+        if self.play_filter == "scoring" and any(not play.scoring_play for play in self.plays):
+            raise ValueError("play window violates scoring filter")
+        if self.period_filter is not None and any(
+            play.period != self.period_filter for play in self.plays
+        ):
+            raise ValueError("play window violates period filter")
+        if self.team_filter is not None and any(
+            play.team_side != self.team_filter for play in self.plays
+        ):
+            raise ValueError("play window violates team filter")
+        if self.plays:
+            if self.first_play_id != ids[0] or self.last_play_id != ids[-1]:
+                raise ValueError("play window boundary IDs are inconsistent")
+        elif self.first_play_id is not None or self.last_play_id is not None:
+            raise ValueError("empty play window has boundary IDs")
+        if self.anchor_mode == "latest":
+            if self.anchor_play_id is not None:
+                raise ValueError("latest play window cannot have an anchor")
+        elif self.anchor_play_id is None:
+            raise ValueError("anchored play window is missing its anchor")
+        expected_resume = (
+            self.anchor_play_id
+            if self.anchor_mode == "before" or not self.plays
+            else self.last_play_id
+        )
+        if self.resume_after_play_id != expected_resume:
+            raise ValueError("play resume ID is inconsistent")
+        expected_before = self.first_play_id if self.plays and self.has_earlier else None
+        if self.next_before_play_id != expected_before:
+            raise ValueError("play backward-page ID is inconsistent")
+        return self
+
+
 class CompactGameSummary(BaseModel):
     """Minimum selection fields for callers that will retrieve exact detail next."""
 
@@ -624,6 +782,14 @@ class _BoxScoreCacheEntry(BaseModel):
     cached_at: datetime
     expires_at: datetime
     box_score: BoxScore
+
+
+class _PlayFeedCacheEntry(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    cached_at: datetime
+    expires_at: datetime
+    feed: _PlayFeed
 
 
 def _text(value: Any, *, limit: int = MAX_TEXT) -> str | None:
@@ -1428,6 +1594,325 @@ def project_player_stats(box_score: BoxScore, player_id: str) -> PlayerStats:
         team=found_team,
         team_side=found_side,
         stat_groups=stat_groups,
+    )
+
+
+def _optional_timestamp(value: Any, label: str) -> datetime | None:
+    if value in (None, ""):
+        return None
+    return _timestamp(value, label)
+
+
+def _espn_play_team_index(
+    payload: dict[str, Any], state: GameState
+) -> dict[str, tuple[str, Literal["away", "home"]]]:
+    header = _object(payload.get("header"), "summary.header")
+    competition = _objects(header.get("competitions"), "summary.header.competitions")[0]
+    result: dict[str, tuple[str, Literal["away", "home"]]] = {}
+    for competitor in _objects(competition.get("competitors"), "competition.competitors"):
+        side = competitor.get("homeAway")
+        if side not in {"away", "home"}:
+            raise StateValidationError("malformed_response", "play team side is invalid")
+        team = _object(competitor.get("team"), "play competitor team")
+        provider_id = _text(team.get("id"), limit=100)
+        if provider_id is None or provider_id in result:
+            raise StateValidationError("malformed_response", "play team identity is invalid")
+        result[provider_id] = (
+            state.away_team if side == "away" else state.home_team,
+            side,
+        )
+    if len(result) != 2:
+        raise StateValidationError("malformed_response", "play feed must identify two teams")
+    return result
+
+
+def _espn_play(
+    raw: dict[str, Any],
+    *,
+    sequence: int,
+    sport: Literal["baseball", "football"],
+    teams_by_id: dict[str, tuple[str, Literal["away", "home"]]],
+) -> GamePlay:
+    play_id = _text(raw.get("id"), limit=100)
+    text = _text(raw.get("text"))
+    if play_id is None or text is None:
+        raise StateValidationError("malformed_response", "play identity or text is missing")
+    period_data = _object(raw.get("period", {}), "play period")
+    period = _optional_integer(period_data.get("number"), "play period", maximum=30)
+    team_id = None
+    team_data = raw.get("team")
+    if isinstance(team_data, dict):
+        team_id = _text(team_data.get("id"), limit=100)
+    if team_id is None:
+        participants = raw.get("teamParticipants")
+        if isinstance(participants, list):
+            offense = next(
+                (
+                    item
+                    for item in participants
+                    if isinstance(item, dict) and item.get("type") == "offense"
+                ),
+                None,
+            )
+            if isinstance(offense, dict):
+                team_id = _text(offense.get("id"), limit=100)
+    team_identity = teams_by_id.get(team_id or "")
+    if team_id is not None and team_identity is None:
+        raise StateValidationError(
+            "response_identity_mismatch", "play team is not a game participant"
+        )
+    scoring = _boolean(raw.get("scoringPlay"), "scoring play")
+    play_type = raw.get("type")
+    type_data = _object(play_type, "play type") if play_type is not None else {}
+    clock_data = raw.get("clock")
+    clock = (
+        _text(_object(clock_data, "play clock").get("displayValue"), limit=100)
+        if clock_data is not None
+        else None
+    )
+    context: BaseballPlayContext | FootballPlayContext
+    if sport == "baseball":
+        half_text = (_text(period_data.get("type"), limit=20) or "").casefold()
+        half: HalfInning = (
+            "top"
+            if half_text.startswith("top")
+            else "bottom"
+            if half_text.startswith("bot")
+            else "unknown"
+        )
+        count = raw.get("resultCount") or raw.get("pitchCount") or {}
+        count_data = _object(count, "baseball play count")
+        context = BaseballPlayContext(
+            half=half,
+            balls=_optional_integer(count_data.get("balls"), "play balls", maximum=4),
+            strikes=_optional_integer(count_data.get("strikes"), "play strikes", maximum=3),
+            outs=_optional_integer(raw.get("outs"), "play outs", maximum=3),
+            at_bat_id=_text(raw.get("atBatId"), limit=100),
+        )
+        period_label = _text(period_data.get("displayValue"), limit=100)
+    else:
+        end = raw.get("end")
+        start = raw.get("start")
+        position = end if isinstance(end, dict) else start if isinstance(start, dict) else {}
+        position_data = _object(position, "football play position")
+        raw_down = position_data.get("down")
+        context = FootballPlayContext(
+            down=(
+                None
+                if raw_down in {None, "", 0, "0", -1, "-1"}
+                else _optional_integer(raw_down, "play down", minimum=1, maximum=4)
+            ),
+            distance=_optional_integer(position_data.get("distance"), "play distance", maximum=100),
+            field_position=_text(
+                position_data.get("possessionText") or position_data.get("downDistanceText"),
+                limit=100,
+            ),
+            yards=_optional_integer(
+                raw.get("statYardage"), "play yardage", minimum=-200, maximum=200
+            ),
+            turnover=_boolean(raw.get("isTurnover"), "play turnover"),
+            penalty=_boolean(raw.get("isPenalty"), "play penalty"),
+        )
+        period_label = f"Quarter {period}" if period is not None else None
+    return GamePlay(
+        play_id=play_id,
+        sequence=sequence,
+        provider_sequence=_text(raw.get("sequenceNumber"), limit=100),
+        period=period,
+        period_label=period_label,
+        clock=clock,
+        play_type=_text(type_data.get("text") or type_data.get("abbreviation"), limit=100),
+        text=text,
+        team=team_identity[0] if team_identity else None,
+        team_side=team_identity[1] if team_identity else None,
+        scoring_play=scoring if scoring is not None else False,
+        away_score=_optional_integer(raw.get("awayScore"), "play away score"),
+        home_score=_optional_integer(raw.get("homeScore"), "play home score"),
+        wallclock=_optional_timestamp(raw.get("wallclock"), "play wallclock"),
+        context=context,
+    )
+
+
+def _play_feed_observation_id(feed: _PlayFeed) -> str:
+    snapshot = feed.model_dump(mode="json")
+    for field in ("retrieved_at", "observation_id", "cache_hit", "cache_age_ms"):
+        snapshot.pop(field, None)
+    serialized = json.dumps(snapshot, separators=(",", ":"), sort_keys=True).encode()
+    return f"{feed.source}:{hashlib.sha256(serialized).hexdigest()}"
+
+
+def _finalize_play_feed(feed: _PlayFeed) -> _PlayFeed:
+    return feed.model_copy(update={"observation_id": _play_feed_observation_id(feed)})
+
+
+def _espn_play_feed(
+    root: Any, reference: _GameRefPayload, retrieved_at: datetime, source_url: str
+) -> _PlayFeed:
+    payload = _object(root, "summary response")
+    state = _espn_detail(payload, reference, retrieved_at, source_url)
+    teams_by_id = _espn_play_team_index(payload, state)
+    raw_plays: list[dict[str, Any]] = []
+    sport: Literal["baseball", "football"]
+    granularity: Literal["pitch_or_action", "play", "at_bat"]
+    if reference.league == "mlb":
+        sport = "baseball"
+        granularity = "pitch_or_action"
+        raw_plays = _objects(payload.get("plays", []), "baseball plays")
+    else:
+        sport = "football"
+        granularity = "play"
+        drives = payload.get("drives")
+        if drives is not None:
+            drive_data = _object(drives, "football drives")
+            for drive in _objects(drive_data.get("previous", []), "previous drives"):
+                raw_plays.extend(_objects(drive.get("plays", []), "drive plays"))
+            current = drive_data.get("current")
+            if current is not None:
+                raw_plays.extend(
+                    _objects(_object(current, "current drive").get("plays", []), "current plays")
+                )
+    if len(raw_plays) > MAX_PLAYS:
+        raise StateValidationError("response_too_large", "play feed exceeds 1,000 plays")
+    plays: list[GamePlay] = []
+    seen: set[str] = set()
+    warnings = list(state.warnings)
+    discarded = 0
+    for raw in raw_plays:
+        raw_type = raw.get("type")
+        if (
+            sport == "baseball"
+            and raw.get("text") is None
+            and isinstance(raw_type, dict)
+            and raw_type.get("type") == "end-batterpitcher"
+        ):
+            continue
+        try:
+            play = _espn_play(raw, sequence=len(plays) + 1, sport=sport, teams_by_id=teams_by_id)
+            if play.play_id in seen:
+                raise StateValidationError("malformed_response", "duplicate play ID")
+            seen.add(play.play_id)
+            plays.append(play)
+        except StateValidationError:
+            discarded += 1
+    if discarded:
+        warnings.append(
+            StateWarning(
+                code="discarded_provider_plays",
+                message=f"Skipped {discarded} malformed or conflicting provider play(s).",
+            )
+        )
+    feed = _PlayFeed(
+        league=state.league,
+        sport=sport,
+        granularity=granularity,
+        game_ref=state.game_ref,
+        provider_game_id=state.provider_game_id,
+        source=state.source,
+        source_url=state.source_url,
+        scheduled_start=state.scheduled_start,
+        timezone=state.timezone,
+        local_date=state.local_date,
+        lifecycle=state.lifecycle,
+        period=state.period,
+        period_label=state.period_label,
+        away_team=BoxScoreTeam(name=state.away_team, score=state.away_score),
+        home_team=BoxScoreTeam(name=state.home_team, score=state.home_score),
+        retrieved_at=state.retrieved_at,
+        observation_id="pending",
+        is_partial=state.lifecycle != "final" or discarded > 0 or not plays,
+        warnings=warnings[:20],
+        plays=plays,
+    )
+    return _finalize_play_feed(feed)
+
+
+def _play_projection_data(feed: _PlayFeed) -> dict[str, Any]:
+    fields = set(_BoxScoreBase.model_fields) - {"usage_note"}
+    return feed.model_dump(include=fields)
+
+
+def select_play_window(
+    feed: _PlayFeed,
+    *,
+    limit: int,
+    before_play_id: str | None,
+    after_play_id: str | None,
+    play_filter: Literal["all", "scoring"],
+    period: int | None,
+    team: Literal["away", "home"] | None,
+) -> PlayByPlay:
+    if before_play_id is not None and after_play_id is not None:
+        raise SportsStateError(
+            "conflicting_play_anchors",
+            "before_play_id and after_play_id are mutually exclusive",
+            fields={"before_play_id": before_play_id, "after_play_id": after_play_id},
+        )
+    anchor = before_play_id or after_play_id
+    positions = {play.play_id: index for index, play in enumerate(feed.plays)}
+    if anchor is not None and anchor not in positions:
+        raise SportsStateError(
+            "play_not_found",
+            "the anchor play_id is not present in this exact game observation",
+            fields={"play_id": anchor},
+        )
+    candidates = [
+        (index, play)
+        for index, play in enumerate(feed.plays)
+        if (play_filter == "all" or play.scoring_play)
+        and (period is None or play.period == period)
+        and (team is None or play.team_side == team)
+    ]
+    if before_play_id is not None:
+        mode: Literal["latest", "before", "after"] = "before"
+        eligible = [item for item in candidates if item[0] < positions[before_play_id]]
+        selected = eligible[-limit:]
+    elif after_play_id is not None:
+        mode = "after"
+        eligible = [item for item in candidates if item[0] > positions[after_play_id]]
+        selected = eligible[:limit]
+    else:
+        mode = "latest"
+        selected = candidates[-limit:]
+    selected_plays = [play for _, play in selected]
+    if selected:
+        first_position = selected[0][0]
+        last_position = selected[-1][0]
+        has_earlier = any(index < first_position for index, _ in candidates)
+        has_later = any(index > last_position for index, _ in candidates)
+    elif before_play_id is not None:
+        has_earlier = False
+        has_later = bool(candidates)
+    elif after_play_id is not None:
+        has_earlier = bool(candidates)
+        has_later = False
+    else:
+        has_earlier = has_later = False
+    resume_after = (
+        before_play_id
+        if before_play_id is not None
+        else selected_plays[-1].play_id
+        if selected_plays
+        else after_play_id
+    )
+    return PlayByPlay(
+        **_play_projection_data(feed),
+        sport=feed.sport,
+        granularity=feed.granularity,
+        anchor_mode=mode,
+        anchor_play_id=anchor,
+        requested_limit=limit,
+        play_filter=play_filter,
+        period_filter=period,
+        team_filter=team,
+        total_plays=len(feed.plays),
+        matching_plays=len(candidates),
+        plays=selected_plays,
+        first_play_id=selected_plays[0].play_id if selected_plays else None,
+        last_play_id=selected_plays[-1].play_id if selected_plays else None,
+        has_earlier=has_earlier,
+        has_later=has_later,
+        next_before_play_id=(selected_plays[0].play_id if selected_plays and has_earlier else None),
+        resume_after_play_id=resume_after,
     )
 
 
@@ -2537,6 +3022,109 @@ def _mlb_box_score(
     return _finalize_box_score(box_score_result)
 
 
+def _mlb_play_feed(
+    root: Any, reference: _GameRefPayload, retrieved_at: datetime, source_url: str
+) -> _PlayFeed:
+    payload = _object(root, "MLB live-feed response")
+    state = _mlb_detail(payload, reference, retrieved_at, source_url)
+    live_data = _object(payload.get("liveData"), "MLB liveData")
+    plays_data = _object(live_data.get("plays", {}), "MLB plays")
+    raw_plays = _objects(plays_data.get("allPlays", []), "MLB allPlays")
+    if len(raw_plays) > MAX_PLAYS:
+        raise StateValidationError("response_too_large", "MLB play feed exceeds 1,000 at-bats")
+    plays: list[GamePlay] = []
+    warnings = list(state.warnings)
+    discarded = 0
+    for raw in raw_plays:
+        try:
+            about = _object(raw.get("about"), "MLB play about")
+            result = _object(raw.get("result"), "MLB play result")
+            at_bat_index = _integer(about.get("atBatIndex"), "MLB at-bat index", minimum=0)
+            inning = _optional_integer(about.get("inning"), "MLB play inning", maximum=30)
+            half_text = (_text(about.get("halfInning"), limit=20) or "").casefold()
+            half: HalfInning = (
+                "top"
+                if half_text.startswith("top")
+                else "bottom"
+                if half_text.startswith("bot")
+                else "unknown"
+            )
+            count = _object(raw.get("count", {}), "MLB play count")
+            text = _text(result.get("description"))
+            if text is None:
+                raise StateValidationError("malformed_response", "MLB play text is missing")
+            rbi = _optional_integer(result.get("rbi"), "MLB play RBI")
+            scoring = _boolean(about.get("isScoringPlay"), "MLB scoring play")
+            side: Literal["away", "home"] | None = (
+                "away" if half == "top" else "home" if half == "bottom" else None
+            )
+            team = (
+                state.away_team if side == "away" else state.home_team if side == "home" else None
+            )
+            plays.append(
+                GamePlay(
+                    play_id=f"{state.provider_game_id}:{at_bat_index}",
+                    sequence=len(plays) + 1,
+                    provider_sequence=str(at_bat_index),
+                    period=inning,
+                    period_label=(
+                        f"{half.title()} {inning}"
+                        if inning is not None and half != "unknown"
+                        else None
+                    ),
+                    play_type=_text(result.get("event") or result.get("eventType"), limit=100),
+                    text=text,
+                    team=team,
+                    team_side=side,
+                    scoring_play=scoring if scoring is not None else bool(rbi),
+                    away_score=_optional_integer(result.get("awayScore"), "MLB away score"),
+                    home_score=_optional_integer(result.get("homeScore"), "MLB home score"),
+                    wallclock=_optional_timestamp(about.get("startTime"), "MLB play start time"),
+                    context=BaseballPlayContext(
+                        half=half,
+                        balls=_optional_integer(count.get("balls"), "MLB play balls", maximum=4),
+                        strikes=_optional_integer(
+                            count.get("strikes"), "MLB play strikes", maximum=3
+                        ),
+                        outs=_optional_integer(count.get("outs"), "MLB play outs", maximum=3),
+                        at_bat_id=str(at_bat_index),
+                    ),
+                )
+            )
+        except StateValidationError:
+            discarded += 1
+    if discarded:
+        warnings.append(
+            StateWarning(
+                code="discarded_provider_plays",
+                message=f"Skipped {discarded} malformed MLB at-bat record(s).",
+            )
+        )
+    feed = _PlayFeed(
+        league="mlb",
+        sport="baseball",
+        granularity="at_bat",
+        game_ref=state.game_ref,
+        provider_game_id=state.provider_game_id,
+        source=state.source,
+        source_url=state.source_url,
+        scheduled_start=state.scheduled_start,
+        timezone=state.timezone,
+        local_date=state.local_date,
+        lifecycle=state.lifecycle,
+        period=state.period,
+        period_label=state.period_label,
+        away_team=BoxScoreTeam(name=state.away_team, score=state.away_score),
+        home_team=BoxScoreTeam(name=state.home_team, score=state.home_score),
+        retrieved_at=state.retrieved_at,
+        observation_id="pending",
+        is_partial=state.lifecycle != "final" or discarded > 0 or not plays,
+        warnings=warnings[:20],
+        plays=plays,
+    )
+    return _finalize_play_feed(feed)
+
+
 class SportsStateClient:
     """Two fixed-provider, bounded HTTP paths with no caller-controlled URLs."""
 
@@ -2562,6 +3150,7 @@ class SportsStateClient:
         self._now = now or (lambda: datetime.now(UTC))
         self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._box_score_cache: OrderedDict[str, _BoxScoreCacheEntry] = OrderedDict()
+        self._play_feed_cache: OrderedDict[str, _PlayFeedCacheEntry] = OrderedDict()
         self._discoveries: OrderedDict[str, GameSummary] = OrderedDict()
 
     async def __aenter__(self) -> Self:
@@ -2878,6 +3467,41 @@ class SportsStateClient:
             self._box_score_cache.popitem(last=False)
         return box_score
 
+    def _cached_play_feed(self, game_ref: str) -> _PlayFeed | None:
+        entry = self._play_feed_cache.get(game_ref)
+        now = self._now()
+        if entry is None:
+            return None
+        if now >= entry.expires_at:
+            del self._play_feed_cache[game_ref]
+            return None
+        self._play_feed_cache.move_to_end(game_ref)
+        age = max(0, int((now - entry.cached_at).total_seconds() * 1000))
+        return entry.feed.model_copy(update={"cache_hit": True, "cache_age_ms": age})
+
+    def _cache_play_feed(self, game_ref: str, feed: _PlayFeed, headers: httpx.Headers) -> _PlayFeed:
+        cap = (
+            300
+            if feed.lifecycle in {"final", "postponed", "cancelled"}
+            else 30
+            if feed.lifecycle in {"scheduled", "pregame"}
+            else 5
+        )
+        max_age = cap
+        match = re.search(r"(?:^|,)\s*max-age=(\d+)", headers.get("cache-control", ""), re.I)
+        if match:
+            max_age = min(cap, int(match.group(1)))
+        now = self._now()
+        self._play_feed_cache[game_ref] = _PlayFeedCacheEntry(
+            cached_at=now,
+            expires_at=now + timedelta(seconds=max_age),
+            feed=feed,
+        )
+        self._play_feed_cache.move_to_end(game_ref)
+        while len(self._play_feed_cache) > MAX_CACHE_ENTRIES:
+            self._play_feed_cache.popitem(last=False)
+        return feed
+
     async def get_game_state(self, game_ref: str) -> GameState:
         reference = decode_game_ref(game_ref)
         cached = self._cached(game_ref)
@@ -2966,6 +3590,139 @@ class SportsStateClient:
                 fields={"player_id": "invalid"},
             )
         return project_player_stats(await self.get_box_score(game_ref), player_id)
+
+    async def get_play_by_play(
+        self,
+        game_ref: str,
+        *,
+        limit: int = 20,
+        before_play_id: str | None = None,
+        after_play_id: str | None = None,
+        play_filter: Literal["all", "scoring"] = "all",
+        period: int | None = None,
+        team: Literal["away", "home"] | None = None,
+    ) -> PlayByPlay:
+        """Return a bounded play window with stable before/after anchors."""
+
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise SportsStateError(
+                "invalid_play_limit",
+                "limit must be an integer from 1 through 50",
+                fields={"limit": limit},
+            )
+        if before_play_id is not None and after_play_id is not None:
+            raise SportsStateError(
+                "conflicting_play_anchors",
+                "before_play_id and after_play_id are mutually exclusive",
+                fields={"before_play_id": before_play_id, "after_play_id": after_play_id},
+            )
+        for field, value in (
+            ("before_play_id", before_play_id),
+            ("after_play_id", after_play_id),
+        ):
+            if (
+                value is not None
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}", value) is None
+            ):
+                raise SportsStateError(
+                    "invalid_play_id",
+                    f"{field} must be copied unchanged from a play-by-play result",
+                    fields={field: "invalid"},
+                )
+        if play_filter not in {"all", "scoring"}:
+            raise SportsStateError(
+                "invalid_play_filter",
+                "play_filter must be all or scoring",
+                fields={"play_filter": str(play_filter)},
+            )
+        if period is not None and (type(period) is not int or not 1 <= period <= 30):
+            raise SportsStateError(
+                "invalid_period",
+                "period must be an integer from 1 through 30",
+                fields={"period": period},
+            )
+        if team not in {None, "away", "home"}:
+            raise SportsStateError(
+                "invalid_team_filter",
+                "team must be away or home",
+                fields={"team": str(team)},
+            )
+        reference = decode_game_ref(game_ref)
+        feed = self._cached_play_feed(game_ref)
+        if feed is None:
+            sport, provider_league = ESPN_ROUTES[reference.league]
+            url = f"{ESPN_BASE}/{sport}/{provider_league}/summary"
+            try:
+                root, headers = await self._request_json(
+                    url,
+                    params={"event": reference.event_id},
+                    operation="get_play_by_play",
+                    league=reference.league,
+                )
+                feed = _espn_play_feed(
+                    root,
+                    reference,
+                    self._now(),
+                    _source_url(reference.league, "summary", reference.event_id),
+                )
+                feed = self._cache_play_feed(game_ref, feed, headers)
+            except IdentityMismatchError:
+                raise
+            except (ProviderUnavailableError, StateValidationError) as primary_error:
+                if reference.league != "mlb":
+                    raise primary_error
+                feed = await self._mlb_play_feed_fallback(game_ref, reference, primary_error)
+        return select_play_window(
+            feed,
+            limit=limit,
+            before_play_id=before_play_id,
+            after_play_id=after_play_id,
+            play_filter=play_filter,
+            period=period,
+            team=team,
+        )
+
+    async def _mlb_play_feed_fallback(
+        self,
+        game_ref: str,
+        reference: _GameRefPayload,
+        primary_error: SportsStateError,
+    ) -> _PlayFeed:
+        local_day = reference.scheduled_start.astimezone(ZoneInfo(reference.timezone)).date()
+        schedule_url = f"{MLB_STATS_BASE}/v1/schedule"
+        try:
+            root, _ = await self._request_json(
+                schedule_url,
+                params={"sportId": 1, "date": local_day.isoformat(), "hydrate": "team"},
+                operation="mlb_play_by_play_fallback_schedule",
+                league="mlb",
+            )
+            candidates = _mlb_schedule_candidates(root, reference)
+            if len(candidates) != 1:
+                raise SportsStateError(
+                    "mlb_fallback_ambiguous",
+                    "MLB fallback could not uniquely match both teams and start time",
+                    fields={"candidate_count": len(candidates)},
+                )
+            game_pk = _integer(candidates[0].get("gamePk"), "MLB gamePk", minimum=1)
+            feed_url = f"{MLB_STATS_BASE}/v1.1/game/{game_pk}/feed/live"
+            raw_feed, headers = await self._request_json(
+                feed_url,
+                params=None,
+                operation="mlb_play_by_play_fallback_detail",
+                league="mlb",
+            )
+            feed = _mlb_play_feed(raw_feed, reference, self._now(), feed_url)
+            return self._cache_play_feed(game_ref, feed, headers)
+        except SportsStateError as fallback_error:
+            raise SportsStateError(
+                "play_by_play_unavailable",
+                "ESPN play-by-play failed and the MLB fallback could not verify an exact game",
+                fields={
+                    "primary_error": primary_error.code,
+                    "fallback_error": fallback_error.code,
+                },
+            ) from fallback_error
 
     async def _mlb_box_score_fallback(
         self,

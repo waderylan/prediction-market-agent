@@ -51,9 +51,9 @@ The agent catches tool/transport/schema failures and continues with an explicit 
 to verify that data. It does not substitute fabricated quotes. Logs use safe operational
 metadata; provider response bodies and credential values do not become tool-error text.
 
-The sports-state host path validates distinct discovery, current-state, box-score, player-list, and
-single-player schemas, requires returned game/player identifiers, and checks each sport
-discriminator against the league.
+The sports-state host path validates distinct discovery, current-state, box-score, player-list,
+single-player, and play-by-play schemas; requires returned game/player/play identifiers; and checks
+each sport discriminator against the league.
 When market and game details coexist, the typed matching report compares league, both participants,
 scheduled start, and provider-backed references before model synthesis. Every exact detail response names
 source/time and states that sporting results do not establish contract equivalence or market
@@ -81,16 +81,16 @@ fallback, output fields, and budgets. [Provider contracts](MARKET_API_FEASIBILIT
 maps the external fields and links to primary documentation.
 
 The independent [game-state MCP](GAME_STATE_MCP.md) uses ESPN for bounded one-day discovery,
-current situations, and game-only box scores, with exact-identity MLB StatsAPI fallback only after
-primary failure. Compact player listing and single-player detail reuse the normalized box-score
-observation without exposing unrelated stat lines. It shares the team catalog but never supplies
-market identity, price, rules, or settlement.
+current situations, game-only box scores, compact player detail, and stable-ID play windows, with
+exact-identity MLB StatsAPI fallback only after primary failure. Player listing and single-player
+detail reuse the normalized box-score observation without exposing unrelated stat lines. It shares
+the team catalog but never supplies market identity, price, rules, or settlement.
 
 ## Research path
 
 The independent [Tavily research MCP](WEB_RESEARCH_MCP.md) exposes one game-scoped search tool.
 The host blocks it until its league, participant pair, date, and scheduled start exactly match a
-typed market, game-state, or box-score detail observed in the same turn. The server constructs the query,
+typed market or exact-game sports detail observed in the same turn. The server constructs the query,
 inspects exactly five results, and retains only HTTPS sources naming both teams and the exact date. Typed output preserves
 source title, URL, optional publication date, retrieval time, snippet, relevance, relationship, and
 rejection count. Source text is bounded and untrusted.

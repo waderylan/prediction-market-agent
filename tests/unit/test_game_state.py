@@ -313,6 +313,84 @@ def baseball_box_summary(event=None):
     return result
 
 
+def baseball_play_summary(event=None):
+    result = mlb_summary(event)
+    result["plays"] = [
+        {
+            "id": f"baseball-play-{number}",
+            "sequenceNumber": str(number),
+            "type": {"text": "Pitch" if number != 3 else "Home Run"},
+            "text": text,
+            "awayScore": 2 if number >= 3 else 1,
+            "homeScore": 1,
+            "period": {"type": "Top", "number": 6, "displayValue": "6th Inning"},
+            "scoringPlay": number == 3,
+            "team": {"id": "25"},
+            "wallclock": f"2026-09-20T20:1{number}:00Z",
+            "atBatId": "at-bat-1",
+            "resultCount": {"balls": number % 4, "strikes": min(number - 1, 2)},
+            "outs": 1,
+        }
+        for number, text in enumerate(
+            ["Called strike.", "Ball.", "Home run to left.", "In play, out."], start=1
+        )
+    ]
+    result["plays"].append(
+        {
+            "id": "baseball-structural-marker",
+            "sequenceNumber": "5",
+            "type": {"text": "End Batter/Pitcher", "type": "end-batterpitcher"},
+            "text": None,
+            "period": {"type": "Top", "number": 6, "displayValue": "6th Inning"},
+        }
+    )
+    return result
+
+
+def football_play_summary(event=None):
+    event = deepcopy(event or scoreboard_event(game_status=completed_status()))
+    result = football_summary(event)
+    result["drives"] = {
+        "previous": [
+            {
+                "id": "drive-1",
+                "plays": [
+                    {
+                        "id": f"football-play-{number}",
+                        "sequenceNumber": str(number * 10),
+                        "type": {"text": "Rush" if number != 3 else "Touchdown"},
+                        "text": text,
+                        "awayScore": 7 if number >= 3 else 0,
+                        "homeScore": 0,
+                        "period": {"number": 1 if number < 4 else 2},
+                        "clock": {"displayValue": f"{16 - number}:00"},
+                        "scoringPlay": number == 3,
+                        "teamParticipants": [
+                            {
+                                "id": "29" if number != 4 else "1",
+                                "type": "offense",
+                            }
+                        ],
+                        "isPenalty": number == 2,
+                        "isTurnover": number == 4,
+                        "statYardage": number * 5,
+                        "end": {
+                            "down": min(number + 1, 4),
+                            "distance": 10 - number,
+                            "possessionText": "ATL 20",
+                        },
+                    }
+                    for number, text in enumerate(
+                        ["Run for five.", "Penalty on defense.", "Touchdown run.", "Fumble."],
+                        start=1,
+                    )
+                ],
+            }
+        ]
+    }
+    return result
+
+
 def client_with(handler, *, now=None, max_response_bytes=5 * 1024 * 1024):
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return (
@@ -580,6 +658,111 @@ async def test_player_lookup_rejects_invalid_or_missing_id_without_leaking_other
         await http.aclose()
 
     assert summary_calls == 1
+
+
+async def test_baseball_play_windows_use_stable_ids_filters_and_cache():
+    summary_calls = 0
+
+    def handler(request):
+        nonlocal summary_calls
+        if request.url.path.endswith("/summary"):
+            summary_calls += 1
+            return httpx.Response(200, json=baseball_play_summary())
+        return httpx.Response(200, json={"events": [mlb_event()]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client, "Yankees", "mlb")
+        game_ref = found.games[0].game_ref
+        latest = await client.get_play_by_play(game_ref, limit=2)
+        earlier = await client.get_play_by_play(
+            game_ref, limit=2, before_play_id=latest.first_play_id
+        )
+        unseen = await client.get_play_by_play(
+            game_ref, limit=10, after_play_id=latest.resume_after_play_id
+        )
+        scoring = await client.get_play_by_play(game_ref, limit=10, play_filter="scoring")
+    finally:
+        await http.aclose()
+
+    assert [play.play_id for play in latest.plays] == ["baseball-play-3", "baseball-play-4"]
+    assert latest.has_earlier and not latest.has_later
+    assert latest.next_before_play_id == "baseball-play-3"
+    assert latest.resume_after_play_id == "baseball-play-4"
+    assert [play.play_id for play in earlier.plays] == ["baseball-play-1", "baseball-play-2"]
+    assert earlier.anchor_mode == "before" and earlier.resume_after_play_id == "baseball-play-3"
+    assert unseen.plays == [] and unseen.anchor_mode == "after"
+    assert unseen.resume_after_play_id == "baseball-play-4"
+    assert unseen.has_earlier and not unseen.has_later
+    assert [play.play_id for play in scoring.plays] == ["baseball-play-3"]
+    assert scoring.plays[0].context.sport == "baseball"
+    assert latest.total_plays == 4
+    assert not latest.warnings
+    assert latest.observation_id == earlier.observation_id == unseen.observation_id
+    assert earlier.cache_hit and unseen.cache_hit and scoring.cache_hit
+    assert summary_calls == 1
+
+
+async def test_football_play_windows_support_period_team_and_scoring_filters():
+    def handler(request):
+        if request.url.path.endswith("/summary"):
+            return httpx.Response(200, json=football_play_summary())
+        return httpx.Response(
+            200, json={"events": [scoreboard_event(game_status=completed_status())]}
+        )
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client)
+        game_ref = found.games[0].game_ref
+        latest = await client.get_play_by_play(game_ref, limit=2)
+        scoring = await client.get_play_by_play(game_ref, limit=10, play_filter="scoring")
+        away_first = await client.get_play_by_play(game_ref, limit=10, period=1, team="away")
+    finally:
+        await http.aclose()
+
+    assert [play.play_id for play in latest.plays] == ["football-play-3", "football-play-4"]
+    assert latest.granularity == "play" and latest.total_plays == 4
+    assert latest.plays[-1].context.sport == "football"
+    assert latest.plays[-1].context.turnover is True
+    assert [play.play_id for play in scoring.plays] == ["football-play-3"]
+    assert [play.play_id for play in away_first.plays] == [
+        "football-play-1",
+        "football-play-2",
+        "football-play-3",
+    ]
+    assert away_first.period_filter == 1 and away_first.team_filter == "away"
+
+
+async def test_play_window_rejects_invalid_arguments_before_provider_io():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"events": [scoreboard_event()]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client)
+        game_ref = found.games[0].game_ref
+        calls.clear()
+        with pytest.raises(SportsStateError) as conflict:
+            await client.get_play_by_play(
+                game_ref,
+                before_play_id="play-1",
+                after_play_id="play-2",
+            )
+        assert conflict.value.code == "conflicting_play_anchors"
+        with pytest.raises(SportsStateError) as bad_limit:
+            await client.get_play_by_play(game_ref, limit=51)
+        assert bad_limit.value.code == "invalid_play_limit"
+        with pytest.raises(SportsStateError) as bad_id:
+            await client.get_play_by_play(game_ref, after_play_id="bad play id")
+        assert bad_id.value.code == "invalid_play_id"
+    finally:
+        await http.aclose()
+
+    assert calls == []
 
 
 def test_baseball_phase_rejects_contradictory_state():
@@ -1271,6 +1454,70 @@ async def test_mlb_box_score_fallback_uses_only_game_statistics():
         "batting": "complete",
         "pitching": "complete",
     }
+
+
+async def test_mlb_play_by_play_fallback_returns_bounded_at_bats():
+    feed = fallback_feed()
+    feed["liveData"]["plays"]["allPlays"] = [
+        {
+            "about": {
+                "atBatIndex": 0,
+                "inning": 1,
+                "halfInning": "top",
+                "startTime": "2026-09-20T20:11:00Z",
+                "isScoringPlay": False,
+            },
+            "result": {
+                "event": "Single",
+                "description": "Away Batter singles to center.",
+                "rbi": 0,
+                "awayScore": 0,
+                "homeScore": 0,
+            },
+            "count": {"balls": 0, "strikes": 0, "outs": 0},
+        },
+        {
+            "about": {
+                "atBatIndex": 1,
+                "inning": 1,
+                "halfInning": "top",
+                "startTime": "2026-09-20T20:13:00Z",
+                "isScoringPlay": True,
+            },
+            "result": {
+                "event": "Home Run",
+                "description": "Away Batter homers to left.",
+                "rbi": 2,
+                "awayScore": 2,
+                "homeScore": 0,
+            },
+            "count": {"balls": 0, "strikes": 0, "outs": 0},
+        },
+    ]
+
+    def handler(request):
+        if request.url.host == "site.api.espn.com" and request.url.path.endswith("/scoreboard"):
+            return httpx.Response(200, json={"events": [mlb_event()]})
+        if request.url.host == "site.api.espn.com":
+            return httpx.Response(503)
+        if request.url.path.endswith("/schedule"):
+            return httpx.Response(200, json=fallback_schedule())
+        return httpx.Response(200, json=feed)
+
+    client, http = client_with(handler)
+    try:
+        result = await discover(client, "Yankees", "mlb")
+        plays = await client.get_play_by_play(
+            result.games[0].game_ref, limit=10, play_filter="scoring"
+        )
+    finally:
+        await http.aclose()
+
+    assert plays.source == "mlb_statsapi" and plays.granularity == "at_bat"
+    assert [play.play_id for play in plays.plays] == ["777:1"]
+    assert plays.plays[0].text == "Away Batter homers to left."
+    assert plays.plays[0].team == "San Diego Padres"
+    assert plays.warnings[0].code == "mlb_fallback_used"
 
 
 async def test_mlb_fallback_rejects_ambiguous_doubleheader():

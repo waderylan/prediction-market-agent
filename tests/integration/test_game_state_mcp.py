@@ -94,6 +94,55 @@ def _summary():
         ]
     return {
         "header": {"id": event["id"], "competitions": event["competitions"]},
+        "drives": {
+            "previous": [
+                {
+                    "id": "drive-1",
+                    "plays": [
+                        {
+                            "id": "play-1",
+                            "sequenceNumber": "10",
+                            "type": {"text": "Pass"},
+                            "text": "Pass complete for ten yards.",
+                            "awayScore": 17,
+                            "homeScore": 10,
+                            "period": {"number": 3},
+                            "clock": {"displayValue": "7:21"},
+                            "scoringPlay": False,
+                            "teamParticipants": [{"id": "29", "type": "offense"}],
+                            "isPenalty": False,
+                            "isTurnover": False,
+                            "statYardage": 10,
+                            "end": {
+                                "down": 1,
+                                "distance": 10,
+                                "possessionText": "ATL 11",
+                            },
+                        },
+                        {
+                            "id": "play-2",
+                            "sequenceNumber": "20",
+                            "type": {"text": "Touchdown"},
+                            "text": "Touchdown pass.",
+                            "awayScore": 24,
+                            "homeScore": 10,
+                            "period": {"number": 3},
+                            "clock": {"displayValue": "6:55"},
+                            "scoringPlay": True,
+                            "teamParticipants": [{"id": "29", "type": "offense"}],
+                            "isPenalty": False,
+                            "isTurnover": False,
+                            "statYardage": 11,
+                            "end": {
+                                "down": 1,
+                                "distance": 10,
+                                "possessionText": "ATL 0",
+                            },
+                        },
+                    ],
+                }
+            ]
+        },
         "boxscore": {
             "teams": [
                 {
@@ -197,6 +246,7 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
             "sports_state_get_box_score",
             "sports_state_list_players",
             "sports_state_get_player_stats",
+            "sports_state_get_play_by_play",
         }
         find_schema = tools["sports_state_find_games"].inputSchema
         assert find_schema["additionalProperties"] is False
@@ -217,6 +267,11 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         player_schema = tools["sports_state_get_player_stats"].inputSchema
         assert player_schema["additionalProperties"] is False
         assert set(player_schema["required"]) == {"game_ref", "player_id"}
+        play_schema = tools["sports_state_get_play_by_play"].inputSchema
+        assert play_schema["additionalProperties"] is False
+        assert play_schema["required"] == ["game_ref"]
+        assert play_schema["properties"]["limit"]["minimum"] == 1
+        assert play_schema["properties"]["limit"]["maximum"] == 50
 
         bad = await session.call_tool(
             "sports_state_find_games",
@@ -301,6 +356,22 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
         assert box.structuredContent["is_partial"] is True
         assert sum(request.url.path.endswith("/summary") for request in calls) == 2
 
+        plays = await session.call_tool(
+            "sports_state_get_play_by_play",
+            {"game_ref": game["game_ref"], "limit": 1, "play_filter": "scoring"},
+        )
+        assert not plays.isError
+        validate(plays.structuredContent, tools["sports_state_get_play_by_play"].outputSchema)
+        assert [play["play_id"] for play in plays.structuredContent["plays"]] == ["play-2"]
+        assert plays.structuredContent["resume_after_play_id"] == "play-2"
+        assert plays.structuredContent["requested_limit"] == 1
+        after = await session.call_tool(
+            "sports_state_get_play_by_play",
+            {"game_ref": game["game_ref"], "after_play_id": "play-2", "limit": 5},
+        )
+        assert not after.isError and after.structuredContent["plays"] == []
+        assert after.structuredContent["resume_after_play_id"] == "play-2"
+
         players = await session.call_tool(
             "sports_state_list_players", {"game_ref": game["game_ref"]}
         )
@@ -324,7 +395,7 @@ async def test_schemas_discovery_detail_and_cache_are_real_mcp_calls():
             player.structuredContent["observation_id"]
             == players.structuredContent["observation_id"]
         )
-        assert sum(request.url.path.endswith("/summary") for request in calls) == 2
+        assert sum(request.url.path.endswith("/summary") for request in calls) == 3
 
 
 async def test_invalid_reference_is_stable_error_before_provider_io():
@@ -377,7 +448,7 @@ async def test_identity_conflict_is_controlled_and_session_survives():
         ref = found.structuredContent["games"][0]["game_ref"]
         detail = await session.call_tool("sports_state_get_game_state", {"game_ref": ref})
         assert detail.isError and "response_identity_mismatch" in str(detail)
-        assert len((await session.list_tools()).tools) == 5
+        assert len((await session.list_tools()).tools) == 6
 
 
 async def test_agent_selects_game_state_tools_and_enforces_result_notice():
@@ -515,6 +586,54 @@ async def test_agent_lists_players_then_gets_one_narrow_stat_result():
         "label": "YDS",
         "value": "250",
     }
+
+
+async def test_agent_selects_bounded_play_by_play_and_records_typed_result():
+    @asynccontextmanager
+    async def connect():
+        async with protocol() as (session, _):
+            yield await load_mcp_tools(session)
+
+    async with protocol() as (session, _):
+        found = await session.call_tool(
+            "sports_state_find_games",
+            {
+                "query": "Falcons",
+                "league": "nfl",
+                "timezone": "UTC",
+                "local_date": "2026-09-20",
+            },
+        )
+        game_ref = found.structuredContent["games"][0]["game_ref"]
+    model = ScriptedModel(
+        replies=[
+            tool_call(
+                "sports_state_find_games",
+                {
+                    "query": "Falcons",
+                    "league": "nfl",
+                    "timezone": "UTC",
+                    "local_date": "2026-09-20",
+                },
+                "play-search",
+            ),
+            tool_call(
+                "sports_state_get_play_by_play",
+                {"game_ref": game_ref, "limit": 1, "play_filter": "scoring"},
+                "play-detail",
+            ),
+            AIMessage("The latest scoring play was a touchdown pass."),
+        ]
+    )
+    response = await ChatAgent(model, connect).chat(
+        "Show the latest scoring play in the Falcons game", "play-by-play"
+    )
+    assert response.startswith("- Play-by-play: espn observed at ")
+    assert response.endswith("The latest scoring play was a touchdown pass.")
+    messages = [message for message in model.observed[-1] if isinstance(message, ToolMessage)]
+    result = json.loads(messages[-1].content)
+    assert result["play_by_play"]["plays"][0]["play_id"] == "play-2"
+    assert result["play_by_play"]["resume_after_play_id"] == "play-2"
 
 
 async def test_irrelevant_question_uses_no_game_state_tool():

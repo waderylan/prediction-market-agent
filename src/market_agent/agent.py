@@ -37,6 +37,7 @@ from market_agent.providers.game_state import (
     BoxScore,
     FindGamesResult,
     GameState,
+    PlayByPlay,
     PlayerDirectory,
     PlayerStats,
 )
@@ -73,8 +74,9 @@ choosing silently. Treat discovery warnings as skipped unsafe records, not proof
 games are unusable. Tool errors with JSON error.code and fields identify arguments to correct; do
 not retry the same invalid arguments or switch providers.
 Use sports_state tools only for a requested current/recent game score, lifecycle, in-game
-situation, box score, team totals, or player game statistics, or when that state is necessary for
-an explicitly requested analysis. First call sports_state_find_games with an explicit league and
+situation, box score, team totals, player game statistics, or chronological plays, or when that
+detail is necessary for an explicitly requested analysis. First call sports_state_find_games with
+an explicit league and
 IANA timezone, then copy one returned game_ref unchanged into the requested detail tool. Use
 sports_state_get_game_state for what is happening now: score, inning/count/runners/batter/pitcher,
 or football possession/down/distance/field position. Use sports_state_get_box_score for
@@ -82,10 +84,16 @@ inning-or-period scoring and team statistics. For one player's game statistics, 
 sports_state_list_players with the chosen game_ref, then copy the returned player_id unchanged
 with the same game_ref into sports_state_get_player_stats. The player directory contains only
 players with provider-backed game-stat lines and is not a season roster.
+Use sports_state_get_play_by_play for chronological game events. The default latest window is
+bounded; vary limit from 1 to 50, use before_play_id to page backward, and use after_play_id with
+the returned resume_after_play_id to retrieve only later unseen plays. Copy play IDs unchanged.
+Use period, home/away team, or scoring filters only when they match the user's question. Returned
+plays are chronological even when the request starts from the latest window.
 Never construct a game_ref or pass an ESPN event ID, MLB gamePk, team, or date to a detail tool.
-Do not use Tavily for structured box-score statistics. If discovery returns multiple games,
+Do not use Tavily for structured sports state, statistics, or plays. If discovery returns multiple
+games,
 present the choices instead of selecting silently. Discovery is a lightweight game picker; always
-use the appropriate detail tool for authoritative current state or box-score fields.
+use the appropriate detail tool for authoritative exact-game fields.
 When discovery requests clarification, show its exact retry guidance and choices. References are
 timezone-scoped, so reuse the reference from the chosen discovery response without comparing token
 text across timezone searches. For a same-day league slate, use query="all"; it is bounded to ten
@@ -170,6 +178,7 @@ class AgentState(MessagesState):
     game_states: list[dict[str, Any]]
     box_scores: list[dict[str, Any]]
     player_stats: list[dict[str, Any]]
+    play_by_play: list[dict[str, Any]]
     research_results: list[dict[str, Any]]
     matching_report: dict[str, Any] | None
     activity: list[dict[str, Any]]
@@ -212,6 +221,11 @@ def _safe_tool_arguments(arguments: dict[str, Any]) -> dict[str, str | int | Non
         "continuation",
         "game_ref",
         "player_id",
+        "before_play_id",
+        "after_play_id",
+        "play_filter",
+        "period",
+        "team",
         "league",
         "compact",
         "team_a",
@@ -236,6 +250,7 @@ ToolResult = (
     | BoxScore
     | PlayerDirectory
     | PlayerStats
+    | PlayByPlay
     | GameResearchResult
 )
 
@@ -274,6 +289,12 @@ def _tool_summary(validated: ToolResult) -> str:
             f"Retrieved {validated.player_name}'s {validated.sport} game statistics for "
             f"{validated.team}; source {validated.source}."
         )
+    if isinstance(validated, PlayByPlay):
+        return (
+            f"Retrieved {len(validated.plays)} of {validated.matching_plays} matching plays "
+            f"for {validated.away_team.name} at {validated.home_team.name}; "
+            f"source {validated.source}."
+        )
     if isinstance(validated, SeriesResults):
         return f"Found {len(validated.series)} candidate series."
     if isinstance(validated, SearchResults):
@@ -306,6 +327,8 @@ def _tool_result_schema(
         return PlayerDirectory
     if tool_name == "sports_state_get_player_stats":
         return PlayerStats
+    if tool_name == "sports_state_get_play_by_play":
+        return PlayByPlay
     if tool_name == "kalshi_search_series":
         return SeriesResults
     if tool_name == "kalshi_search_markets":
@@ -371,6 +394,33 @@ def _validate_tool_result(
         if validated.sport != expected_sport:
             raise ValueError("Player-stat league mismatch")
         return validated
+    if isinstance(validated, PlayByPlay):
+        if validated.game_ref != arguments.get("game_ref"):
+            raise ValueError("Play-by-play game reference mismatch")
+        expected_sport = "baseball" if validated.league == "mlb" else "football"
+        if validated.sport != expected_sport:
+            raise ValueError("Play-by-play league mismatch")
+        if validated.requested_limit != arguments.get("limit", 20):
+            raise ValueError("Play-by-play limit mismatch")
+        if validated.play_filter != arguments.get("play_filter", "all"):
+            raise ValueError("Play-by-play filter mismatch")
+        if validated.period_filter != arguments.get("period"):
+            raise ValueError("Play-by-play period mismatch")
+        if validated.team_filter != arguments.get("team"):
+            raise ValueError("Play-by-play team mismatch")
+        expected_anchor = arguments.get("before_play_id") or arguments.get("after_play_id")
+        if validated.anchor_play_id != expected_anchor:
+            raise ValueError("Play-by-play anchor mismatch")
+        expected_mode = (
+            "before"
+            if arguments.get("before_play_id") is not None
+            else "after"
+            if arguments.get("after_play_id") is not None
+            else "latest"
+        )
+        if validated.anchor_mode != expected_mode:
+            raise ValueError("Play-by-play anchor mode mismatch")
+        return validated
 
     markets = []
     if isinstance(validated, SearchResults):
@@ -412,26 +462,38 @@ def _record_player_stats(
     return [*retained, snapshot]
 
 
+def _record_play_by_play(
+    play_by_play: list[dict[str, Any]], result: PlayByPlay
+) -> list[dict[str, Any]]:
+    snapshot = result.model_dump(mode="json")
+    retained = [saved for saved in play_by_play if saved["game_ref"] != result.game_ref]
+    return [*retained, snapshot]
+
+
 def _sports_state_notice(
     states: list[dict[str, Any]],
     box_scores: list[dict[str, Any]],
     player_stats: list[dict[str, Any]],
+    play_by_play: list[dict[str, Any]],
 ) -> str | None:
-    if not states and not box_scores and not player_stats:
+    if not states and not box_scores and not player_stats and not play_by_play:
         return None
-    observations: list[GameState | BoxScore | PlayerStats] = [
+    observations: list[GameState | BoxScore | PlayerStats | PlayByPlay] = [
         *(GameState.model_validate(state) for state in states),
         *(BoxScore.model_validate(score) for score in box_scores),
         *(PlayerStats.model_validate(stats) for stats in player_stats),
+        *(PlayByPlay.model_validate(plays) for plays in play_by_play),
     ]
     latest = max(observations, key=lambda observation: observation.retrieved_at)
     label = (
         "Game state"
-        if states and not box_scores and not player_stats
+        if states and not box_scores and not player_stats and not play_by_play
         else "Player stats"
-        if player_stats and not states and not box_scores
+        if player_stats and not states and not box_scores and not play_by_play
+        else "Play-by-play"
+        if play_by_play and not states and not box_scores and not player_stats
         else "Box score"
-        if box_scores and not states and not player_stats
+        if box_scores and not states and not player_stats and not play_by_play
         else "Sports data"
     )
     return (
@@ -460,6 +522,7 @@ def _research_context_matches(
     game_states: list[dict[str, Any]],
     box_scores: list[dict[str, Any]],
     player_stats: list[dict[str, Any]],
+    play_by_play: list[dict[str, Any]],
 ) -> bool:
     """Require research arguments to match a typed detail observation in this turn."""
 
@@ -521,6 +584,16 @@ def _research_context_matches(
             and abs((stats.scheduled_start - requested_start).total_seconds()) <= 60
         ):
             return True
+    for saved in play_by_play:
+        plays = PlayByPlay.model_validate(saved)
+        if (
+            plays.league == requested_league
+            and {plays.home_team.name.casefold(), plays.away_team.name.casefold()}
+            == requested_teams
+            and plays.local_date == requested_date
+            and abs((plays.scheduled_start - requested_start).total_seconds()) <= 60
+        ):
+            return True
     return False
 
 
@@ -566,6 +639,7 @@ def _matching_report(
     game_states: list[dict[str, Any]],
     box_scores: list[dict[str, Any]],
     player_stats: list[dict[str, Any]],
+    play_by_play: list[dict[str, Any]],
 ) -> MatchingReport | None:
     # The per-turn tool budget bounds this list to four snapshots.
     contracts = [ContractEvidence.model_validate(saved) for saved in details]
@@ -597,6 +671,19 @@ def _matching_report(
             scheduled_start=stats.scheduled_start,
             retrieved_at=stats.retrieved_at,
             lifecycle=stats.lifecycle,
+        )
+    for saved in play_by_play:
+        plays = PlayByPlay.model_validate(saved)
+        games_by_ref[plays.game_ref] = GameEvidence(
+            league=plays.league,
+            game_ref=plays.game_ref,
+            source=plays.source,
+            provider_game_id=plays.provider_game_id,
+            home_team=plays.home_team.name,
+            away_team=plays.away_team.name,
+            scheduled_start=plays.scheduled_start,
+            retrieved_at=plays.retrieved_at,
+            lifecycle=plays.lifecycle,
         )
     report = match_candidates(
         [market for market in contracts if market.platform == Platform.POLYMARKET],
@@ -683,6 +770,7 @@ class ChatAgent:
             game_states = list(state["game_states"])
             box_scores = list(state["box_scores"])
             player_stats = list(state["player_stats"])
+            play_by_play = list(state["play_by_play"])
             research_results = list(state["research_results"])
             matching_report = state["matching_report"]
             activity = list(state["activity"])
@@ -709,7 +797,12 @@ class ChatAgent:
                             content = "Research search budget reached. Use available sources."
                             summary = "Research search budget reached before this call could run."
                         elif not _research_context_matches(
-                            call["args"], details, game_states, box_scores, player_stats
+                            call["args"],
+                            details,
+                            game_states,
+                            box_scores,
+                            player_stats,
+                            play_by_play,
                         ):
                             allowed = False
                             activity_status = "skipped"
@@ -744,7 +837,11 @@ class ChatAgent:
                                 if isinstance(validated, MarketDetail):
                                     details = _record_market_detail(details, validated)
                                     report = _matching_report(
-                                        details, game_states, box_scores, player_stats
+                                        details,
+                                        game_states,
+                                        box_scores,
+                                        player_stats,
+                                        play_by_play,
                                     )
                                     additions: dict[str, Any] = {
                                         "market": validated.model_dump(mode="json")
@@ -767,7 +864,11 @@ class ChatAgent:
                                 elif isinstance(validated, GameState):
                                     game_states = _record_game_state(game_states, validated)
                                     report = _matching_report(
-                                        details, game_states, box_scores, player_stats
+                                        details,
+                                        game_states,
+                                        box_scores,
+                                        player_stats,
+                                        play_by_play,
                                     )
                                     additions = {
                                         "game_state": validated.model_dump(mode="json"),
@@ -783,7 +884,11 @@ class ChatAgent:
                                 elif isinstance(validated, BoxScore):
                                     box_scores = _record_box_score(box_scores, validated)
                                     report = _matching_report(
-                                        details, game_states, box_scores, player_stats
+                                        details,
+                                        game_states,
+                                        box_scores,
+                                        player_stats,
+                                        play_by_play,
                                     )
                                     additions = {
                                         "box_score": validated.model_dump(mode="json"),
@@ -799,13 +904,37 @@ class ChatAgent:
                                 elif isinstance(validated, PlayerStats):
                                     player_stats = _record_player_stats(player_stats, validated)
                                     report = _matching_report(
-                                        details, game_states, box_scores, player_stats
+                                        details,
+                                        game_states,
+                                        box_scores,
+                                        player_stats,
+                                        play_by_play,
                                     )
                                     additions = {
                                         "player_stats": validated.model_dump(mode="json"),
                                         "market_settlement_notice": (
                                             "Sporting statistics do not establish market "
                                             "settlement or contract equivalence."
+                                        ),
+                                    }
+                                    if report is not None:
+                                        matching_report = report.model_dump(mode="json")
+                                        additions["matching_report"] = matching_report
+                                    content = json.dumps(additions)
+                                elif isinstance(validated, PlayByPlay):
+                                    play_by_play = _record_play_by_play(play_by_play, validated)
+                                    report = _matching_report(
+                                        details,
+                                        game_states,
+                                        box_scores,
+                                        player_stats,
+                                        play_by_play,
+                                    )
+                                    additions = {
+                                        "play_by_play": validated.model_dump(mode="json"),
+                                        "market_settlement_notice": (
+                                            "Sporting plays do not establish market settlement "
+                                            "or contract equivalence."
                                         ),
                                     }
                                     if report is not None:
@@ -863,6 +992,7 @@ class ChatAgent:
                 "game_states": game_states,
                 "box_scores": box_scores,
                 "player_stats": player_stats,
+                "play_by_play": play_by_play,
                 "research_results": research_results,
                 "matching_report": matching_report,
                 "activity": activity,
@@ -939,6 +1069,7 @@ class ChatAgent:
                             "game_states": [],
                             "box_scores": [],
                             "player_stats": [],
+                            "play_by_play": [],
                             "research_results": [],
                             "matching_report": None,
                             "activity": [],
@@ -955,6 +1086,7 @@ class ChatAgent:
                         result.get("game_states", []),
                         result.get("box_scores", []),
                         result.get("player_stats", []),
+                        result.get("play_by_play", []),
                     ):
                         answer = sports_notice + "\n\n" + answer
                     if research_notice := _research_notice(result.get("research_results", [])):

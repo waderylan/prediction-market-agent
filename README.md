@@ -2,9 +2,9 @@
 
 A read-only CSCI 599 course project for sports prediction-market research on Kalshi and
 Polymarket. Initial support covers MLB, NFL, and NCAA Division I football game winners.
-Four application MCP servers provide market discovery on each platform, current game state and
-box scores from ESPN with an exact-identity MLB StatsAPI fallback, and bounded Tavily research for
-one identified game. None place orders or access accounts.
+Four application MCP servers provide market discovery on each platform, exact-game state,
+statistics, and play history from ESPN with an exact-identity MLB StatsAPI fallback, and bounded
+Tavily research for one identified game. None place orders or access accounts.
 
 Start with `kalshi_search_markets(query="Yankees")` or
 `polymarket_search_markets(query="Chiefs vs Bills")`. No exchange taxonomy or constructed
@@ -17,12 +17,14 @@ Use the same reference with `sports_state_get_box_score` for inning or period sc
 totals. For one player's game line, call `sports_state_list_players`, then copy its stable
 `player_id` into `sports_state_get_player_stats` with the same `game_ref`. Structured sports
 statistics never require Tavily.
+Use `sports_state_get_play_by_play` for a bounded chronological play window. Copy returned play
+IDs into `before_play_id` to page backward or `after_play_id` to retrieve only later unseen plays.
 
 ## What is implemented
 
 | Capability | Current behavior |
 |---|---|
-| Four independent MCP servers | Kalshi, Polymarket, sports state/box scores, and bounded Tavily research; real stdio discovery and calls |
+| Four independent MCP servers | Kalshi, Polymarket, exact-game sports detail, and bounded Tavily research; real stdio discovery and calls |
 | Sports discovery | MLB, NFL, NCAA Division I FBS/FCS; full-game winners only |
 | Team identity | Exact aliases from a reviewed provider catalog; same-city teams stay distinct |
 | Candidate selection | Results group both outcome contracts by game; separate event IDs preserve doubleheaders |
@@ -32,6 +34,7 @@ statistics never require Tavily.
 | Contract detail | Rules, game/close/resolution clocks, consumer links, and explicit settlement results |
 | Current game state | ESPN scores/lifecycle/situations; MLB StatsAPI fallback after exact identity matching |
 | Exact-game box scores | MLB inning/team/batting/pitching lines and NFL/NCAA period/team/player statistics from the discovery `game_ref` |
+| Player and play detail | Compact player selection, single-player game lines, and stable-ID play windows with paging and focused filters |
 | Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
 | Current web evidence | At most two game-scoped Tavily searches; five inspected results each; exact participant/date plus requested-focus filtering, authority ordering, and source provenance |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
@@ -54,7 +57,7 @@ checks, and tests; they are not enabled by adding team aliases. See the
 [implementation plan](docs/planning/IMPLEMENTATION_PLAN.md) for acceptance criteria.
 
 Read [Sports market MCP design](docs/research/SPORTS_MCP.md) for market discovery,
-[Sports-state MCP design](docs/research/GAME_STATE_MCP.md) for live-state and box-score contracts, and
+[Sports-state MCP design](docs/research/GAME_STATE_MCP.md) for state, statistics, and play contracts, and
 [Tavily research MCP design](docs/research/WEB_RESEARCH_MCP.md) for current-evidence identity,
 budgets, provenance, trust boundaries, errors, and provider limitations.
 
@@ -115,6 +118,7 @@ Interactive HTTP documentation is at `/docs`.
 | `sports_state_get_box_score` | Exact opaque `game_ref` copied unchanged from discovery; no other selector |
 | `sports_state_list_players` | Exact opaque `game_ref`; returns compact player IDs, names, teams, and available game-stat groups |
 | `sports_state_get_player_stats` | Exact opaque `game_ref` plus one unchanged `player_id` returned by the player-list tool |
+| `sports_state_get_play_by_play` | Exact opaque `game_ref`; optional `limit=1..50`, mutually exclusive before/after play ID, scoring, period, and home/away filters |
 | `tavily_search_game_evidence` | Exact `league`, `team_a`, `team_b`, `game_date`, `scheduled_start`, and focus copied from market/game detail |
 
 - Limits are strict integers from 1 through 10 in the client-visible MCP schema.
@@ -167,6 +171,12 @@ Interactive HTTP documentation is at `/docs`.
   only players with provider-backed game-stat lines, not a full active or season roster.
 - Player detail returns one selected MLB batting/pitching line or one selected football player's
   categorized lines. It omits unrelated players and reuses the box-score cache and observation ID.
+- Play-by-play returns chronological bounded windows with stable provider-backed play IDs. The
+  default is the latest 20 plays; `before_play_id` pages backward and `after_play_id` returns later
+  unseen plays. Optional scoring, period, and home/away filters apply before the 1-50 result limit.
+- ESPN supplies pitch/action granularity for MLB and play granularity for football. Exact-identity
+  MLB StatsAPI fallback supplies at-bat granularity. Each response reports the granularity,
+  matching count, earlier/later availability, paging anchors, observation identity, and warnings.
 - Optional box-score fields unavailable from the provider are omitted. The `completeness` object,
   `is_partial`, and `warnings` distinguish complete, partial, and unavailable sections. Baseball
   inning runs retain semantic null only when a team has not batted in that inning; zero means a
@@ -178,9 +188,9 @@ Interactive HTTP documentation is at `/docs`.
   play, provider transitions, completed games, and unavailable situation data.
 - ESPN is free, unauthenticated, undocumented, and has no SLA. MLB StatsAPI is the MLB-only
   fallback; NFL and NCAA failures return controlled unavailability without substitution.
-- Tavily research is blocked until one typed game-state or box-score detail establishes league,
+- Tavily research is blocked until one typed exact-game sports detail establishes league,
   both teams, and date. It supplies game news, injuries, lineups, weather, and schedule context,
-  never structured box-score data.
+  never structured sports state, statistics, or plays.
   The server constructs the query and retains at most five HTTPS results naming both teams and the
   exact date with text relevant to the requested focus. Focus values are `injuries`, `lineups`,
   `weather`, `venue_or_schedule`, and `other_game_news`.
@@ -250,10 +260,10 @@ uv run pytest tests/live/test_game_state_mcp_live.py tests/live/test_sports_mcp_
 Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
-The sports live checks discover schemas, reject `limit=20`, search all three supported leagues,
-retrieve exact game state and box scores when available, and make one bounded real Tavily MCP
-call. Empty current slates or evidence sets are valid. They do not fabricate an expected open
-game. See [Testing](docs/research/TESTING.md) for test boundaries
+The sports live checks discover schemas, reject an invalid discovery limit, search all three
+supported leagues, retrieve exact state, box scores, player detail, and play windows when
+available, and make one bounded real Tavily MCP call. Empty current slates or evidence sets are
+valid. They do not fabricate an expected open game. See [Testing](docs/research/TESTING.md) for test boundaries
 and [Provider contracts](docs/research/MARKET_API_FEASIBILITY.md) for primary sources.
 
 Real-model checks are separate: configure a backend, set `RUN_LIVE_AGENT=1`, and run
@@ -348,7 +358,7 @@ The application uses [LangGraph](https://docs.langchain.com/oss/python/langgraph
 ## Documentation map
 
 - [Sports MCP design and catalog maintenance](docs/research/SPORTS_MCP.md)
-- [Sports state and box-score MCP design](docs/research/GAME_STATE_MCP.md)
+- [Sports game-detail MCP design](docs/research/GAME_STATE_MCP.md)
 - [Bounded Tavily research MCP design](docs/research/WEB_RESEARCH_MCP.md)
 - [Runtime architecture](docs/research/MCP_VERTICAL_SLICE.md)
 - [Provider contracts and field mapping](docs/research/MARKET_API_FEASIBILITY.md)

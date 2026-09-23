@@ -101,6 +101,9 @@ The game-state suite additionally verifies:
   integer outs normalization, ESPN partial-field reporting, and exact MLB StatsAPI fallback.
 - Football period scoring, named team statistics, categorized stable-player statistics, completed
   games, live cache bounds, content-derived observation IDs, and omission of unavailable fields.
+- Stable-ID play windows for MLB, NFL, and NCAA football; latest, before, and later-unseen
+  navigation; chronological ordering; scoring, period, and team filters; bounded malformed-play
+  warnings; lifecycle-aware caching; and exact MLB at-bat fallback.
 
 The Tavily suite additionally verifies:
 
@@ -124,8 +127,8 @@ Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
 These are bounded public reads. Sports tests check all supported leagues, schema discovery,
-`limit=20` rejection, coverage bounds, and current-state, box-score, player-list, and single-player
-detail for returned candidates.
+`limit=20` discovery rejection, coverage bounds, and current-state, box-score, player-list,
+single-player detail, and bounded play-by-play for returned candidates.
 An empty current result is valid; exact historical/open-game identity belongs in fixtures.
 
 A real-market replay over ten prior-day NCAA games and ten current-day games from each of NFL and
