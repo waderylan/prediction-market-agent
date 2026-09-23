@@ -184,12 +184,21 @@ Gamma public search accepts a free-text query and a league tag slug:
 `mlb`, `nfl`, or `cfb`. The server uses these verified slugs, not display labels such as
 `CFB (All)`; labels are not interchangeable with search tag values.
 
-Search uses one resolved team, then requires all requested participants locally. Professional
-queries use a unique exact nickname alias when the catalog supplies one; league tags prevent
-that nickname from crossing into another competition. College game
-titles use school names, so the server searches the school name rather than a mascot-heavy
-full name that primarily finds futures. It disables profile/tag search and reduced optimized
-responses, preserving numeric Gamma IDs and order-acceptance fields.
+Search uses every resolved participant in a matchup, then requires those same participants
+locally. Gamma indexes MLB event titles by full club names, NFL titles by nicknames, and college
+football titles by school names, so the server generates provider-specific two-team terms from
+reviewed catalog identities. One-team requests retain the unique nickname or school-name form.
+This matters most for completed games: a broad single-nickname query can contain hundreds of
+ranked results and bury the requested matchup outside the three-page budget, while an exact
+two-team query keeps the bounded traversal useful.
+
+The server does not rely on free-text date ranking. When `local_date` or a date range is supplied,
+it converts that calendar window through the requested IANA timezone and requires the provider's
+`gameStartTime` to fall inside the resulting half-open UTC range. Provider event-listing dates are
+not substituted for game start dates. This preserves exact local-date behavior near midnight and
+for historical games even when Gamma indexed the event several days before first pitch or kickoff.
+Search also disables profile/tag search and reduced optimized responses, preserving numeric Gamma
+IDs and order-acceptance fields.
 
 The server admits only contracts with `sportsMarketType="moneyline"`, a supported league
 tag, and two distinct recognized team outcomes. A future with YES/NO outcomes, a total, a

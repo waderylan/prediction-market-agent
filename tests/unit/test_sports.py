@@ -14,6 +14,7 @@ from market_agent.providers import KalshiClient, MarketValidationError, Polymark
 from market_agent.providers.sports import date_bounds, participant, resolve_query, teams
 from market_agent.providers.sports_search import (
     KALSHI_SERIES,
+    _polymarket_search_terms,
     kalshi_event,
     poly_event,
     search_kalshi,
@@ -152,6 +153,25 @@ def test_team_catalog_and_same_city_identity():
     assert resolve_query("Bitcoin").league is None
 
 
+@pytest.mark.parametrize(
+    "query,expected_query,expected_tag",
+    [
+        ("Marlins vs Padres", "Miami Marlins vs San Diego Padres", "mlb"),
+        ("Bengals vs Texans", "Bengals vs Texans", "nfl"),
+        (
+            "NCAA football Coastal Carolina vs Delaware",
+            "Coastal Carolina vs Delaware",
+            "cfb",
+        ),
+        ("NCAA football Michigan", "Michigan", "cfb"),
+    ],
+)
+def test_polymarket_search_terms_preserve_the_full_requested_matchup(
+    query, expected_query, expected_tag
+):
+    assert _polymarket_search_terms(resolve_query(query)) == (expected_query, expected_tag)
+
+
 async def test_kalshi_automatic_series_wrong_opponents_siblings_and_doubleheaders():
     event, milestone = kalshi_fixture()
     second, second_milestone = kalshi_fixture("KXMLBGAME-OPAQUE-2")
@@ -229,6 +249,7 @@ async def test_poly_siblings_wrong_opponents_pagination_named_prices():
 
     def handler(request):
         calls.append(request)
+        assert request.url.params["q"] == "New York Yankees vs San Diego Padres"
         assert request.url.params["events_tag"] == "mlb"
         assert request.url.params["optimized"] == "false"
         return httpx.Response(
@@ -260,6 +281,42 @@ async def test_poly_siblings_wrong_opponents_pagination_named_prices():
     assert summary.provider_last_trade_outcome is None
     assert summary.market_url == "https://polymarket.com/market/provider-slug"
     assert summary.api_url.startswith("https://gamma-api.polymarket.com/")
+
+
+async def test_polymarket_matchup_query_and_local_date_find_a_prior_game_on_page_two():
+    earlier = poly_fixture("1016819", "4610001", ("Miami Marlins", "San Diego Padres"))
+    target = poly_fixture("1022709", "4610002", ("Miami Marlins", "San Diego Padres"))
+    target["startTime"] = "2026-09-20T20:10:00Z"
+    target["markets"][0]["gameStartTime"] = "2026-09-20T20:10:00Z"
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.url.params["q"] == "Miami Marlins vs San Diego Padres"
+        page = int(request.url.params["page"])
+        return httpx.Response(
+            200,
+            json={
+                "events": [earlier] if page == 1 else [target],
+                "pagination": {"hasMore": page == 1, "totalResults": 6},
+            },
+        )
+
+    start, end, zone = date_bounds(local_date=date(2026, 9, 20), timezone="America/Los_Angeles")
+    async with http_client(handler, "polymarket") as http:
+        markets, coverage = await search_polymarket(
+            PolymarketClient(http_client=http),
+            resolve_query("Miami Marlins vs San Diego Padres"),
+            status=None,
+            limit=10,
+            date_range=(start, end),
+            timezone=zone.key,
+        )
+
+    assert len(calls) == 2
+    assert [market.event_id for market in markets] == ["1022709"]
+    assert markets[0].provider_data["sports"]["local_date"] == "2026-09-20"
+    assert coverage.events_scanned == 2 and not coverage.truncated
 
 
 @pytest.mark.parametrize("provider", ["kalshi", "polymarket"])

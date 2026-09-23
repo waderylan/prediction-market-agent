@@ -355,6 +355,9 @@ Multi-server MCP client
   explicit rule truncation, sanitized errors, and lifespan-owned HTTP resources.
 - Sports search supports exact team resolution, game grouping, local calendar filters, lifecycle,
   freshness, settlement, opaque continuation, and detail-context preservation.
+- Polymarket matchup search sends both resolved participants using MLB full names, NFL nicknames,
+  or college school names. Supplied dates are strict timezone-aware `gameStartTime` filters, so
+  historical games do not depend on a broad single-team result ranking.
 - Real protocol tests cover discovery, declared schemas, successful calls, invalid arguments,
   provider failures, malformed data, and bounded public smoke checks.
 
@@ -976,6 +979,16 @@ only because it has already been implemented.
 - Connect the supported Tavily MCP as a fourth server after the sports-state MCP.
 - Run research only after one sports event is identified and a viable primary pair or clearly
   scoped single-platform request exists.
+- In the conversational agent, Tavily must never be the first MCP call. The same turn must first
+  obtain typed game detail through either a market search followed by exact market detail or
+  sports-state discovery followed by exact game-state detail. Discovery alone and conversation
+  memory do not authorize research.
+- Before any Tavily network request, host code must verify that the requested league, unordered
+  participant pair, local game date, and scheduled start match that same-turn typed detail. A
+  missing or altered identity skips the Tavily call rather than searching a guessed game.
+- Keep this mandatory agent call-order gate distinct from the standalone Tavily MCP. A direct MCP
+  client may call the structured tool itself, but it does not receive the conversational host's
+  same-turn identity guarantee.
 - Track search and extraction counts in per-request graph state.
 - Start with these provisional limits:
   - At most two searches.
@@ -992,6 +1005,8 @@ only because it has already been implemented.
 #### Exit Criteria
 
 - The selected research tools are discovered and invoked through MCP.
+- Agent tests prove Tavily cannot run first, cannot run from discovery or memory alone, and makes
+  no provider request when its identity differs from same-turn typed detail.
 - Search budgets cannot be exceeded by repeated model requests.
 - Responses cite the evidence actually retrieved.
 - Search failure produces a useful partial answer rather than a server error.
@@ -1014,7 +1029,13 @@ only because it has already been implemented.
 - Research is host-blocked until supplied league, teams, game date, and scheduled start exactly
   match a typed market detail or game-state detail from the same turn. Each server call constructs
   its query, requests exactly five results, retains only HTTPS results naming both teams and the
-  exact date, and returns bounded snippets as explicitly untrusted data.
+  exact date with text relevant to the requested focus, and returns bounded snippets as explicitly
+  untrusted data. Same-matchup ticket, hotel, and generic event pages are rejected for injuries,
+  lineups, weather, and venue/schedule evidence when their text does not match that focus.
+- Therefore the conversational path always has a prerequisite MCP sequence: market search plus
+  market detail, or sports-state discovery plus game-state detail, before Tavily. Tavily cannot be
+  the agent's first MCP call, and prior-session memory does not bypass this same-turn requirement.
+  The standalone MCP remains directly callable for inspection, without that host-level guarantee.
 - Per-turn graph state permits at most two research searches in addition to the existing four
   market/state calls. Search failures remain tool-level errors and the agent answers with already
   verified market or game evidence.

@@ -22,13 +22,13 @@ then copy one returned `game_ref` unchanged into `sports_state_get_game_state`.
 | Sports discovery | MLB, NFL, NCAA Division I FBS/FCS; full-game winners only |
 | Team identity | Exact aliases from a reviewed provider catalog; same-city teams stay distinct |
 | Candidate selection | Results group both outcome contracts by game; separate event IDs preserve doubleheaders |
-| Dates | Exact local dates, ranges, next/most-recent selection, and IANA timezones |
+| Dates | Exact local dates and ranges matched against provider game-start time in an IANA timezone; next/most-recent selection |
 | Prices | Honest nullable quote clocks, explicit observation identity/cache reuse, stale flags, snapshots, trades, bids, and complements |
 | Coverage | Actual pages/events/contracts scanned, partial-result warnings, truncation, continuation evidence, and scoped totals |
 | Contract detail | Rules, game/close/resolution clocks, consumer links, and explicit settlement results |
 | Current game state | ESPN scores/lifecycle/situations; MLB StatsAPI fallback after exact identity matching |
 | Game-state identity | Opaque checksummed discovery references; league, teams, date, and start revalidated on detail |
-| Current web evidence | At most two game-scoped Tavily searches; five inspected results each; exact participant/date filtering and source provenance |
+| Current web evidence | At most two game-scoped Tavily searches; five inspected results each; exact participant/date plus requested-focus filtering and source provenance |
 | Application | FastAPI, LangGraph tool loop, session memory, local inspection UI |
 | Comparison boundary | Typed event, named-outcome, and settlement checks run before synthesis for supported full-game winners |
 | Comparison policy | Deterministic identity plus core settlement checks; unsupported or differing full rules cannot authorize price comparison |
@@ -159,8 +159,8 @@ Interactive HTTP documentation is at `/docs`.
   fallback; NFL and NCAA failures return controlled unavailability without substitution.
 - Tavily research is blocked until one typed game detail establishes league, both teams, and date.
   The server constructs the query and retains at most five HTTPS results naming both teams and the
-  exact date. Focus values are `injuries`, `lineups`, `weather`, `venue_or_schedule`, and
-  `other_game_news`.
+  exact date with text relevant to the requested focus. Focus values are `injuries`, `lineups`,
+  `weather`, `venue_or_schedule`, and `other_game_news`.
 - Each turn permits at most two Tavily searches in addition to four market/state attempts. Tavily
   titles and snippets are bounded untrusted data. Returned URLs are listed deterministically;
   research cannot establish game state, contract equivalence, settlement, or a forecast.
@@ -172,6 +172,8 @@ Interactive HTTP documentation is at `/docs`.
   authoritative for normalized live state; do not merge live fields as one transactional snapshot.
 - Empty bounded discovery is not proof of absence. Polymarket automatically checks its league
   catalog when exhausted text search yields no qualifying game and page budget remains.
+- Polymarket matchup discovery sends both resolved participants using the provider's league-specific
+  title form. Supplied local dates remain hard game-start filters rather than ranking hints.
 
 ## Local inspection UI
 

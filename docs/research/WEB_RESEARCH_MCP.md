@@ -29,10 +29,12 @@ model, constructs the web query.
 
 The result contains at most five sources. Each source preserves title, public HTTPS URL,
 publication date when Tavily supplies one, retrieval time, bounded snippet, relevance score, and
-the explicit `same_matchup_date` relationship. That relationship is deliberately weaker than proof
-of one game when the teams have a same-day doubleheader; the copied scheduled start remains visible
-for that distinction. The result also reports rejected-result count, coverage, request ID, and an
-untrusted-content notice.
+the explicit `same_matchup_date` relationship. Retained title/snippet text must also contain terms
+relevant to the requested focus; a ticket, hotel, or generic event page does not become injury or
+lineup evidence merely because it names the matchup and date. `other_game_news` remains broad after
+the identity/date check. The relationship is deliberately weaker than proof of one game when the
+teams have a same-day doubleheader; the copied scheduled start remains visible for that distinction.
+The result also reports rejected-result count, coverage, request ID, and an untrusted-content notice.
 
 ## Safety and budgets
 
@@ -41,9 +43,9 @@ untrusted-content notice.
   game date, and scheduled start match a typed detail observation from the same turn.
 - One tool call makes one basic Tavily request for exactly five results. Raw page content, generated
   answers, images, crawl, map, research, and arbitrary extraction are disabled.
-- The server retains only HTTPS results that mention both teams and the exact requested date.
-  Duplicate URLs, private IP URLs, malformed records, wrong opponents, wrong dates, and empty
-  snippets are rejected.
+- The server retains only HTTPS results that mention both teams and the exact requested date and
+  whose title/snippet matches the requested evidence focus. Duplicate URLs, private IP URLs,
+  malformed records, wrong opponents, wrong dates, off-focus pages, and empty snippets are rejected.
 - Titles and snippets are normalized, stripped of control characters, and length bounded. They
   remain untrusted source data and cannot override system or tool policy.
 - Provider response bodies, keys, and transport diagnostics do not appear in errors or logs.

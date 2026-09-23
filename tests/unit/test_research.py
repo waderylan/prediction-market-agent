@@ -84,6 +84,56 @@ async def test_game_search_is_fixed_bounded_typed_and_identity_filtered():
     assert result.request_id == "request-1"
 
 
+@pytest.mark.parametrize(
+    "focus,relevant_text",
+    [
+        ("injuries", "Miami Marlins and San Diego Padres injury report for September 20, 2026."),
+        ("lineups", "Miami Marlins and San Diego Padres confirmed lineups September 20, 2026."),
+        ("weather", "Miami Marlins and San Diego Padres weather forecast September 20, 2026."),
+        (
+            "venue_or_schedule",
+            "Miami Marlins and San Diego Padres start time update September 20, 2026.",
+        ),
+    ],
+)
+async def test_game_search_rejects_same_game_pages_unrelated_to_focus(focus, relevant_text):
+    payload = {
+        "query": "generated query",
+        "results": [
+            {
+                "title": "Hotel event listing: Marlins vs Padres — September 20, 2026",
+                "url": "https://events.example/marlins-padres",
+                "content": (
+                    "Miami Marlins and San Diego Padres tickets for September 20, 2026. "
+                    "Book a nearby room."
+                ),
+                "score": 0.95,
+            },
+            {
+                "title": "Marlins vs Padres report — September 20, 2026",
+                "url": "https://sports.example/relevant",
+                "content": relevant_text,
+                "score": 0.9,
+            },
+        ],
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as http:
+        result = await TavilyResearchClient(http_client=http).search_game(
+            league="mlb",
+            team_a="Miami Marlins",
+            team_b="San Diego Padres",
+            game_date=datetime(2026, 9, 20, tzinfo=UTC).date(),
+            scheduled_start=datetime(2026, 9, 20, 20, 10, tzinfo=UTC),
+            focus=focus,
+        )
+
+    assert [source.url for source in result.sources] == ["https://sports.example/relevant"]
+    assert result.rejected_result_count == 1
+    assert "requested focus" in result.coverage
+
+
 async def test_configured_key_uses_bearer_without_leaking_it():
     requests = []
 

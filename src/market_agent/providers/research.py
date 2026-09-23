@@ -35,6 +35,62 @@ FOCUS_QUERY = {
     "other_game_news": "latest game news",
 }
 
+FOCUS_TERMS: dict[EvidenceFocus, tuple[str, ...]] = {
+    "injuries": (
+        "injury",
+        "injuries",
+        "injured",
+        "injured list",
+        "player availability",
+        "unavailable",
+        "day to day",
+        "disabled list",
+        "activated",
+        "activation",
+        "10 day il",
+        "15 day il",
+        "60 day il",
+    ),
+    "lineups": (
+        "lineup",
+        "lineups",
+        "batting order",
+        "starting pitcher",
+        "probable pitcher",
+        "starter",
+        "starters",
+        "starting eleven",
+        "depth chart",
+        "inactive",
+        "inactives",
+    ),
+    "weather": (
+        "weather",
+        "forecast",
+        "rain",
+        "wind",
+        "temperature",
+        "conditions",
+        "storm",
+        "precipitation",
+    ),
+    "venue_or_schedule": (
+        "venue",
+        "stadium",
+        "ballpark",
+        "location",
+        "kickoff",
+        "start time",
+        "postponed",
+        "postponement",
+        "rescheduled",
+        "schedule change",
+        "relocated",
+    ),
+    # This category is deliberately broad after the exact matchup/date check.
+    "other_game_news": (),
+}
+
 
 class ResearchError(RuntimeError):
     """Safe provider failure suitable for an MCP error projection."""
@@ -192,6 +248,16 @@ def _matches_game_date(item: _TavilyItem, team_a: str, team_b: str, game_date: d
     )
 
 
+def _matches_focus(item: _TavilyItem, focus: EvidenceFocus) -> bool:
+    terms = FOCUS_TERMS[focus]
+    if not terms:
+        return True
+    text = _normalized(f"{item.title}\n{item.content}")
+    return any(
+        re.search(rf"\b{re.escape(_normalized(term))}\b", text) is not None for term in terms
+    )
+
+
 def _safe_public_url(value: str) -> str | None:
     try:
         parsed = urlsplit(value)
@@ -313,6 +379,7 @@ class TavilyResearchClient:
                 or not title
                 or not snippet
                 or not _matches_game_date(item, team_a, team_b, game_date)
+                or not _matches_focus(item, focus)
             ):
                 continue
             seen_urls.add(url)
@@ -341,7 +408,7 @@ class TavilyResearchClient:
             request_id=parsed.request_id,
             coverage=(
                 "One bounded five-result Tavily search. Only HTTPS results naming both teams and "
-                "the requested game date are retained; empty results do not prove no evidence "
-                "exists."
+                "the requested game date, with text relevant to the requested focus, are retained; "
+                "empty results do not prove no evidence exists."
             ),
         )

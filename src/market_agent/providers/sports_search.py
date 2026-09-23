@@ -25,6 +25,7 @@ from market_agent.providers.sports import (
     League,
     SportsEvent,
     SportsQuery,
+    Team,
     event_matches,
     participant,
     resolve_query,
@@ -114,22 +115,31 @@ def _validate_kalshi_cursor(
     return saved_cursors
 
 
+def _professional_nickname(team: Team) -> str:
+    """Return a reviewed unique nickname, never a guessed abbreviation."""
+    nicknames = [
+        alias
+        for alias in team.aliases
+        if len(words(alias)) > 3
+        and alias not in {team.name, team.kalshi_name}
+        and words(team.name).endswith(" " + words(alias))
+        and participant(alias, team.league) == team
+    ]
+    return min(nicknames, key=len) if nicknames else team.name
+
+
 def _polymarket_search_terms(query: SportsQuery) -> tuple[str, str]:
-    search_team = query.teams[0]
     if query.league == "ncaa_football":
-        search_query = search_team.kalshi_name.replace(" St.", " State")
+        search_terms = [team.kalshi_name.replace(" St.", " State") for team in query.teams]
+    elif query.league == "mlb" and len(query.teams) == 2:
+        # Gamma MLB event titles use full club names. Both participants sharply narrow
+        # historical searches that otherwise bury a game behind hundreds of team results.
+        search_terms = [team.name for team in query.teams]
     else:
-        # Provider titles often use just the professional nickname. Accept only a
-        # unique catalog alias, never a guessed abbreviation.
-        nicknames = [
-            alias
-            for alias in search_team.aliases
-            if len(words(alias)) > 3
-            and alias not in {search_team.name, search_team.kalshi_name}
-            and words(search_team.name).endswith(" " + words(alias))
-            and participant(alias, search_team.league) == search_team
-        ]
-        search_query = min(nicknames, key=len) if nicknames else search_team.name
+        # Gamma NFL event titles use nicknames. A one-team search keeps the prior
+        # behavior, while a matchup search includes both resolved participants.
+        search_terms = [_professional_nickname(team) for team in query.teams]
+    search_query = " vs ".join(search_terms)
     tag = next(tag for tag, league in POLY_TAGS.items() if league == query.league)
     return search_query, tag
 
@@ -592,7 +602,7 @@ async def search_polymarket(
     search_query, tag = _polymarket_search_terms(query)
     state = continuation_state(continuation, "polymarket")
     expected_filters = {
-        "version": 2,
+        "version": 3,
         "league": query.league,
         "tag": tag,
         "status": status.value if status else None,
