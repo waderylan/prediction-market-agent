@@ -31,8 +31,8 @@
 | 9C. Agent-readable presentation and evidence semantics | Complete locally |
 | 10. Unified multi-MCP sports information assistant | Complete locally |
 | 11. Unified sports intelligence brief | Integrated into Milestone 10 |
-| 12. Optional sports-research snapshot ledger | Optional |
-| 13. Failure handling and verification | In progress across implemented layers |
+| 12. Optional sports-research snapshot ledger | Deferred until after deployment |
+| 13. Failure handling and verification | Complete locally |
 | 14. Cloud Run and submission | Required |
 | 15. Polymarket US migration evaluation | Optional after deployment |
 
@@ -1340,6 +1340,12 @@ only because it has already been implemented.
 
 ### Milestone 12: Optional SQLite Sports-Research Snapshot Ledger
 
+#### Current State
+
+- **Status:** Deferred until after deployment.
+- No ledger server, storage model, or save/retrieval tools are part of the current application.
+- Deployment and required assignment verification take priority over optional persistence.
+
 #### Work
 
 - Build the ledger only after the complete research workflow is stable.
@@ -1400,6 +1406,19 @@ only because it has already been implemented.
 #### Pivot Point
 
 - Fix correctness and failure behavior before adding presentation features.
+
+#### Current State
+
+- **Status:** Complete locally.
+- All four configured MCP servers are exercised under process-unavailable conditions while healthy
+  servers remain usable. Provider and MCP tests cover transport failures, tool errors, malformed
+  responses, timeouts, rate limits, bounded empty results, and partial records.
+- The HTTP and LangGraph paths cover invalid requests, memory isolation, no-tool, single-tool,
+  multi-tool, source-specific failure, final-model failure, and per-turn budget enforcement.
+- Excess parallel tool requests produce protocol-complete tool results while the public activity
+  record remains bounded by its response schema.
+- The deterministic suite and retained unit-test contracts are recorded in
+  `../research/ADVERSARIAL_TESTING_REPORT.md`.
 
 ### Milestone 14: Cloud Run Deployment and Submission Artifacts
 

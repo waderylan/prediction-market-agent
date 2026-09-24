@@ -2,6 +2,9 @@
 
 This document defines the verification strategy and the evidence each test level provides.
 
+The [Milestone 13 adversarial testing report](ADVERSARIAL_TESTING_REPORT.md) records the failure
+matrix, unit-test value audit, and observed local quality-gate results.
+
 ## Local quality gate
 
 ```powershell

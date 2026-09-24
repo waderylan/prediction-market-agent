@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import Field
 
-from market_agent.agent import MAX_DATA_TOOL_CALLS, ChatAgent
+from market_agent.agent import MAX_DATA_TOOL_CALLS, MAX_TOOL_CALLS, ChatAgent
 from market_agent.app import create_app
 from market_agent.mcp.polymarket import create_server
 from market_agent.providers import PolymarketClient
@@ -277,6 +277,29 @@ async def test_tool_budget_and_reset(connections):
         len([m for m in model.observed[MAX_DATA_TOOL_CALLS] if isinstance(m, ToolMessage)])
         == MAX_DATA_TOOL_CALLS
     )
+
+
+async def test_parallel_tool_requests_cannot_overflow_activity_contract(connections):
+    calls = [
+        {
+            "name": "polymarket_get_market",
+            "args": {"market_id": "561229"},
+            "id": f"parallel-{index}",
+        }
+        for index in range(MAX_TOOL_CALLS + 2)
+    ]
+    model = ScriptedModel(replies=[AIMessage("", tool_calls=calls)])
+
+    turn = await ChatAgent(model, connections()).chat_detailed("Read every copy", "parallel")
+
+    assert len(turn.activity) == MAX_TOOL_CALLS
+    assert [item.status for item in turn.activity[:MAX_DATA_TOOL_CALLS]] == [
+        "success"
+    ] * MAX_DATA_TOOL_CALLS
+    assert [item.status for item in turn.activity[MAX_DATA_TOOL_CALLS:]] == ["skipped"] * (
+        MAX_TOOL_CALLS - MAX_DATA_TOOL_CALLS
+    )
+    assert "tool-call limit was reached" in turn.response.lower()
 
 
 async def test_model_failure_and_session_recovery(connections):

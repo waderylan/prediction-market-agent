@@ -100,8 +100,8 @@ developer test the same four configured MCPs directly in interactive or headless
 tests MCP behavior and routing instructions; it does not replace LangGraph memory, host-side
 validation and matching, per-turn budgets, or the required HTTP endpoint.
 
-Later optional work includes an explicitly requested saved research snapshot. It is not a current
-capability.
+The optional saved-research snapshot ledger is deferred until after deployment. It is not a
+current capability.
 
 The product reports provider prices and relevant evidence but does not create an independent win
 probability or betting recommendation. It must refuse unsupported comparisons when contract

@@ -1059,19 +1059,22 @@ class ChatAgent:
                     status=plan.status,
                 )
                 server = _server_for_tool(name)
-                activity.append(
-                    ToolActivity(
-                        tool=name[:100] or "unknown",
-                        server=server[:30],
-                        status=plan.activity_status,
-                        arguments=_safe_tool_arguments(planned_call.get("args", {})),
-                        summary=plan.summary,
-                        duration_ms=max(
-                            0,
-                            round(((plan.finished or time.perf_counter()) - plan.started) * 1000),
-                        ),
-                    ).model_dump()
-                )
+                if len(activity) < MAX_TOOL_CALLS:
+                    activity.append(
+                        ToolActivity(
+                            tool=name[:100] or "unknown",
+                            server=server[:30],
+                            status=plan.activity_status,
+                            arguments=_safe_tool_arguments(planned_call.get("args", {})),
+                            summary=plan.summary,
+                            duration_ms=max(
+                                0,
+                                round(
+                                    ((plan.finished or time.perf_counter()) - plan.started) * 1000
+                                ),
+                            ),
+                        ).model_dump()
+                    )
                 results.append(
                     ToolMessage(
                         plan.content,
@@ -1118,7 +1121,7 @@ class ChatAgent:
             except Exception:
                 return {
                     "messages": [
-                        AIMessage("The research limit was reached. Please narrow your question.")
+                        AIMessage("The tool-call limit was reached. Please narrow your question.")
                     ]
                 }
 

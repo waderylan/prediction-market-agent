@@ -40,7 +40,8 @@ async def test_graph_with_real_stdio_process(missing):
         assert model.observed[-1][-1].status == "success"
 
 
-async def test_one_server_unavailable_preserves_other(tmp_path, monkeypatch):
+@pytest.mark.parametrize("missing_server", ["polymarket", "kalshi", "sports_state", "tavily"])
+async def test_one_server_unavailable_preserves_other(tmp_path, monkeypatch, missing_server):
     import json
 
     from market_agent.agent import market_tools
@@ -49,10 +50,14 @@ async def test_one_server_unavailable_preserves_other(tmp_path, monkeypatch):
     (tmp_path / "servers.json").write_text(
         json.dumps(
             {
-                "polymarket": {"transport": "stdio", "command": "python", "args": [str(script)]},
-                "kalshi": {
+                "working": {
                     "transport": "stdio",
-                    "command": "python",
+                    "command": sys.executable,
+                    "args": [str(script)],
+                },
+                missing_server: {
+                    "transport": "stdio",
+                    "command": sys.executable,
                     "args": ["-m", "missing_mcp_test_module"],
                 },
             }

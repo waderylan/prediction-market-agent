@@ -181,6 +181,9 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
+The [adversarial testing report](docs/research/ADVERSARIAL_TESTING_REPORT.md) maps failure classes
+and retained unit tests to the behavior they protect.
+
 Bounded public-provider checks are opt-in:
 
 ```powershell
