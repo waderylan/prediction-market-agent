@@ -1,42 +1,58 @@
 # Market Lens
 
-Market Lens answers sports questions with game data, prediction-market contracts, and current web
-evidence in one conversation. It resolves the exact game first, calls only the sources needed for
-the question, and keeps scores, market prices, contract rules, and settlement evidence separate.
+> Sports research that knows whether every source is talking about the same game.
 
-The application covers MLB, NFL, and NCAA Division I football. It is read-only: it does not place
-orders, access market accounts, generate an independent win probability, or make betting picks.
+Market Lens turns one game into a connected, source-checked research thread. Start with the score,
+drill into a player or play, inspect Kalshi and Polymarket, then check the news around the game
+without rebuilding the context in every tab.
 
-## What it answers
+The application covers MLB, NFL, and NCAA Division I football. It resolves the exact game before
+combining sources, so a similar matchup name or stale snapshot does not quietly become part of the
+answer.
+
+## Follow one game across every source
+
+A research thread can move through questions like these without starting over:
+
+1. "What's happening in the Yankees game?"
+2. "Show me the pitchers and the last five plays."
+3. "How are Kalshi and Polymarket pricing it?"
+4. "Do those contracts actually settle under the same rules?"
+5. "Any lineup or injury news that changes the context?"
+
+Market Lens keeps the selected game attached to the thread. A direct question receives a direct
+answer. A broad request can expand into a sourced brief with game state, statistics, market
+snapshots, contract terms, and current reporting.
+
+## The hard part is joining evidence safely
+
+Fetching a score is straightforward. The failure-prone step is deciding whether a scoreboard
+event, two market contracts, and a news report describe the same game under the same conditions.
+Market Lens makes that decision before it writes the answer.
+
+| Research problem | Market Lens response |
+|---|---|
+| Providers use different IDs and team labels | Discover the event through each provider and validate league, participants, date, and scheduled start |
+| Scores, quotes, and articles arrive at different times | Keep each observation separate and show its retrieval or quote time |
+| Two contracts have similar headlines | Check named outcomes and available settlement terms before comparing prices |
+| One provider is unavailable | Name the missing source and return a useful answer from the evidence that passed validation |
+
+You can keep asking questions without losing track of what each source actually proved.
+A sporting result does not establish prediction-market settlement. A market price is not an
+independent forecast. Missing timestamps, incomplete rules, and weak research evidence stay visible
+in the answer.
+
+## Questions it handles
 
 - What is the score, inning, count, or down and distance for this game?
 - Show the box score, one player's game line, or the latest five plays.
 - Find the Kalshi or Polymarket full-game-winner contract for this matchup.
-- Compare two market contracts only when their event and settlement terms support comparison.
+- Compare two market contracts when their event and settlement terms support comparison.
 - Build a sourced game brief with current state, market snapshots, injuries, lineups, weather, or
   schedule news.
-- Continue with a follow-up such as "show only the Padres pitchers" without resolving the game
-  again.
 
-A narrow question uses the minimum useful tools. A broad request can combine all four independent
-MCP servers. If a provider fails, the answer identifies the missing source and retains verified
-evidence from the others.
-
-## Why it is useful
-
-Sports information is split across scoreboards, statistical feeds, market listings, contract
-rules, and news reports. Similar labels do not guarantee that those sources refer to the same game
-or settle under the same conditions. Market Lens performs that identity work before synthesis:
-
-- Opaque provider IDs and game references are discovered, copied, and validated rather than
-  guessed.
-- Every observation carries its source and retrieval or quote time.
-- A deterministic matcher checks league, participants, scheduled start, named outcomes, and
-  available settlement terms before the model explains a comparison.
-- Separate provider calls remain separate snapshots.
-- A sporting result does not establish prediction-market settlement.
-- Missing timestamps, incomplete rules, provider errors, and weak research evidence remain visible
-  instead of being converted into confident prose.
+Market Lens is read-only. It does not place orders, access market accounts, generate an independent
+win probability, or make betting picks.
 
 ## System design
 
