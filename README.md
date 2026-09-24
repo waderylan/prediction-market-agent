@@ -368,6 +368,7 @@ typed sports data, source provenance, deterministic market checks, and direct Co
 - [Runtime architecture](docs/research/MCP_VERTICAL_SLICE.md)
 - [Testing strategy](docs/research/TESTING.md)
 - [Watch monitoring and alerts](docs/research/WATCH_MONITORING_AND_ALERTS.md)
+- [Event-aware watches explained from first principles](docs/WATCHES_EXPLAINED.md)
 - [Product scope](docs/planning/PROJECT_PROPOSAL.md)
 - [Implementation milestones](docs/planning/IMPLEMENTATION_PLAN.md)
 
