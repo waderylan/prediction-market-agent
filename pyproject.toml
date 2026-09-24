@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1",
+  "google-auth>=2.40,<3",
+  "google-cloud-firestore>=2.21,<3",
+  "google-cloud-secret-manager>=2.24,<3",
   "httpx>=0.28,<1",
   "langchain-mcp-adapters>=0.2,<1",
   "langchain-openai>=1,<2",

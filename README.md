@@ -24,6 +24,12 @@ Market Lens keeps the selected game attached to the thread. A direct question re
 answer. A broad request can expand into a sourced brief with game state, statistics, market
 snapshots, contract terms, and current reporting.
 
+The same conversation can turn exact evidence into a durable watch. A request such as “alert me if
+either market moves eight points within two minutes of a scoring play” resolves the game and
+contracts, previews one typed rule, and waits for explicit confirmation. Confirmed rules poll
+without a model, write deterministic inbox alerts, and optionally project the same stored trigger
+to one configured Telegram chat.
+
 ## The hard part is joining evidence safely
 
 Fetching a score is straightforward. The failure-prone step is deciding whether a scoreboard
@@ -50,6 +56,8 @@ in the answer.
 - Compare two market contracts when their event and settlement terms support comparison.
 - Build a sourced game brief with current state, market snapshots, injuries, lineups, weather, or
   schedule news.
+- Create, confirm, revise, pause, resume, list, inspect, or delete an event-aware watch.
+- Review a trigger timeline and Telegram delivery state, then request a bounded investigation.
 
 Market Lens is read-only. It does not place orders, access market accounts, generate an independent
 win probability, or make betting picks.
@@ -67,9 +75,19 @@ synthesis. Four independent MCP servers expose focused, typed tools:
 | Sports-state MCP | Exact-game state, box scores, player game statistics, and bounded play history |
 | Tavily MCP | At most two identity-bound searches for injuries, lineups, weather, schedule changes, game news, or recaps |
 
+The watch application service is not a fifth MCP server. It owns versioned rules, observations,
+trigger fingerprints, inbox records, leases, retention, and the delivery outbox. SQLite is the
+complete local store. Firestore implements the same durable repository contract for Cloud Run.
+Cloud Scheduler reaches a separate Google-OIDC-protected polling endpoint; the local foreground
+runner calls the same coordinator.
+
 Independent calls from one reasoning step execute concurrently. Identifier-dependent detail and
 research calls wait until discovery establishes the required identity. Each turn allows eight
 market or sports-state calls and two Tavily searches.
+
+Routine watch polling and Telegram delivery make zero model calls and do not start or call Tavily.
+Compatible watches share one observation set, and due game groups reuse one bounded MCP session.
+Automatic model explanations are disabled; investigation is an explicit conversational request.
 
 ### Trust boundaries
 
@@ -122,6 +140,45 @@ Reuse a session ID for follow-ups. Use a new, unguessable ID for a separate conv
 IDs are not authentication, and the in-memory LangGraph checkpointer lasts for the process
 lifetime.
 
+Watch definitions are scoped to the creating session. This prevents accidental cross-session
+mutation but does not turn session IDs into authentication.
+
+### Local watch runner and CLI
+
+The JSON-lines CLI exposes the shared validator and SQLite application service:
+
+```powershell
+uv run python scripts/watch_cli.py --db artifacts/watches.db
+```
+
+Send one JSON object per line. Keep the process open between `preview` and `confirm`; an unconfirmed
+draft is not an active persisted rule. Local Codex follows this interface through the repository
+skill.
+
+Routine management also has safe typed arguments, for example:
+
+```powershell
+uv run python scripts/watch_cli.py --operation list --session-id <creating-session>
+uv run python scripts/watch_cli.py --operation inbox --session-id <creating-session> --limit 10
+uv run python scripts/watch_cli.py --operation pause --session-id <creating-session> --watch-id <watch-id>
+```
+
+The typed surface never accepts Telegram credentials or a destination chat ID.
+
+Run confirmed watches in the foreground:
+
+```powershell
+uv run python scripts/run_watches.py --db artifacts/watches.db
+```
+
+Stopping the process stops local polling. SQLite rules remain for the next run. A deterministic,
+credential-free demonstration exercises the synchronized timeline, exact threshold, inbox, and
+fake Telegram projection:
+
+```powershell
+uv run python scripts/run_watches.py --replay tests/fixtures/watch/yankees_scoring_replay.json
+```
+
 ### Inspection UI
 
 ```powershell
@@ -130,8 +187,8 @@ uv run python scripts/run_chat_ui.py
 
 This starts Market Lens at `http://127.0.0.1:3000`, the FastAPI backend, and a local Codex model
 gateway. The application still owns LangGraph memory and MCP execution. The UI displays the actual
-tool activity for each turn. The gateway uses local CLI authentication and is not included as a
-production backend.
+tool activity for each turn and includes focused watch creation, status, and inbox entry points.
+The gateway uses local CLI authentication and is not included as a production backend.
 
 ## Test the MCP workflow in Codex
 
@@ -144,9 +201,10 @@ codex exec '$sports-information Find today''s MLB games in UTC. Use sports state
 ```
 
 This path is a direct MCP test surface. It checks tool discovery, routing instructions, schemas,
-and provider behavior inside a normal Codex conversation. It does not exercise the application's
-LangGraph memory, host-side deterministic matcher, per-turn budgets, or `/chat` contract. The
-FastAPI and LangGraph path remains the product and assignment implementation.
+provider behavior, and the shared watch schema/CLI inside a normal Codex conversation. It does not
+exercise the application's LangGraph memory, per-turn budgets, or `/chat` contract and cannot keep
+polling after its process exits. The FastAPI and LangGraph path remains the product and assignment
+implementation.
 
 ## MCP tool surface
 
@@ -196,6 +254,12 @@ The live checks accept empty slates and evidence sets. They validate schemas and
 behavior without assuming that a specific game or market is open. Real-model checks are separate:
 set `RUN_LIVE_AGENT=1` and run `tests/live/test_chat_live.py` with a configured model backend.
 
+The opt-in live Telegram smoke skips unless `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are present:
+
+```powershell
+uv run pytest tests/live/test_telegram_live.py -q -s
+```
+
 ## Container and Cloud Run
 
 ```powershell
@@ -207,13 +271,18 @@ The multi-stage image installs locked runtime dependencies, runs as UID 10001, a
 four Python MCP processes. It requires no Node runtime.
 
 Cloud Run deployment uses one worker and `--max-instances 1` so the assignment's in-process session
-memory remains coherent within the service instance. Deployment requires an Artifact Registry
+memory remains coherent within the service instance. Active cloud watches use Firestore rather than
+the ephemeral container filesystem. Cloud Scheduler sends a Google OIDC token to
+`POST /internal/watches/poll`; public `POST /chat` retains the assignment contract. The bot token can
+come from Secret Manager through the service identity. Deployment requires an Artifact Registry
 image and runtime environment variables. The local Codex gateway and local credentials never enter
-the image. The live Cloud Run URL is a remaining submission deliverable.
+the image. The live Cloud Run URL and every live Google Cloud watch boundary remain submission work.
 
 Public market, ESPN, and MLB StatsAPI requests require no account credentials. Model inference,
 Cloud Run, Cloud Build, Artifact Registry storage, and keyed Tavily searches can incur provider
-charges. The service performs no continuous polling or background research.
+charges. Confirmed watches add bounded provider polling and Firestore operations; polling performs
+no background web research or model inference. Telegram Bot API use is free under Telegram's
+service limits.
 
 ## Architecture
 
@@ -224,6 +293,7 @@ flowchart LR
     G <--> L[Configured LLM]
     G <--> M[InMemorySaver]
     G --> V[Host validation and deterministic matching]
+    G --> WC[Watch compiler + exact preview]
     G --> A[MCP client adapter]
     A <--> K[Kalshi MCP]
     A <--> P[Polymarket MCP]
@@ -234,31 +304,56 @@ flowchart LR
     S --> ESPN[ESPN public JSON]
     S -. MLB fallback .-> MLB[MLB StatsAPI]
     T --> TA[Tavily Search API]
+    WC --> WR[Watch service]
+    WR --> DB[(SQLite local / Firestore cloud)]
+    CS[Cloud Scheduler + Google OIDC] --> PE[Internal poll endpoint]
+    LR[Foreground local runner] --> CO[Deterministic coordinator]
+    PE --> CO
+    CO --> SA[Selected existing MCP tools]
+    SA <--> K
+    SA <--> P
+    SA <--> S
+    CO --> DB
+    DB --> IN[Inbox]
+    DB --> OB[Telegram outbox]
+    OB --> TG[Telegram Bot API]
     G --> F
     F --> U
 ```
 
 ```mermaid
 flowchart LR
-    Q[Question and session context] --> R[Reason about required sources]
-    R --> D[Discover exact game and market candidates]
-    D --> I{One identity established?}
-    I -->|No| C[Return choices or clarification]
-    I -->|Yes| E[Run independent detail calls concurrently]
-    E --> H[Validate typed evidence and matching report]
-    H --> W[Optional bounded web research]
-    W --> O[Source-attributed answer]
-    H --> O
+    Q[User query + session] --> A[Agent entry]
+    A --> L[LLM reasoning step]
+    L --> TS[Tool selection]
+    TS --> CALL[MCP tools/call]
+    CALL --> RESP[MCP server response]
+    RESP --> VAL[Typed host validation]
+    VAL --> MORE{Another tool needed?}
+    MORE -->|Yes: loop back| L
+    MORE -->|No: answer| SYN[LLM synthesis]
+    SYN --> OUT[Source-attributed response]
+    VAL -->|watch identities complete| PV[Typed watch preview]
+    PV --> CF{Exact confirmation?}
+    CF -->|No| OUT
+    CF -->|Yes| SAVE[Persist active rule]
+    SAVE --> POLL[No-model MCP polling]
+    POLL --> TR[Deterministic trigger + inbox/outbox]
 ```
 
 ```mermaid
 flowchart LR
-    ENV[Runtime environment variables] --> APP[Containerized FastAPI service]
+    ENV[Runtime environment + Secret Manager] --> APP[Containerized FastAPI service]
     IMG[Non-root image with 4 MCP servers] --> APP
     APP --> EXT[Public data providers and model API]
     IMG -. publish target .-> AR[Artifact Registry]
     AR -. deployment target .-> CR[Cloud Run, one instance]
     CR -. exposes .-> URL[Public POST /chat URL]
+    FS[(Firestore)] <--> CR
+    SCH[Cloud Scheduler OIDC] --> CR
+    CR --> TELE[Telegram Bot API]
+    SQL[(SQLite)] <--> LOCAL[Local foreground runner]
+    LOCAL --> EXT
     DEV[Local Codex gateway] -. development only .-> APP
 ```
 
@@ -272,6 +367,7 @@ typed sports data, source provenance, deterministic market checks, and direct Co
 - [Canonical assignment description](docs/assignment/Assignment_1_Description.md)
 - [Runtime architecture](docs/research/MCP_VERTICAL_SLICE.md)
 - [Testing strategy](docs/research/TESTING.md)
+- [Watch monitoring and alerts](docs/research/WATCH_MONITORING_AND_ALERTS.md)
 - [Product scope](docs/planning/PROJECT_PROPOSAL.md)
 - [Implementation milestones](docs/planning/IMPLEMENTATION_PLAN.md)
 
@@ -284,6 +380,8 @@ evidence governed by `AGENTS.md`; it does not replace personal authorship.
 - [Sports-state MCP design](docs/research/GAME_STATE_MCP.md)
 - [Tavily research MCP design](docs/research/WEB_RESEARCH_MCP.md)
 - [Contract matching](docs/research/CONTRACT_MATCHING.md)
+- [Google Cloud Scheduler to Cloud Run](https://cloud.google.com/run/docs/triggering/using-scheduler)
+- [Telegram Bot API](https://core.telegram.org/bots/api)
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 - [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview)
 - [FastAPI](https://fastapi.tiangolo.com/)

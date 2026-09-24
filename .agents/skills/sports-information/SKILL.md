@@ -1,6 +1,6 @@
 ---
 name: sports-information
-description: Answer live sports and prediction-market information requests with the configured sports_state, Kalshi, Polymarket, and Tavily MCP tools. Use for supported game discovery, scores, statistics, plays, market contracts, or a sourced game brief. Do not use for repository development or code changes.
+description: Answer live sports and prediction-market requests and manage local event-aware watches with the configured sports_state, Kalshi, Polymarket, and Tavily MCP tools. Use for supported game discovery, scores, statistics, plays, market contracts, sourced game briefs, or create, confirm, revise, pause, resume, list, inspect, and investigate watch intents. Do not use for repository development or code changes.
 ---
 
 # Sports Information
@@ -87,3 +87,36 @@ the missing source.
 
 Use the current Codex conversation for follow-up identity. Treat remembered observations as old
 snapshots and refresh only the sources needed by the follow-up.
+
+## Manage local watches
+
+- Recognize create, confirm, revise, pause, resume, list, inspect, delete, inbox, and investigate
+  intents. A local Codex conversation does not remain active after it exits; recurring monitoring
+  requires `uv run python scripts/run_watches.py` in a foreground process.
+- Clarify ambiguous teams, games, doubleheaders, platforms, outcomes, probability-point thresholds,
+  windows, and event relationships. A move from `0.42` to `0.50` is eight points, not a relative
+  percentage increase.
+- Resolve the exact game through `sports_state_find_games` and an exact sports-state detail call.
+  Resolve each contract through platform search and exact detail. Copy `game_ref`, Kalshi ticker,
+  numeric Polymarket market ID, named outcome, teams, league, and scheduled start unchanged.
+- Support only MLB, NFL, and NCAA Division I football full-game-winner contracts. Reject an
+  unsupported contract type instead of approximating it.
+- Compile one canonical version-1 watch payload and send it to
+  `uv run python scripts/watch_cli.py` as one JSON object per line. Keep that process open between
+  `preview` and `confirm`; the draft is deliberately not a persisted active rule.
+- Prefer safe typed CLI arguments for routine management, such as
+  `--operation list --session-id <session>` or
+  `--operation pause --session-id <session> --watch-id <watch>`. Use JSON lines for typed rule
+  validation, preview, and the same-process confirmation handshake.
+- Show the returned preview verbatim enough for the user to verify game, contracts, outcomes,
+  point thresholds, windows, scoring relationship, polling policy, and delivery. Confirm only when
+  the user names that exact draft ID.
+- Telegram is an allowlisted boolean opt-in. Never request, accept, print, or place a chat ID or bot
+  token in a watch payload; deployment configuration owns the single recipient. Missing Telegram
+  configuration means inbox-only delivery while the watch remains active.
+- Interpret `no_tracked_scoring_event` only as no new normalized scoring play in the configured
+  correlation window. Never claim that nothing happened, and never describe timestamp alignment as
+  proof of causation.
+- Inspect alerts and delivery state through the watch CLI. For a user-requested investigation,
+  retrieve only bounded exact MCP evidence. Routine polling and Telegram delivery use zero model
+  calls and zero Tavily calls.

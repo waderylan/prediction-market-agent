@@ -221,6 +221,27 @@ a:focus-visible {
   cursor: pointer;
 }
 
+.section-heading {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.eyebrow {
+  color: var(--accent);
+  font: 8px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.watch-section p {
+  margin: 12px 0 0;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .example-prompt:hover { color: var(--accent); }
 
 .example-prompt:active,
@@ -354,7 +375,12 @@ a:focus-visible {
   margin-top: 5px;
 }
 
-.message-tools { margin-top: 10px; }
+.message-tools {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 10px;
+}
 
 .copy-response {
   padding: 0;
@@ -367,6 +393,18 @@ a:focus-visible {
 }
 
 .copy-response:hover { color: var(--accent); }
+
+.confirm-watch {
+  padding: 7px 10px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font: 700 9px/1 var(--mono);
+  text-transform: uppercase;
+}
+
+.confirm-watch:hover { background: rgb(183 212 91 / 10%); }
+.confirm-watch:disabled { cursor: wait; opacity: 0.55; }
 
 .response-skeleton {
   display: grid;

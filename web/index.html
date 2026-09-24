@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <meta name="description" content="Inspect prediction-market research and its MCP tool calls." />
+    <meta name="description" content="Research sports markets and monitor event-aware watches." />
     <title>Market Lens</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/styles.css" />
@@ -66,32 +66,49 @@
             </button>
           </section>
 
+          <section class="control-section watch-section">
+            <div class="section-heading">
+              <h2>Watch center</h2>
+              <span class="eyebrow">Inbox first</span>
+            </div>
+            <button class="example-prompt" type="button" data-prompt="Watch the Yankees game. Alert me if either market moves at least eight points within two minutes of a scoring play, or twelve points when no normalized scoring play appears in that two-minute correlation window.">
+              Create event-aware watch
+            </button>
+            <button class="example-prompt" type="button" data-prompt="List my active, paused, and terminal watches.">
+              View watch status
+            </button>
+            <button class="example-prompt" type="button" data-prompt="Show my watch alert inbox, including Telegram delivery status.">
+              Open alert inbox
+            </button>
+            <p>Rules activate only after you confirm the exact preview.</p>
+          </section>
+
           <p class="data-note">Public market data only. No trading or account access.</p>
         </aside>
 
         <section class="chat-panel" aria-labelledby="chat-title">
           <header class="panel-header">
             <div>
-              <h1 id="chat-title">Market research</h1>
-              <p>Ask about prices, settlement rules, or whether two contracts match.</p>
+              <h1 id="chat-title">Research &amp; watches</h1>
+              <p>Inspect exact contracts, create event-aware rules, and review trigger evidence.</p>
             </div>
           </header>
 
           <div class="messages" id="messages" aria-live="polite" aria-label="Conversation">
             <div class="empty-state" id="empty-state">
-              <h2>Start with a market ID, ticker, or topic.</h2>
-              <p>The trace panel will show each MCP call and what came back.</p>
+              <h2>Ask a question or describe a watch.</h2>
+              <p>Every watch preview pins the exact game, contracts, thresholds, and delivery.</p>
             </div>
           </div>
 
           <form class="composer" id="composer">
-            <label for="query">Research question</label>
+            <label for="query">Question or watch</label>
             <textarea
               id="query"
               name="query"
               maxlength="4000"
               rows="3"
-              placeholder="What exactly makes YES win?"
+              placeholder="Watch this game if either market moves eight points after a score…"
               required
             ></textarea>
             <div class="composer-footer">

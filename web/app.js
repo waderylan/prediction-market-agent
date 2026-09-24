@@ -138,6 +138,20 @@ function appendMessage(role, text, options = {}) {
       window.setTimeout(() => { copy.textContent = "Copy response"; }, 1400);
     });
     tools.append(copy);
+    const draftIds = [...new Set(text.match(/draft_[a-f0-9]{32}/g) ?? [])];
+    if (/watch preview/i.test(text) && draftIds.length === 1) {
+      const confirm = document.createElement("button");
+      confirm.className = "confirm-watch";
+      confirm.type = "button";
+      confirm.textContent = "Confirm exact preview";
+      confirm.addEventListener("click", async () => {
+        confirm.disabled = true;
+        const completed = await sendQuery(`confirm ${draftIds[0]}`);
+        confirm.textContent = completed ? "Confirmation sent" : "Retry confirmation";
+        confirm.disabled = completed;
+      });
+      tools.append(confirm);
+    }
     article.append(tools);
   }
 
@@ -190,8 +204,8 @@ function showTrace(activity, model, effort, elapsedMs) {
   traceState.className = "trace-state";
   traceState.textContent = "Complete";
   traceSubtitle.textContent = activity.length
-    ? `${activity.length} MCP call${activity.length === 1 ? "" : "s"}`
-    : "No MCP calls";
+    ? `${activity.length} tool call${activity.length === 1 ? "" : "s"}`
+    : "No tool calls";
   traceContent.replaceChildren();
 
   const summary = document.createElement("dl");
@@ -278,7 +292,8 @@ function resetTrace() {
 }
 
 async function sendQuery(text) {
-  if (busy || !text.trim()) return;
+  if (busy || !text.trim()) return false;
+  let completed = false;
   busy = true;
   query.disabled = true;
   send.disabled = true;
@@ -317,6 +332,7 @@ async function sendQuery(text) {
     appendMessage("assistant", data.response, { label: `${selectedModel} / ${selectedEffort}` });
     showTrace(data.activity, selectedModel, selectedEffort, elapsed);
     setConnection("online", "API ready");
+    completed = true;
   } catch (error) {
     const elapsed = performance.now() - started;
     pending.remove();
@@ -337,6 +353,7 @@ async function sendQuery(text) {
     send.disabled = false;
     query.focus();
   }
+  return completed;
 }
 
 composer.addEventListener("submit", (event) => {
@@ -365,7 +382,7 @@ newSession.addEventListener("click", () => {
   sessionId = createSession();
   sessionLabel.textContent = sessionId;
   messages.innerHTML =
-    '<div class="empty-state" id="empty-state"><h2>Start with a market ID, ticker, or topic.</h2><p>The trace panel will show each MCP call and what came back.</p></div>';
+    '<div class="empty-state" id="empty-state"><h2>Ask a question or describe a watch.</h2><p>Every watch preview pins the exact game, contracts, thresholds, and delivery.</p></div>';
   resetTrace();
   query.focus();
 });

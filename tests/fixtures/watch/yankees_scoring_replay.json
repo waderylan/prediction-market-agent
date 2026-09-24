@@ -1,0 +1,55 @@
+{
+  "game": {
+    "league": "mlb",
+    "game_ref": "fixture-game-ref-yankees-red-sox",
+    "home_team": "New York Yankees",
+    "away_team": "Boston Red Sox",
+    "scheduled_start": "2026-09-23T23:05:00Z"
+  },
+  "markets": [
+    {
+      "platform": "kalshi",
+      "market_id": "KXMLBGAME-FIXTURE-NYY",
+      "title": "Boston at New York winner",
+      "outcome": "New York Yankees",
+      "market_type": "game_winner"
+    },
+    {
+      "platform": "polymarket",
+      "market_id": "900000001",
+      "title": "Boston at New York winner",
+      "outcome": "New York Yankees",
+      "market_type": "game_winner"
+    }
+  ],
+  "timeline": [
+    {
+      "observation_id": "obs_11111111111111111111111111111111",
+      "game_ref": "fixture-game-ref-yankees-red-sox",
+      "sports_observed_at": "2026-09-24T00:00:00Z",
+      "retrieved_at": "2026-09-24T00:00:02Z",
+      "lifecycle": "live",
+      "quotes": [
+        {"platform": "kalshi", "market_id": "KXMLBGAME-FIXTURE-NYY", "outcome": "New York Yankees", "price": "0.42", "quote_time": "2026-09-24T00:00:00Z", "retrieved_at": "2026-09-24T00:00:02Z", "status": "available"},
+        {"platform": "polymarket", "market_id": "900000001", "outcome": "New York Yankees", "price": "0.43", "quote_time": "2026-09-24T00:00:00Z", "retrieved_at": "2026-09-24T00:00:02Z", "status": "available"}
+      ],
+      "new_scoring_plays": [],
+      "sports_status": "available"
+    },
+    {
+      "observation_id": "obs_22222222222222222222222222222222",
+      "game_ref": "fixture-game-ref-yankees-red-sox",
+      "sports_observed_at": "2026-09-24T00:01:00Z",
+      "retrieved_at": "2026-09-24T00:01:02Z",
+      "lifecycle": "live",
+      "quotes": [
+        {"platform": "kalshi", "market_id": "KXMLBGAME-FIXTURE-NYY", "outcome": "New York Yankees", "price": "0.50", "quote_time": "2026-09-24T00:01:00Z", "retrieved_at": "2026-09-24T00:01:02Z", "status": "available"},
+        {"platform": "polymarket", "market_id": "900000001", "outcome": "New York Yankees", "price": "0.51", "quote_time": "2026-09-24T00:01:00Z", "retrieved_at": "2026-09-24T00:01:02Z", "status": "available"}
+      ],
+      "new_scoring_plays": [
+        {"play_id": "score-101", "play_time": "2026-09-24T00:00:45Z", "description": "New York scores on a two-run double", "home_score": 2, "away_score": 0}
+      ],
+      "sports_status": "available"
+    }
+  ]
+}

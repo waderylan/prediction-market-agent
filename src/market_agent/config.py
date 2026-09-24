@@ -1,6 +1,7 @@
 """Environment-backed application configuration."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, HttpUrl, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,6 +28,14 @@ class Settings(BaseSettings):
     openai_base_url: HttpUrl = HttpUrl("https://api.openai.com/v1")
     log_level: str = "INFO"
     port: int = Field(default=8080, ge=1, le=65535)
+    watch_storage: Literal["sqlite", "firestore"] = "sqlite"
+    watch_sqlite_path: str = "artifacts/watches.db"
+    gcp_project_id: str | None = None
+    scheduler_oidc_audience: str | None = None
+    scheduler_service_account: str | None = None
+    telegram_bot_token: SecretStr | None = None
+    telegram_bot_token_secret: str | None = None
+    telegram_chat_id: SecretStr | None = None
 
 
 def _format_validation_error(error: ValidationError) -> str:

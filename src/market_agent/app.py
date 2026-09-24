@@ -3,8 +3,9 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from langchain_openai import ChatOpenAI
 from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from market_agent.agent import ChatAgent, ToolActivity
 from market_agent.config import load_settings
 from market_agent.logging import configure_logging
+from market_agent.watch.models import PollResult
+from market_agent.watch.runtime import WatchRuntime, build_watch_runtime
 
 
 class ChatRequest(BaseModel):
@@ -30,7 +33,10 @@ class ChatInspectionResponse(ChatResponse):
     activity: list[ToolActivity]
 
 
-def create_app(agent: ChatAgent | None = None) -> FastAPI:
+def create_app(
+    agent: ChatAgent | None = None,
+    watch_runtime: WatchRuntime | None = None,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if agent is None:
@@ -51,9 +57,16 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
                 http_client=http_client,
                 http_async_client=http_async_client,
             )
-            app.state.agent = ChatAgent(model, model_timeout=settings.llm_timeout_seconds)
+            runtime = watch_runtime or build_watch_runtime(settings)
+            app.state.watch_runtime = runtime
+            app.state.agent = ChatAgent(
+                model,
+                model_timeout=settings.llm_timeout_seconds,
+                watch_service=runtime.service,
+            )
         else:
             app.state.agent = agent
+            app.state.watch_runtime = watch_runtime
         try:
             yield
         finally:
@@ -88,6 +101,20 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/internal/watches/poll", response_model=PollResult)
+    async def poll_watches(
+        authorization: str | None = Header(default=None),
+    ) -> PollResult:
+        runtime: WatchRuntime | None = app.state.watch_runtime
+        if runtime is None or runtime.oidc is None:
+            raise HTTPException(503, "Scheduler authentication is not configured")
+        if not runtime.oidc.verify(authorization):
+            raise HTTPException(401, "Invalid scheduler identity")
+        invocation = uuid4().hex
+        result = await runtime.coordinator.poll(owner=f"cloud-{invocation}")
+        attempts = await runtime.delivery.run_once(f"cloud-delivery-{invocation}")
+        return result.model_copy(update={"delivery_attempts": attempts})
 
     return app
 

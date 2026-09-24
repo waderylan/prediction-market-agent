@@ -8,7 +8,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from test_chat import ScriptedModel, tool_call
 
-from market_agent.agent import ChatAgent
+from market_agent.agent import ChatAgent, mcp_tools_for_servers
 
 pytestmark = pytest.mark.integration
 
@@ -91,6 +91,13 @@ async def test_sports_state_server_starts_as_independent_stdio_process():
         "sports_state_get_player_stats",
         "sports_state_get_play_by_play",
     }
+
+
+async def test_polling_connection_opens_only_selected_existing_servers():
+    async with mcp_tools_for_servers(frozenset({"sports_state"})) as selected:
+        tools = {tool.name for tool in selected}
+    assert tools
+    assert all(name.startswith("sports_state_") for name in tools)
 
 
 async def test_tavily_server_starts_as_independent_stdio_process_without_a_key():

@@ -37,6 +37,10 @@ No test requires a particular game to be open.
 | `unit/test_matching.py` | Generic and sports-aware deterministic matching, typed market/game identity, dangerous near-matches, conservative ambiguity |
 | `integration/test_chat.py`, `integration/test_stdio.py` | Graph control flow, memory, real adapter/subprocess invocation, dependency failure |
 | Headless Codex with `.agents/skills/sports-information` | Repository skill discovery and direct routing to the user's configured MCP servers |
+| `unit/test_watch_engine.py` | Versioned schemas, confirmation, point thresholds, scoring correlation, stale/out-of-order evidence, leases, restart recovery, SQLite/Firestore parity, outbox retry, Telegram failures, OIDC, Secret Manager |
+| `integration/test_watch_cli.py` | Local Codex preview, confirm, inspect, and lifecycle workflow through the shared SQLite service |
+| `integration/test_watch_endpoint.py` | Dedicated Scheduler OIDC boundary and unchanged public `/chat` contract |
+| `live/test_telegram_live.py` | Opt-in real Telegram send; clean skip without deployment-owned credentials |
 
 The sports suite specifically verifies:
 
@@ -128,12 +132,35 @@ The Tavily suite additionally verifies:
   corroboration cautions through real MCP calls.
 - Deterministic source listing and useful synthesis from existing market evidence when Tavily fails.
 
+The watch suite additionally verifies:
+
+- Only confirmed version-1 rules persist; another session cannot confirm, inspect, or mutate them.
+- Exact eight-point boundaries fire while stale, missing, malformed, and out-of-order evidence does
+  not satisfy source-dependent rules.
+- `no_tracked_scoring_event` remains a bounded normalized-play statement and blocks when the sports
+  source is unavailable.
+- Compatible watches share one observation set, a separate coordinator instance resumes durable
+  state, and concurrent leases prevent duplicate claims.
+- Trigger fingerprints and unique outbox records suppress duplicate logical alerts across retries.
+- The foreground replay produces one inbox alert and one fake Telegram projection with zero model
+  calls and zero Tavily calls.
+- Telegram timeout, disconnect, `429`, `5xx`, malformed body, authorization failure, and blocked
+  recipient behavior produces bounded retry or sanitized terminal state without losing the inbox.
+- Firestore transactions, Google OIDC claims, and Secret Manager access run through controlled
+  substitutes. These checks do not establish live Google Cloud behavior.
+
 ## Public checks
 
 ```powershell
 $env:RUN_LIVE_SMOKE = "1"
 uv run pytest tests/live/test_game_state_mcp_live.py tests/live/test_sports_mcp_live.py tests/live/test_tavily_mcp_live.py tests/live/test_market_clients_live.py tests/live/test_kalshi_mcp_live.py tests/live/test_polymarket_mcp_live.py -s
 Remove-Item Env:RUN_LIVE_SMOKE
+```
+
+The Telegram smoke test is separately gated by `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`:
+
+```powershell
+uv run pytest tests/live/test_telegram_live.py -q -s
 ```
 
 These are bounded public reads. Sports tests check all supported leagues, schema discovery,
@@ -171,6 +198,31 @@ codex exec '$sports-information Find today''s MLB games in UTC. Use sports state
 This check establishes repository skill discovery and direct MCP behavior. It does not execute the
 LangGraph graph, application checkpointer, host-side deterministic matcher, per-turn budgets, or
 FastAPI endpoint. Those remain covered by application tests and deployment acceptance.
+
+The deterministic local watch replay requires no provider, model, or Telegram credentials:
+
+```powershell
+uv run python scripts/run_watches.py --replay tests/fixtures/watch/yankees_scoring_replay.json
+```
+
+Its summary reports the synchronized observation count, boundary trigger decision, inbox record,
+fake Telegram projection, model calls, and Tavily calls. The command prints the complete bounded
+evidence message so wording and correlation limits remain reviewable.
+
+The replay also performs a duplicate polling cycle, reports unique stored observations, and prints
+local polling elapsed time plus the fixture quote-to-trigger interval. Five consecutive local runs
+measure 104-118 ms with a 108 ms median for three polls. This is a local deterministic benchmark,
+not a provider or deployment latency claim.
+
+The complete non-live suite reports 415 passed and 17 live tests deselected on the local Windows
+development environment. Ruff lint and formatting, strict mypy over `src`, JavaScript syntax
+checking, and `git diff --check` pass.
+
+A fresh headless Codex gateway session covers the conversational path with the configured MCPs. It
+clarifies a terminal/ambiguous Yankees request, resolves the next exact Yankees-Rays game, pins one
+Kalshi and one Polymarket full-game-winner contract, previews two event-aware thresholds, requires
+the draft ID, confirms the rule, and inspects the active stored watch. This is a local LangGraph and
+MCP verification; it is not a Cloud Run acceptance result.
 
 Cloud Run acceptance remains required: verify the deployed URL, arbitrary reasonable queries,
 session recall, all four MCP servers, and controlled failure cases. Local tests do not establish

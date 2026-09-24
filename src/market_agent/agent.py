@@ -43,6 +43,8 @@ from market_agent.providers.game_state import (
     PlayerStats,
 )
 from market_agent.providers.research import GameResearchResult
+from market_agent.watch.chat_tools import WATCH_TOOL_NAMES, build_watch_tools, execute_watch_tool
+from market_agent.watch.service import WatchService
 
 logger = logging.getLogger(__name__)
 MAX_DATA_TOOL_CALLS = 8
@@ -179,13 +181,39 @@ At most eight market/state calls plus two bounded research searches per turn. On
 could not be verified; never invent prices, sources, or current evidence.
 """
 
+WATCH_PROMPT = """
+You also manage event-aware watches through host-owned watch tools. Recognize create, confirm,
+list, inspect, revise, pause, resume, delete, inbox, and investigate intents. For create or revise,
+clarify every ambiguous team/game (including doubleheaders), platform, outcome, probability-point
+threshold, time window, and scoring relationship. Never guess identifiers. Resolve a game with
+sports_state_find_games and then sports_state_get_game_state. Resolve every contract with platform
+search and exact detail. Only then call watch_preview using unchanged IDs and named outcomes.
+Only full-game-winner contracts are supported. A move from 0.42 to 0.50 is eight probability
+points. no_tracked_scoring_event means no new normalized scoring play in the configured correlation
+window; never paraphrase it as proof that nothing happened. Do not call watch_confirm until the
+user explicitly confirms the exact draft ID shown in the preview. Telegram is an explicit per-watch
+opt-in and never accepts a chat ID. Routine polling and delivery use zero model and Tavily calls.
+For revision, inspect the watch, resolve any changed identity, preview a full replacement using
+replaces_watch_id, and require confirmation. Investigation is user-requested: inspect the alert,
+then use the ordinary exact MCP evidence tools; do not imply causation from timing.
+"""
+
 ToolConnection = Callable[[], AbstractAsyncContextManager[list[BaseTool]]]
 
 
 @asynccontextmanager
-async def market_tools() -> AsyncIterator[list[BaseTool]]:
-    """Separate MCP processes with request-owned sessions and partial availability."""
+async def mcp_tools_for_servers(
+    server_names: frozenset[str] | None = None,
+) -> AsyncIterator[list[BaseTool]]:
+    """Open only the configured MCP servers needed by one bounded workflow."""
     connections = json.loads(files("market_agent.mcp").joinpath("servers.json").read_text())
+    if server_names is not None:
+        unknown = server_names - connections.keys()
+        if unknown:
+            raise ValueError(f"Unknown MCP server selection: {', '.join(sorted(unknown))}")
+        connections = {
+            name: connection for name, connection in connections.items() if name in server_names
+        }
     for connection in connections.values():
         connection["command"] = sys.executable
         connection["session_kwargs"] = {"read_timeout_seconds": timedelta(seconds=45)}
@@ -200,8 +228,15 @@ async def market_tools() -> AsyncIterator[list[BaseTool]]:
                 log_event(logger, "mcp_discovered", server=name, count=len(discovered))
             except Exception:
                 log_event(logger, "mcp_unavailable", server=name)
-        if not tools:
+        if not tools and server_names is not None:
             raise ConnectionError("No MCP data server is available")
+        yield tools
+
+
+@asynccontextmanager
+async def market_tools() -> AsyncIterator[list[BaseTool]]:
+    """Open all four conversational MCP servers with request-owned sessions."""
+    async with mcp_tools_for_servers() as tools:
         yield tools
 
 
@@ -250,6 +285,8 @@ class _ToolPlan:
 
 
 def _server_for_tool(tool_name: str) -> str:
+    if tool_name in WATCH_TOOL_NAMES:
+        return "watch_host"
     if tool_name.startswith("sports_state_"):
         return "sports_state"
     if tool_name == RESEARCH_TOOL:
@@ -788,11 +825,13 @@ class ChatAgent:
         connect: ToolConnection = market_tools,
         *,
         model_timeout: float = 60,
+        watch_service: WatchService | None = None,
     ) -> None:
         self.model = model
         self.connect = connect
         self.memory = InMemorySaver()
         self.model_timeout = model_timeout
+        self.watch_service = watch_service
         # Fixed-size synchronization only. Conversation state lives exclusively in LangGraph.
         self._locks = [asyncio.Lock() for _ in range(32)]
         self._capacity = asyncio.Semaphore(4)
@@ -801,13 +840,16 @@ class ChatAgent:
         self,
         tools: list[BaseTool],
         *,
+        session_id: str,
         model_name: str | None = None,
         reasoning_effort: str | None = None,
     ) -> Any:
-        by_name = {tool.name: tool for tool in tools}
-        turn_prompt = SYSTEM_PROMPT + "\n" + _source_availability_message(tools)
+        watch_tools = build_watch_tools() if self.watch_service else []
+        all_tools = [*tools, *watch_tools]
+        by_name = {tool.name: tool for tool in all_tools}
+        turn_prompt = SYSTEM_PROMPT + WATCH_PROMPT + "\n" + _source_availability_message(tools)
         bound_model = (
-            self.model.bind_tools(tools, parallel_tool_calls=True) if tools else self.model
+            self.model.bind_tools(all_tools, parallel_tool_calls=True) if all_tools else self.model
         )
         model_options = {
             key: value
@@ -868,7 +910,9 @@ class ChatAgent:
                     plan.activity_status = "error"
                     server = _server_for_tool(name)
                     plan.summary = f"The {server} tool failed or returned invalid data."
-                    if name == RESEARCH_TOOL:
+                    if name in WATCH_TOOL_NAMES:
+                        pass
+                    elif name == RESEARCH_TOOL:
                         if research_searches >= MAX_RESEARCH_SEARCHES:
                             plan.allowed = False
                             plan.activity_status = "skipped"
@@ -914,6 +958,22 @@ class ChatAgent:
                     return None
                 name = plan.call["name"]
                 try:
+                    if name in WATCH_TOOL_NAMES:
+                        if self.watch_service is None:
+                            raise RuntimeError("watch service unavailable")
+                        payload = execute_watch_tool(
+                            self.watch_service,
+                            session_id,
+                            name,
+                            plan.call["args"],
+                            game_states,
+                            details,
+                        )
+                        return ToolMessage(
+                            json.dumps(payload, default=str),
+                            tool_call_id=plan.call["id"],
+                            status="success",
+                        )
                     tool = by_name[name]
                     log_event(logger, "mcp_tool_started", tool=name)
                     async with asyncio.timeout(45):
@@ -933,9 +993,18 @@ class ChatAgent:
                         plan.content = "Data tool failed. Check arguments or try again later."
                     else:
                         try:
-                            validated = _validate_tool_result(name, planned_call["args"], result)
-                            plan.content = validated.model_dump_json()
-                            plan.summary = _tool_summary(validated)
+                            if name in WATCH_TOOL_NAMES:
+                                plan.content = str(result.content)
+                                plan.summary = "Validated watch application command completed."
+                                plan.status = "success"
+                                plan.activity_status = "success"
+                                validated = None
+                            else:
+                                validated = _validate_tool_result(
+                                    name, planned_call["args"], result
+                                )
+                                plan.content = validated.model_dump_json()
+                                plan.summary = _tool_summary(validated)
                             if isinstance(validated, MarketDetail):
                                 details = _record_market_detail(details, validated)
                                 report = _matching_report(
@@ -1156,6 +1225,7 @@ class ChatAgent:
                 async with self.connect() as tools:
                     graph = self._graph(
                         tools,
+                        session_id=session_id,
                         model_name=model_name,
                         reasoning_effort=reasoning_effort,
                     )

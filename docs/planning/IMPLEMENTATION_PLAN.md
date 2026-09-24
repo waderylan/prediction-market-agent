@@ -10,6 +10,8 @@
   scope in `PROJECT_PROPOSAL.md`, and the provider contract in `../research/SPORTS_MCP.md`.
 - Center the initial product on MLB, NFL, and NCAA Division I full-game winners while retaining
   the generic market lookup path for compatibility.
+- Treat on-demand questions and event-aware watches as two entry modes into the same identity,
+  MCP, validation, and evidence pipeline rather than separate products.
 
 ### Current Milestone Status
 
@@ -34,7 +36,9 @@
 | 12. Optional sports-research snapshot ledger | Deferred until after deployment |
 | 13. Failure handling and verification | Complete locally |
 | 14. Cloud Run and submission | Required |
-| 15. Polymarket US migration evaluation | Optional after deployment |
+| 15. Event-aware natural-language watches | Complete locally; cloud acceptance pending Milestone 14 |
+| 16. External watch alerts | Complete locally; cloud acceptance pending Milestone 14 |
+| 17. Polymarket US migration evaluation | Optional after deployment |
 
 ## 2. Fixed Decisions
 
@@ -69,6 +73,20 @@
   price comparison is allowed. Unsupported wording remains ambiguous.
 - Keep the service read-only with respect to prediction-market platforms.
 - Never place trades or require exchange-account credentials.
+- Compile natural-language watch requests into one versioned, typed `WatchRule`; never execute
+  free-form model output as polling logic.
+- Keep recurring collection and trigger evaluation deterministic. No LLM call occurs merely
+  because a polling interval elapsed.
+- Use the existing market and sports-state MCP tools for watch observations. Do not add provider
+  reads that bypass or duplicate those tool contracts.
+- Do not add a watch MCP server. Keep watch state and trigger evaluation in validated host
+  application code so the MCP topology remains the four implemented evidence servers.
+- Keep LangGraph with a cloud-accessible API-key model as the primary Cloud Run compiler and
+  investigator. Support local Codex through the repository skill and the same MCP tools,
+  `WatchRule` schema, validator, and evaluator.
+- Complete the watch engine with an in-product alert inbox and deterministic template messages
+  before adding external delivery.
+- Telegram is the first external alert channel and consumes only stored, deduplicated triggers.
 
 ## 3. Decisions That May Change
 
@@ -84,6 +102,9 @@
 - Whether the SQLite sports-research snapshot ledger is completed for Assignment 1 or retained as a
   stretch milestone.
 - LLM model configuration, provided the deployed model remains cloud-accessible.
+- Watch polling cadence and active-game windows after measuring provider limits, latency, and quote
+  update frequency.
+- External notification channels beyond the Milestone 16 Telegram integration.
 
 Changes to fixed decisions require an explicit update to this plan. Changes to flexible decisions may be made at a milestone gate when tests provide a reason.
 
@@ -92,21 +113,23 @@ Changes to fixed decisions require an explicit update to this plan. Changes to f
 ```text
 Client
   |
-  v
-FastAPI POST /chat
+  +--> FastAPI POST /chat --> LangGraph agent + session checkpointer
+  |                              |--> Primary LLM reasoning and synthesis
+  |                              `--> Watch compiler and investigator
   |
-  v
-LangGraph agent + session checkpointer
-  |
-  +--> Primary LLM reasoning and synthesis
-  |
-  v
+Cloud Scheduler / local runner --> Deterministic watch coordinator
+                                  |
+                                  v
 Multi-server MCP client
   |-- Polymarket MCP ------> Polymarket public APIs
   |-- Kalshi MCP ----------> Kalshi public APIs
   |-- Sports-state MCP ----> ESPN public JSON / MLB StatsAPI fallback
   |-- Tavily MCP ----------> Bounded game-scoped search
-  `-- SQLite MCP ----------> Optional sports-research snapshot ledger
+  `-- SQLite MCP ----------> Optional deferred research snapshot ledger
+
+Watch compiler + deterministic coordinator
+  |-- Watch repository ----> SQLite locally / Firestore on Cloud Run
+  `-- Delivery adapter ----> Telegram Bot API for stored WatchTrigger delivery
 ```
 
 - The two market servers remain separate processes and separate MCP configurations.
@@ -116,6 +139,15 @@ Multi-server MCP client
 - Each server has unique tool names to avoid collisions after tool aggregation.
 - Tavily remains a separate MCP integration.
 - The primary LLM remains responsible for tool selection, ambiguous-case review, and final synthesis.
+- The watch compiler resolves intent through the same MCP client and emits a validated `WatchRule`.
+  The deterministic coordinator later invokes the same exact-detail and game-state tools without
+  placing an LLM in the polling loop.
+- Watch persistence is an application service, not another MCP server. MCP remains the boundary for
+  external evidence; the host owns rules, observations, trigger fingerprints, and alert history.
+- Local Codex, local LangGraph, and deployed LangGraph share the watch schema, validator, evaluator,
+  and repository contract. Only the reasoning backend and storage driver differ.
+- External delivery consumes stored deterministic triggers. It does not change MCP routing, watch
+  evaluation, or the in-product alert record.
 
 ## 5. Tool Surface
 
@@ -179,6 +211,19 @@ Multi-server MCP client
 - `get_research_snapshot`
 - `list_research_snapshots`
 - Add scoring tools only after save and retrieval work reliably.
+
+### Watch Application Service (Milestone 15; Not an MCP Server)
+
+- Validate and save a versioned `WatchRule` only after exact game and market references are
+  established and the user confirms its compiled preview.
+- List, revise, pause, and inspect watches through the `/chat` workflow and shared host functions.
+- Expose the same host functions to local Codex through a bounded `scripts/watch_cli.py` interface;
+  do not add model-facing filesystem or database tools.
+- Use SQLite for the explicit local watcher process and Firestore through the same repository
+  interface on Cloud Run. This operational state remains separate from the deferred Milestone 12
+  research-snapshot ledger.
+- Keep every state mutation inside validated application code. The agent supplies typed intent but
+  cannot execute arbitrary queries, write provider observations, or select its own storage backend.
 
 ## 6. Canonical Sports and Contract Models
 
@@ -330,7 +375,7 @@ Multi-server MCP client
 
 #### Pivot Point
 
-- Change internal models and API boundaries now, before MCP schemas make them externally visible.
+- Change internal models and API boundaries before MCP schemas make them externally visible.
 
 #### Current State
 
@@ -919,7 +964,7 @@ Multi-server MCP client
 
 ### Milestone 8A: Contract-Matching Value Evaluation and Retention Decision
 
-This is a required decision gate after Milestone 8 and before further product work. Milestones 7
+This required decision gate governs further product work. Milestones 7
 and 8 must earn their ongoing complexity with measured results; neither is retained by default
 only because it has already been implemented.
 
@@ -996,7 +1041,7 @@ only because it has already been implemented.
   review requires a balanced held-out set containing real equivalent pairs, measurable additional
   safe-match yield, and zero false equivalences over the retained deterministic baseline.
 - No Jev or AI-gateway credential is required by the resulting runtime.
-- Differently worded or incomplete full rules now remain ambiguous unless the retained core checks
+- Differently worded or incomplete full rules remain ambiguous unless the retained core checks
   prove a conflict. The primary LLM cannot upgrade that result. Sports state remains optional
   corroboration and never proves equivalence or settlement.
 
@@ -1445,7 +1490,332 @@ only because it has already been implemented.
 - Required submission files are present and secrets are absent.
 - The service remains available for grading.
 
-### Milestone 15: Optional Polymarket US Migration Evaluation
+### Milestone 15: Event-Aware Natural-Language Watches
+
+#### Product Boundary
+
+- Let a user describe a price watch conversationally, resolve the exact game and contracts through
+  the existing MCP tools, preview one typed rule, and activate it after confirmation.
+- Combine prediction-market movement with verified game events. Initial triggers cover absolute
+  price movement, cross-platform divergence, scoring plays, lifecycle changes, and price movement
+  with no tracked scoring event inside a bounded time window.
+- Treat time alignment as correlation evidence, not proof that a game event caused a price move.
+  Preserve provider quote time, retrieval time, sports observation time, and play time separately.
+- Keep the service read-only. Watches observe and alert; they never place, recommend, or prepare a
+  trade.
+- Make watches part of the primary product flow. A user creates and investigates them through the
+  same conversational agent used for game and market questions.
+
+#### Decisions Locked by This Plan
+
+- **One rule contract:** LangGraph and local Codex emit the same versioned `WatchRule` JSON schema.
+  Pydantic validation and deterministic semantic checks are authoritative; model prose is not
+  executable configuration.
+- **Existing observation tools:** compilation and polling use `sports_state_find_games`,
+  `sports_state_get_game_state`, `sports_state_get_play_by_play`, the two platform search tools,
+  and exact market-detail tools. Tavily is excluded from routine polling and remains available only
+  for a bounded triggered investigation.
+- **Pinned identity:** an active rule stores canonical league, participants, scheduled start,
+  opaque `game_ref`, platform market identifiers, named outcome mapping, and contract type. The
+  coordinator never guesses or constructs identifiers during a poll.
+- **No-token polling:** the coordinator performs MCP calls, timestamp alignment, arithmetic,
+  windowing, deduplication, and rule evaluation in ordinary Python. Creating or revising a rule is
+  the only required model operation.
+- **Edge-triggered alerts:** one condition transition creates one trigger fingerprint. Cooldowns,
+  re-arm conditions, and idempotency keys prevent repeated alerts from an unchanged state.
+- **Shared execution core:** Cloud Scheduler calls an authenticated internal Cloud Run polling
+  endpoint once per minute; the coordinator returns immediately when no watch is due. A foreground
+  local runner calls the same coordinator. Local Codex does not pretend a chat process can remain
+  alive after the session ends.
+- **Scheduler authentication:** the internal polling endpoint verifies a Google-issued OIDC token,
+  expected audience, and dedicated Scheduler service-account identity even though public `/chat`
+  remains reachable for assignment grading.
+- **Portable state:** SQLite backs local development; Firestore backs Cloud Run. Both implement one
+  repository contract used by the watch application service. Cloud Run never relies on its ephemeral
+  filesystem for active watches.
+- **Primary and secondary agent paths:** the Cloud Run product uses the LangGraph compiler with the
+  configured cloud model API key. The repository Codex skill provides a secondary local compiler
+  and investigator using the same MCP tool order, schemas, validation, and watch CLI.
+- **Minimal default alert:** the evaluator produces a complete template alert without an LLM. A
+  model explanation is optional and receives only the triggering rule, bounded price deltas,
+  relevant plays, contract metadata, and missing-source flags.
+- **Separate persistence purpose:** watch state is operational data required to schedule and dedupe
+  monitoring. It does not implement or reactivate the deferred Milestone 12 research ledger.
+
+#### Canonical Watch Models
+
+- `WatchRule` contains:
+  - schema version, watch ID, lifecycle, creation source, and session scope;
+  - exact game identity and activation window;
+  - one or more exact market references with platform and named outcome;
+  - typed conditions, thresholds, rolling windows, cooldowns, and re-arm behavior;
+  - allowed game-event classes and explicit `no_tracked_event` semantics;
+  - polling policy reference rather than an unconstrained model-generated interval;
+  - explanation policy and bounded delivery policy;
+  - compiler preview, user confirmation time, and provenance.
+- `WatchObservation` contains exact rule and event identity, provider observation IDs, quote and
+  retrieval clocks, normalized prices, game lifecycle and situation, bounded new play IDs, cache
+  metadata, and per-source availability.
+- `WatchTrigger` contains the deterministic condition result, before/after values, correlated game
+  events, stale or missing-source warnings, trigger fingerprint, delivery state, and optional
+  investigation reference.
+
+#### Cloud Run Workflow
+
+1. A user describes a watch through `POST /chat` using the existing `session_id` contract.
+2. The LangGraph compiler asks for clarification when the team, game, platform, outcome, threshold,
+   time window, or event relationship is ambiguous.
+3. The agent resolves the exact game and market references through existing MCP discovery and detail
+   calls, emits a `WatchRule`, and passes it to the host validator.
+4. The response presents a concise rule preview, estimated polling behavior, and token policy. The
+   rule remains inactive until the user confirms it in the same session.
+5. The host watch service persists the confirmed rule. Cloud Scheduler calls an authenticated
+   `/internal/watches/poll` endpoint once per minute; the endpoint loads and claims only due watches.
+6. The deterministic coordinator groups compatible watches by game and market reference, performs
+   one shared observation set, evaluates every rule, and records the poll through the shared state
+   repository without exposing a model-callable mutation tool.
+7. A new trigger creates a template alert. When the rule enables automatic explanation, LangGraph
+   performs at most one bounded investigation for that unique trigger.
+8. The user lists alerts or asks a follow-up through `/chat`; the agent retrieves bounded event
+   history and refreshes only evidence needed for the answer.
+
+#### Local Codex Workflow
+
+1. The repository sports-information skill recognizes create, revise, pause, list, and investigate
+   watch intents.
+2. Codex resolves exact games and contracts through the existing configured MCPs, generates the
+   canonical rule, and submits it to `scripts/watch_cli.py validate` through JSON standard input.
+3. The user confirms the preview before persistence.
+4. `uv run python scripts/run_watches.py` runs the shared deterministic coordinator in the
+   foreground against SQLite. Process shutdown stops polling cleanly; saved rules remain available.
+5. Codex inspects triggers through the bounded watch CLI and uses existing MCP data tools for
+   optional investigation. Direct Codex does not claim LangGraph checkpoint memory or Cloud
+   Scheduler behavior.
+
+#### Token and Provider-Cost Controls
+
+- Compile once on creation and again only when the user changes semantic rule fields.
+- Perform zero model calls during ordinary polling and zero Tavily calls unless a unique trigger is
+  explicitly configured for investigation.
+- Group watches that reference the same game or contract so one MCP observation serves all of them.
+- Store deltas and referenced observation IDs rather than duplicating complete payloads on every
+  interval.
+- Stop polling when all referenced games and contracts reach terminal states or the activation
+  window expires.
+- Reject model-proposed cadences outside an application allowlist. Set the allowlist only after live
+  rate-limit and latency measurements for every provider.
+- Enforce per-watch and service-wide ceilings for polls, automatic explanations, tool calls, Tavily
+  searches, and stored events.
+
+#### Initial Defaults
+
+- **Activation window:** start fifteen minutes before the scheduled game and stop fifteen minutes
+  after every referenced game and contract reaches a terminal state.
+- **Polling cadence:** poll due watches once per minute while a game is active, once every five
+  minutes before the game or during a delay, and once after a terminal transition. Provider
+  measurements can only make this policy more conservative before release.
+- **Explanation policy:** automatic model explanations are off. The evaluator writes a complete
+  deterministic template alert, and the user requests an agent investigation when wanted.
+- **Delivery:** write every alert to the in-product inbox exposed through `/chat` and the bounded
+  local CLI. An explicitly opted-in watch also creates one Telegram outbox record.
+- **Event vocabulary:** support scoring and lifecycle changes plus
+  `no_tracked_scoring_event`. Turnovers, substitutions, pitching changes, injuries, and other
+  causal-looking categories wait for tested cross-league normalization.
+- **Retention:** retain ordinary non-triggering observations for seven days, trigger evidence for
+  thirty days, and watch definitions until the user deletes them. Implement explicit cleanup rather
+  than relying on billable Firestore TTL deletes.
+- **Ownership boundary:** scope watches to the creating session and use unguessable watch IDs, but
+  state clearly that session IDs are not authentication. Milestone 15 stores no external delivery
+  destination or sensitive personal information.
+
+#### Implementation Gates
+
+- Measure provider limits, latency, and quote update frequency before enabling the default cadence.
+- Keep the assignment `/chat` endpoint publicly gradeable while requiring verified Google OIDC for
+  the scheduler endpoint.
+- Require an authentication design before supporting private multi-user history or user-supplied
+  delivery destinations.
+
+#### Work
+
+- Define the canonical models, JSON Schemas, stable validation errors, and schema-migration policy.
+- Implement a compiler subgraph that separates intent extraction, MCP identity resolution, rule
+  validation, preview, confirmation, and persistence.
+- Implement the watch application service, bounded local CLI, and one repository contract with
+  SQLite and Firestore drivers.
+- Implement the shared deterministic coordinator, lifecycle-aware scheduling, observation grouping,
+  trigger evaluator, idempotent recording, cooldowns, and re-arm semantics.
+- Add the authenticated internal polling endpoint without changing the assignment's public
+  `POST /chat` request or response contract.
+- Extend the repository Codex skill and add the explicit local foreground runner.
+- Add bounded template alerts and optional agent investigation using the normal host validation,
+  tool budgets, source notices, and provenance rules.
+- Add replay fixtures that feed identical timestamped observations to both local and Cloud storage
+  drivers and produce identical trigger decisions.
+- Document provider polling limits, Firestore and model costs, local operation, Cloud Scheduler,
+  authentication boundary, and shutdown behavior.
+
+#### Verification Plan
+
+- Compiler evals cover paraphrases, implicit thresholds, omitted time windows, contradictory rules,
+  unsupported contract types, ambiguous teams, doubleheaders, and multi-platform requests.
+- Contract tests prove invalid rules never persist and compilation never guesses a market ID,
+  `game_ref`, outcome mapping, timezone, or polling interval.
+- Replay tests cover threshold boundaries, quote staleness, out-of-order observations, delayed sports
+  feeds, duplicate plays, cache hits, process restarts, missed intervals, final games, and market
+  settlement lag.
+- Token instrumentation proves inactive intervals and non-triggering polls make zero model calls;
+  duplicate trigger fingerprints make zero additional explanation calls.
+- Integration tests prove polling invokes the existing MCP tools, shares observations across
+  compatible watches, avoids Tavily in the hot path, and remains useful when one source fails.
+- Parity tests compile and validate representative watches through LangGraph and headless Codex,
+  then run the same deterministic replay and compare normalized rule and trigger semantics.
+- Cloud tests verify authenticated scheduler invocation, Firestore persistence across instance
+  replacement, idempotent retries, bounded concurrency, and no cross-session watch mutation.
+
+#### Exit Criteria
+
+- A user creates, previews, confirms, lists, pauses, revises, and investigates a watch through the
+  primary `/chat` workflow.
+- The same representative watch works through local Codex and the foreground SQLite runner without
+  changing its schema or trigger meaning.
+- Active Cloud Run watches survive instance replacement and execute through authenticated scheduler
+  calls using Firestore-backed state.
+- Routine polling consumes no model tokens and no Tavily credits.
+- Alerts identify the exact game, contract, before/after price, evaluation window, correlated game
+  events, quote freshness, unavailable sources, and whether an explanation used a model.
+- Historical replay produces deterministic, idempotent trigger results with measured false-positive
+  and missed-trigger cases documented.
+- The assignment's existing chat, memory, MCP, failure-handling, and deployment contracts continue
+  to pass unchanged.
+
+#### Current State
+
+- **Status:** Complete locally; cloud acceptance pending Milestone 14.
+- LangGraph exposes validated preview, confirmation, lifecycle, inbox, and investigation flows.
+  SQLite, the Firestore adapter, deterministic coordinator, authenticated scheduler endpoint,
+  bounded CLI, foreground runner, and replay fixture share one versioned schema and evaluator.
+- Controlled substitutes verify Firestore transactions, Google OIDC, Secret Manager, restart
+  recovery, concurrent leases, zero-model polling, and zero-Tavily polling. Cloud Run, live
+  Firestore, Cloud Scheduler, and Google-issued OIDC remain unverified until deployment.
+
+#### Pivot Point
+
+- Keep rule compilation and historical replay even if provider limits make live polling too slow.
+- Reduce event vocabulary, cadence, retention, and automatic explanation before weakening identity,
+  deduplication, provenance, or no-token polling.
+- Do not replace the deterministic evaluator with an LLM loop.
+
+### Milestone 16: External Watch Alerts
+
+#### Product Boundary
+
+- Deliver an already-created `WatchTrigger` outside the application without changing how the watch
+  compiles, polls, or decides to fire.
+- Use Telegram as the first delivery channel because one HTTPS bot request works from the local
+  foreground runner and Cloud Run without a paid messaging provider.
+- Keep the in-product inbox authoritative. Telegram is a delivery projection of the stored trigger,
+  not the only copy of an alert.
+- Send deterministic template alerts by default. External delivery never creates an automatic model
+  call or Tavily request.
+- Keep alerts informational and read-only. They contain no trading action, recommendation, or
+  prefilled order workflow.
+
+#### Decisions Locked by This Plan
+
+- **Telegram first:** implement one `TelegramDelivery` adapter. Design a small delivery interface so
+  Discord or web push can follow without changing watch or trigger models, but do not implement
+  those channels in this milestone.
+- **No new MCP server:** delivery is validated application I/O after deterministic trigger creation.
+  The existing MCP tools remain the only sports, market, and research evidence sources.
+- **Single configured recipient:** the first release sends to one deployment-owned Telegram chat.
+  It does not accept arbitrary chat IDs from `/chat` or model output.
+- **Secret boundary:** read `TELEGRAM_BOT_TOKEN` from the ignored local environment and Google Secret
+  Manager on Cloud Run. Configure `TELEGRAM_CHAT_ID` outside source control. Never place either value
+  in prompts, tool results, logs, watch rules, alert bodies, or exception messages.
+- **Explicit opt-in:** a watch defaults to in-product delivery. The user enables Telegram delivery
+  in the compiled preview or a later revision; missing Telegram configuration leaves the watch
+  active with inbox-only delivery.
+- **Outbox delivery:** commit the trigger and one idempotent delivery record before making the HTTPS
+  request. A retry reuses the trigger fingerprint and cannot create a second logical message.
+- **Bounded message:** send one plain-text message under 1,500 characters containing game identity,
+  contract and platform, before/after price, window, correlated event, freshness warning, trigger
+  time, and a short non-causation notice.
+- **Controlled retries:** honor Telegram rate-limit retry metadata, retry timeouts and server errors
+  with bounded backoff, and mark persistent client or authorization errors terminal and visible in
+  the inbox.
+
+#### Shared Local and Cloud Workflow
+
+1. Milestone 15 creates and stores one deterministic `WatchTrigger` and outbox record.
+2. The coordinator claims due outbox records with a lease so concurrent or retried poll requests do
+   not deliver the same trigger twice.
+3. `TelegramDelivery` formats the stored trigger without invoking a model and sends one HTTPS Bot
+   API request.
+4. The repository records `sent`, `retry_scheduled`, or `failed_terminal`, the attempt count, and a
+   sanitized provider error classification.
+5. Local SQLite and Cloud Firestore use the same outbox state machine. The local foreground runner
+   reads credentials from `.env`; Cloud Run reads the bot token from Secret Manager.
+6. `/chat` and the local watch CLI report delivery status from stored state. They never query
+   Telegram merely to reconstruct whether an alert fired.
+
+#### Work
+
+- Add typed delivery policy and outbox models without changing the canonical trigger decision.
+- Implement the delivery interface, Telegram formatter, bounded HTTPS client, timeouts, retries,
+  rate-limit handling, and sanitized errors.
+- Extend SQLite and Firestore repositories with atomic outbox creation, leasing, retry scheduling,
+  and terminal status updates.
+- Extend watch compilation and revision so Telegram is an allowlisted delivery choice that requires
+  explicit confirmation and available deployment configuration.
+- Add local environment placeholders and Cloud Run Secret Manager wiring without committing a bot
+  token or chat ID.
+- Add inbox and CLI views for delivery state, retry time, and terminal failure reason.
+- Document bot setup, local configuration, Cloud configuration, revocation, cost boundaries, and
+  how to disable external delivery without deleting a watch.
+
+#### Verification Plan
+
+- Unit tests cover exact formatting, length bounds, escaping, missing optional evidence, stale quote
+  warnings, correlation wording, and secret redaction.
+- Transport tests inject timeouts, disconnects, rate limits, server errors, malformed responses,
+  authorization failures, and a recipient that blocks the bot.
+- Repository replay tests prove retries and concurrent claims cannot send two logical alerts for one
+  trigger fingerprint.
+- Integration tests prove a Telegram-enabled watch and an inbox-only watch share the same trigger
+  semantics and differ only at the delivery boundary.
+- Token instrumentation proves successful, retried, and failed deliveries make zero model calls.
+- Local tests run the SQLite foreground watcher against a fake Telegram endpoint. Cloud tests verify
+  Secret Manager access, Firestore outbox recovery after instance replacement, and scheduled retry.
+- One explicit live smoke test sends a uniquely identified test alert to the configured Telegram
+  chat and remains excluded from the default suite.
+
+#### Exit Criteria
+
+- A confirmed watch can opt into Telegram from both LangGraph and local Codex workflows.
+- One stored trigger produces at most one logical Telegram alert across retries, concurrency, and
+  process restarts.
+- The same alert remains available in the in-product inbox whether delivery succeeds or fails.
+- Missing or invalid Telegram configuration never disables polling or trigger storage.
+- Telegram messages contain sufficient evidence to understand why the deterministic rule fired and
+  state that temporal alignment does not prove causation.
+- External alert delivery consumes no model tokens and exposes no credentials or private destination
+  identifiers in logs or agent context.
+
+#### Current State
+
+- **Status:** Complete locally; cloud acceptance pending Milestone 14.
+- The transactional SQLite/Firestore outbox, bounded Telegram adapter, retry classifier, inbox
+  delivery status, Secret Manager boundary, fake transport end-to-end replay, and opt-in live smoke
+  test are implemented. Local fake delivery is verified; live Telegram remains pending credentials.
+
+#### Pivot Point
+
+- Keep the in-product inbox as the complete fallback when Telegram is unavailable.
+- Disable external delivery before weakening idempotency, secret handling, or trigger evidence.
+- Add another free channel only after Telegram delivery and recovery behavior are measured.
+
+### Milestone 17: Optional Polymarket US Migration Evaluation
 
 #### Work
 
@@ -1500,6 +1870,11 @@ only because it has already been implemented.
   - Same-session recall.
   - Cross-session isolation.
   - Context-dependent save request.
+- Watch engine tests:
+  - Natural-language compilation into the versioned rule schema.
+  - Exact identity resolution and confirmation before persistence.
+  - Zero-token deterministic polling, edge-triggered evaluation, cooldowns, and idempotent retries.
+  - SQLite/Firestore replay parity and LangGraph/headless-Codex semantic parity.
 - Container tests:
   - Non-root execution.
   - MCP subprocess startup.

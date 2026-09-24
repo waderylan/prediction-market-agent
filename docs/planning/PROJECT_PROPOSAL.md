@@ -24,6 +24,15 @@ context. It routes narrow questions to the minimum useful source set and can bui
 brief from exact-game state, both market platforms, and bounded web evidence. Independent calls in
 one reasoning step run concurrently after required identifiers are established.
 
+The same conversation creates event-aware watches. LangGraph resolves an exact game and
+full-game-winner contracts through those MCP tools, compiles one versioned rule, presents a precise
+preview, and activates it only after confirmation. The host coordinator shares observations across
+compatible rules and deterministically evaluates probability-point movement, scoring-event and
+no-tracked-scoring-event windows, lifecycle changes, cross-platform divergence, cooldown, and
+re-arm state. SQLite is the local store and Firestore is the Cloud Run store behind one repository
+interface. The in-product inbox is authoritative; explicitly opted-in watches also project stored
+triggers to one deployment-owned Telegram chat through a transactional outbox.
+
 The sports-state MCP separately finds a supported game by team, league, one local calendar day,
 and timezone, then reads current state, a box score, a compact player directory, or one player's
 game statistics through an opaque discovery reference. It also reads bounded chronological play
@@ -62,7 +71,7 @@ Representative requests:
 - Find Ohio State vs Michigan with league `ncaa_football`.
 - Read the rules for this returned market ID.
 - Which game does that price refer to, when was the quote observed, and is it stale?
-- What is the Yankees score and inning right now in America/Los_Angeles?
+- What is the Yankees score and inning in America/Los_Angeles?
 - Who has possession in the Falcons game, and what are the down and distance?
 - Get the Yankees box score. Who has a hit and how many strikeouts does the starter have?
 - Show period scoring and player statistics for this returned NFL or NCAA football game.
@@ -97,8 +106,9 @@ unavailable.
 
 The FastAPI and LangGraph application is the primary product path. A repository Codex skill lets a
 developer test the same four configured MCPs directly in interactive or headless Codex. That path
-tests MCP behavior and routing instructions; it does not replace LangGraph memory, host-side
-validation and matching, per-turn budgets, or the required HTTP endpoint.
+tests MCP behavior and routing instructions and uses the bounded watch CLI with the shared schemas,
+validator, evaluator, and SQLite repository. It does not replace LangGraph memory, per-turn
+budgets, or the required HTTP endpoint, and it does not remain active after its process exits.
 
 The optional saved-research snapshot ledger is deferred until after deployment. It is not a
 current capability.
@@ -110,10 +120,12 @@ equivalence or evidence is insufficient.
 ## Non-goals
 
 - Orders, brokerage access, positions, profit-and-loss tracking, or account credentials.
-- Unbounded catalog scans, web browsing, or background monitoring.
+- Unbounded catalog scans, web browsing, or model-driven polling.
 - Automatic settlement, automatic forecast resolution, or custom predictive training.
 - Guaranteed coverage of every provider listing or every NCAA competition.
 - Durable conversational memory across Cloud Run instance replacement.
+- Private multi-user alert history or user-selected Telegram recipients. Session IDs are routing
+  keys, not authentication.
 
 ## Assignment commitments
 
@@ -134,5 +146,6 @@ contains reviewed provider-derived names and aliases; it contains no market iden
 cannot enable a league, spread, total, prop, or future by itself.
 
 See [Sports market MCP design](../research/SPORTS_MCP.md),
-[game-state MCP design](../research/GAME_STATE_MCP.md), and
+[game-state MCP design](../research/GAME_STATE_MCP.md),
+[watch monitoring and alerts](../research/WATCH_MONITORING_AND_ALERTS.md), and
 [implementation milestones](IMPLEMENTATION_PLAN.md) for acceptance criteria.
