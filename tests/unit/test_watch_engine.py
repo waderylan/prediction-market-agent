@@ -20,6 +20,7 @@ from market_agent.watch.coordinator import (
     MCPWatchEvidenceProvider,
     WatchCoordinator,
     _alert_worthy,
+    _recent_plays,
 )
 from market_agent.watch.delivery import (
     DeliveryWorker,
@@ -345,6 +346,25 @@ def test_recent_play_filter_drops_pitch_noise() -> None:
     assert not _alert_worthy(play("Pitch 3 : Ball 1"))
     assert not _alert_worthy(play("End of the 3rd inning"))
     assert not _alert_worthy(play("Nick Pivetta pitches to Mookie Betts", kind="pitch"))
+    assert _alert_worthy(play("Bottom of the 4th inning"))
+
+    # Replays the 8:03-8:08 PM gap: an inning break, then one long at-bat with no result yet.
+    gap = [
+        play("France flied out to center."),
+        play("Middle of the 4th inning"),
+        play("Bottom of the 4th inning"),
+        play("Nick Pivetta pitches to Teoscar Hernandez", kind="pitch"),
+        play("Pitch 1 : Ball 1"),
+        play("Pitch 6 : Strike 2 Foul"),
+    ]
+    assert [summary.description for summary in _recent_plays(gap)] == [
+        "France flied out to center.",
+        "Bottom of the 4th inning",
+        "At bat now: Nick Pivetta pitching to Teoscar Hernandez, 2 pitches so far "
+        "(last: Strike 2 Foul)",
+    ]
+    finished = [*gap, play("T. Hernandez hit by pitch.")]
+    assert _recent_plays(finished)[-1].description == "T. Hernandez hit by pitch."
 
 
 def test_no_tracked_scoring_event_is_bounded_and_source_required() -> None:

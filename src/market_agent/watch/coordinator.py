@@ -47,8 +47,11 @@ class BatchEvidenceProvider(Protocol):
 
 ToolConnection = Callable[[frozenset[str]], AbstractAsyncContextManager[list[BaseTool]]]
 
-# ESPN labels individual pitches and inning banners as plays; alerts only need outcomes.
-_PLAY_NOISE = re.compile(r"^(pitch \d+\s*:|.* pitches to |(top|bottom|middle|end) of the )", re.I)
+# ESPN labels individual pitches and inning breaks as plays; alerts keep outcomes and half-inning
+# starts, and fold an unfinished at-bat into one summary line.
+_PITCH = re.compile(r"^pitch (\d+)\s*:\s*(.+)$", re.I)
+_MATCHUP = re.compile(r"^(.+?) pitches to (.+)$", re.I)
+_PLAY_NOISE = re.compile(r"^(pitch \d+\s*:|.* pitches to |(middle|end) of the )", re.I)
 
 
 def _alert_worthy(play: GamePlay) -> bool:
@@ -68,6 +71,38 @@ def _summarize(play: GamePlay) -> ScoringPlay:
         period_label=play.period_label,
         scoring=play.scoring_play,
     )
+
+
+def _at_bat_in_progress(tail: list[GamePlay]) -> ScoringPlay | None:
+    """Summarize pitches thrown after the last completed play, if an at-bat is still going."""
+    matchup = next((m for p in reversed(tail) if (m := _MATCHUP.match(p.text))), None)
+    pitches = [m for p in tail if (m := _PITCH.match(p.text))]
+    last = tail[-1] if tail else None
+    if matchup is None or last is None or last.wallclock is None:
+        return None
+    description = f"At bat now: {matchup.group(1)} pitching to {matchup.group(2)}"
+    if pitches:
+        count = "pitch" if len(pitches) == 1 else "pitches"
+        description += f", {len(pitches)} {count} so far (last: {pitches[-1].group(2).strip()})"
+    return ScoringPlay(
+        play_id=f"{last.play_id}:in-progress",
+        play_time=last.wallclock,
+        description=description,
+        home_score=last.home_score,
+        away_score=last.away_score,
+        period_label=last.period_label,
+        scoring=False,
+    )
+
+
+def _recent_plays(plays: list[GamePlay]) -> list[ScoringPlay]:
+    kept = [index for index, play in enumerate(plays) if _alert_worthy(play)]
+    recent = [_summarize(plays[index]) for index in kept]
+    start = kept[-1] + 1 if kept else 0
+    in_progress = _at_bat_in_progress([p for p in plays[start:] if p.wallclock is not None])
+    if in_progress is not None:
+        recent.append(in_progress)
+    return recent[-20:]
 
 
 class MCPWatchEvidenceProvider:
@@ -216,11 +251,7 @@ class MCPWatchEvidenceProvider:
                 if play.scoring_play and play.wallclock is not None
             ]
         # Recent plays are display context only; their absence never blocks evaluation.
-        recent_plays = (
-            [_summarize(play) for play in recent.plays if _alert_worthy(play)][-20:]
-            if recent
-            else []
-        )
+        recent_plays = _recent_plays(recent.plays) if recent else []
         lifecycle = state.lifecycle if state else "delayed"
         if lifecycle not in {
             "scheduled",
