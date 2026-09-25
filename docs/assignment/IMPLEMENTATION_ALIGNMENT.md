@@ -19,8 +19,8 @@ API usage, deployment status, costs, and architecture diagrams remain in the rep
 | Required endpoint | `POST /chat` accepts `query` and `session_id` and returns one `response` string. |
 | Cloud deployment | The Docker image is designed for Google Cloud Run. A live URL remains required for submission. |
 | Testing | Unit, integration, stdio, bounded live-provider, and optional real-model suites cover the application and MCP boundaries. |
-| Event-aware watches | LangGraph compiles exact confirmed rules; a no-model coordinator evaluates shared MCP observations into a persistent inbox. |
-| External alerts | A transactional outbox projects explicitly opted-in triggers to one configured Telegram chat; live delivery is verified from the local runner. |
+| Add-on: event-aware watches (beyond requirements) | LangGraph compiles exact confirmed rules; a no-model coordinator evaluates shared MCP observations into a persistent inbox. |
+| Add-on: external alerts (beyond requirements) | A transactional outbox projects explicitly opted-in triggers to one configured Telegram chat; live delivery is verified from the local runner. |
 
 ## Repository deliverables
 

@@ -12,6 +12,10 @@ A watch is a saved rule, like:
 Once it's saved, a background program checks the game and the markets every minute. When the rule
 matches, it sends you an alert.
 
+Watches are an **add-on**. The core project is the chat agent that answers questions about a game
+using four MCP servers (see section 3). Watches reuse that agent and those MCP servers, but the core
+works exactly the same without them.
+
 That's the whole feature. Everything below is detail about how each piece works and why it's built
 that way.
 

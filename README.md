@@ -24,11 +24,8 @@ Market Lens keeps the selected game attached to the thread. A direct question re
 answer. A broad request can expand into a sourced brief with game state, statistics, market
 snapshots, contract terms, and current reporting.
 
-The same conversation can turn exact evidence into a durable watch. A request such as “alert me if
-either market moves eight points within two minutes of a scoring play” resolves the game and
-contracts, previews one typed rule, and waits for explicit confirmation. Confirmed rules poll
-without a model, write deterministic inbox alerts, and optionally project the same stored trigger
-to one configured Telegram chat.
+An optional add-on, [watches](#add-on-watches-and-telegram-alerts), turns a game you're
+following into a saved alert rule that runs in the background and can notify you on Telegram.
 
 ## The hard part is joining evidence safely
 
@@ -56,8 +53,6 @@ in the answer.
 - Compare two market contracts when their event and settlement terms support comparison.
 - Build a sourced game brief with current state, market snapshots, injuries, lineups, weather, or
   schedule news.
-- Create, confirm, revise, pause, resume, list, inspect, or delete an event-aware watch.
-- Review the alert inbox and Telegram delivery state, then request a bounded investigation.
 
 Market Lens is read-only. It does not place orders, access market accounts, generate an independent
 win probability, or make betting picks.
@@ -75,19 +70,9 @@ synthesis. Four independent MCP servers expose focused, typed tools:
 | Sports-state MCP | Exact-game state, box scores, player game statistics, and bounded play history |
 | Tavily MCP | At most two identity-bound searches for injuries, lineups, weather, schedule changes, game news, or recaps |
 
-The watch application service is not a fifth MCP server. It owns versioned rules, observations,
-trigger fingerprints, inbox records, leases, retention, and the delivery outbox. SQLite is the
-complete local store. Firestore implements the same durable repository contract for Cloud Run.
-Cloud Scheduler reaches a separate Google-OIDC-protected polling endpoint; the local foreground
-runner calls the same coordinator.
-
 Independent calls from one reasoning step execute concurrently. Identifier-dependent detail and
 research calls wait until discovery establishes the required identity. Each turn allows eight
 market or sports-state calls and two Tavily searches.
-
-Routine watch polling and Telegram delivery make zero model calls and do not start or call Tavily.
-Compatible watches share one observation set, and due game groups reuse one bounded MCP session.
-Automatic model explanations are disabled; investigation is an explicit conversational request.
 
 ### Trust boundaries
 
@@ -140,45 +125,6 @@ Reuse a session ID for follow-ups. Use a new, unguessable ID for a separate conv
 IDs are not authentication, and the in-memory LangGraph checkpointer lasts for the process
 lifetime.
 
-Watch definitions are scoped to the creating session. This prevents accidental cross-session
-mutation but does not turn session IDs into authentication.
-
-### Local watch runner and CLI
-
-The JSON-lines CLI exposes the shared validator and SQLite application service:
-
-```powershell
-uv run --env-file .env python scripts/watch_cli.py --db artifacts/watches.db
-```
-
-Send one JSON object per line. Keep the process open between `preview` and `confirm`; an unconfirmed
-draft is not an active persisted rule. Local Codex follows this interface through the repository
-skill.
-
-Routine management also has safe typed arguments, for example:
-
-```powershell
-uv run --env-file .env python scripts/watch_cli.py --operation list --session-id <creating-session>
-uv run --env-file .env python scripts/watch_cli.py --operation inbox --session-id <creating-session> --limit 10
-uv run --env-file .env python scripts/watch_cli.py --operation pause --session-id <creating-session> --watch-id <watch-id>
-```
-
-The typed surface never accepts Telegram credentials or a destination chat ID.
-
-Run confirmed watches in the foreground:
-
-```powershell
-uv run --env-file .env python scripts/run_watches.py --db artifacts/watches.db
-```
-
-Stopping the process stops local polling. SQLite rules remain for the next run. A deterministic,
-credential-free demonstration exercises the synchronized timeline, exact threshold, inbox, and
-fake Telegram projection:
-
-```powershell
-uv run python scripts/run_watches.py --replay tests/fixtures/watch/yankees_scoring_replay.json
-```
-
 ### Inspection UI
 
 ```powershell
@@ -186,8 +132,8 @@ uv run python scripts/run_chat_ui.py
 ```
 
 This starts Market Lens at `http://127.0.0.1:3000`, the FastAPI backend, and a local Codex model
-gateway. The application still owns LangGraph memory and MCP execution. The UI displays the actual
-tool activity for each turn and includes focused watch creation, status, and inbox entry points.
+gateway. The application owns LangGraph memory and MCP execution. The UI displays the actual
+tool activity for each turn and includes entry points for the watch add-on.
 The gateway uses local CLI authentication and is not included as a production backend.
 
 ## Test the MCP workflow in Codex
@@ -201,10 +147,10 @@ codex exec '$sports-information Find today''s MLB games in UTC. Use sports state
 ```
 
 This path is a direct MCP test surface. It checks tool discovery, routing instructions, schemas,
-provider behavior, and the shared watch schema/CLI inside a normal Codex conversation. It does not
-exercise the application's LangGraph memory, per-turn budgets, or `/chat` contract and cannot keep
-polling after its process exits. The FastAPI and LangGraph path remains the product and assignment
-implementation.
+and provider behavior inside a normal Codex conversation. It does not exercise the application's
+LangGraph memory, per-turn budgets, or `/chat` contract. The FastAPI and LangGraph path is the
+product and assignment implementation. The same skill can also create watches through the watch
+CLI.
 
 ## MCP tool surface
 
@@ -254,12 +200,6 @@ The live checks accept empty slates and evidence sets. They validate schemas and
 behavior without assuming that a specific game or market is open. Real-model checks are separate:
 set `RUN_LIVE_AGENT=1` and run `tests/live/test_chat_live.py` with a configured model backend.
 
-The opt-in live Telegram smoke skips unless `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are present:
-
-```powershell
-uv run pytest tests/live/test_telegram_live.py -q -s
-```
-
 ## Container and Cloud Run
 
 ```powershell
@@ -271,18 +211,15 @@ The multi-stage image installs locked runtime dependencies, runs as UID 10001, a
 four Python MCP processes. It requires no Node runtime.
 
 Cloud Run deployment uses one worker and `--max-instances 1` so the assignment's in-process session
-memory remains coherent within the service instance. Active cloud watches use Firestore rather than
-the ephemeral container filesystem. Cloud Scheduler sends a Google OIDC token to
-`POST /internal/watches/poll`; public `POST /chat` follows the assignment contract. The bot token can
-come from Secret Manager through the service identity. Deployment requires an Artifact Registry
+memory stays coherent within the service instance. Deployment requires an Artifact Registry
 image and runtime environment variables. The local Codex gateway and local credentials never enter
-the image. The live Cloud Run URL and every live Google Cloud watch boundary remain submission work.
+the image. The live Cloud Run URL is a submission deliverable. The watch add-on's cloud pieces
+are described in [Watches on Cloud Run](#watches-on-cloud-run).
 
 Public market, ESPN, and MLB StatsAPI requests require no account credentials. Model inference,
 Cloud Run, Cloud Build, Artifact Registry storage, and keyed Tavily searches can incur provider
-charges. Confirmed watches add bounded provider polling and Firestore operations; polling performs
-no background web research or model inference. Telegram Bot API use is free under Telegram's
-service limits.
+charges. The core agent performs no continuous polling or background research; only confirmed
+watches poll.
 
 ## Architecture
 
@@ -293,7 +230,7 @@ flowchart LR
     G <--> L[Configured LLM]
     G <--> M[InMemorySaver]
     G --> V[Host validation and deterministic matching]
-    G --> WC[Watch compiler + exact preview]
+    G -. optional add-on .-> WA[Watch tools and service, see add-on section]
     G --> A[MCP client adapter]
     A <--> K[Kalshi MCP]
     A <--> P[Polymarket MCP]
@@ -304,19 +241,6 @@ flowchart LR
     S --> ESPN[ESPN public JSON]
     S -. MLB fallback .-> MLB[MLB StatsAPI]
     T --> TA[Tavily Search API]
-    WC --> WR[Watch service]
-    WR --> DB[(SQLite local / Firestore cloud)]
-    CS[Cloud Scheduler + Google OIDC] --> PE[Internal poll endpoint]
-    LR[Foreground local runner] --> CO[Deterministic coordinator]
-    PE --> CO
-    CO --> SA[Selected MCP tools]
-    SA <--> K
-    SA <--> P
-    SA <--> S
-    CO --> DB
-    DB --> IN[Inbox]
-    DB --> OB[Telegram outbox]
-    OB --> TG[Telegram Bot API]
     G --> F
     F --> U
 ```
@@ -333,42 +257,156 @@ flowchart LR
     MORE -->|Yes: loop back| L
     MORE -->|No: answer| SYN[LLM synthesis]
     SYN --> OUT[Source-attributed response]
-    VAL -->|watch identities complete| PV[Typed watch preview]
-    PV --> CF{Exact confirmation?}
-    CF -->|No| OUT
-    CF -->|Yes| SAVE[Persist active rule]
-    SAVE --> POLL[No-model MCP polling]
-    POLL --> TR[Deterministic trigger + inbox/outbox]
 ```
 
 ```mermaid
 flowchart LR
-    ENV[Runtime environment + Secret Manager] --> APP[Containerized FastAPI service]
+    ENV[Runtime environment variables] --> APP[Containerized FastAPI service]
     IMG[Non-root image with 4 MCP servers] --> APP
     APP --> EXT[Public data providers and model API]
     IMG -. publish target .-> AR[Artifact Registry]
     AR -. deployment target .-> CR[Cloud Run, one instance]
     CR -. exposes .-> URL[Public POST /chat URL]
-    FS[(Firestore)] <--> CR
-    SCH[Cloud Scheduler OIDC] --> CR
-    CR --> TELE[Telegram Bot API]
-    SQL[(SQLite)] <--> LOCAL[Local foreground runner]
-    LOCAL --> EXT
+    CR -.-> FS[(Firestore, watch add-on)]
+    SCH[Cloud Scheduler OIDC, watch add-on] -.-> CR
     DEV[Local Codex gateway] -. development only .-> APP
 ```
+
+## Add-on: watches and Telegram alerts
+
+Everything above is the core product: a chat agent that answers questions using four MCP servers.
+Watches are an optional feature built on top of it. The core agent works the same with or without
+them.
+
+**What a watch is.** A saved rule such as "text me if the Padres win chance moves 2+ points within 2
+minutes." After you confirm it, a background runner checks the game and its markets every minute.
+When the rule matches, an alert goes to an inbox and, if you opted in, to Telegram.
+
+**How it fits with the core.**
+
+| Job | Who does it | Uses the model? |
+|---|---|---|
+| Describe the rule in plain English | The same `/chat` agent, using eight extra `watch_*` tools; or Codex through the repository skill | Yes |
+| Save the confirmed rule | SQLite locally, Firestore on Cloud Run | No |
+| Check the game and markets every minute | A runner: `scripts/run_watches.py` locally, Cloud Scheduler on Cloud Run | No |
+| Deliver the alert | Inbox (always) and one configured Telegram chat (optional) | No |
+
+- The model only helps write the rule. Plain Python decides whether an alert fires.
+- Watches are not a fifth MCP server. The four MCP servers are how the app reaches outside data.
+  Watches are the app's own feature: its own rules, database, and alerts. The runner gets its data
+  through the same sports-state, Kalshi, and Polymarket MCP servers the agent uses. It never
+  calls the model or Tavily.
+- Creating a watch always takes two steps: a preview with an exact draft ID, then an explicit
+  confirmation. Nothing is monitored until you confirm.
+- Watches are scoped to the session that created them. Session IDs are routing keys, not login.
+- Supported: MLB, NFL, and NCAA Division I football full-game-winner contracts on Kalshi,
+  Polymarket, or both. Rules can watch price moves (with or without a scoring play), a gap between
+  the two platforms, or a game status change.
+
+An alert reads like this:
+
+```text
+MLB WATCH ALERT: San Diego Padres at Los Angeles Dodgers
+San Diego Padres win chance moved fast (within 64s).
+
+Kalshi: 36% -> 34% (down 2 pts)
+Polymarket: 41.5% -> 36.5% (down 5 pts)
+
+Plays in the last 3 min:
+- 8:05 PM, 4th Inning: Bottom of the 4th inning
+- 8:07 PM, 4th Inning: At bat now: Nick Pivetta pitching to Teoscar Hernandez, count 3-2 (pitches: BSFBBF)
+Score: San Diego Padres 0, Los Angeles Dodgers 0 (4th Inning)
+
+Your rule: 2+ pt move within 2 min, any cause.
+Note: Kalshi and Polymarket did not report quote times, so fetch times were used.
+Plays are timing context, not proof they caused the move.
+Alert time: 8:08 PM PDT
+```
+
+```mermaid
+flowchart LR
+    U[User] --> FRONT["/chat agent or Codex skill"]
+    FRONT -->|preview, then confirm| DB[(SQLite local / Firestore cloud)]
+    LR[Local runner, every 60s] --> CO[Deterministic coordinator]
+    CS[Cloud Scheduler + Google OIDC] --> PE[POST /internal/watches/poll] --> CO
+    CO --> DB
+    CO --> MCP[Sports-state, Kalshi, Polymarket MCP]
+    CO -->|rule matched| IN[Inbox]
+    IN --> OB[Telegram outbox] --> TG[Telegram Bot API]
+```
+
+### Run watches locally
+
+Create and confirm watches through `/chat`, the inspection UI, or the JSON-lines CLI:
+
+```powershell
+uv run --env-file .env python scripts/watch_cli.py --db artifacts/watches.db
+```
+
+Send one JSON object per line. Keep the process open between `preview` and `confirm`, because
+drafts live only in memory. Codex follows this interface through the repository skill. Routine
+management also takes typed arguments:
+
+```powershell
+uv run --env-file .env python scripts/watch_cli.py --operation list --session-id <creating-session>
+uv run --env-file .env python scripts/watch_cli.py --operation inbox --session-id <creating-session> --limit 10
+uv run --env-file .env python scripts/watch_cli.py --operation pause --session-id <creating-session> --watch-id <watch-id>
+```
+
+None of these accept Telegram credentials or a destination chat ID.
+
+Start exactly one runner in its own terminal:
+
+```powershell
+uv run --env-file .env python scripts/run_watches.py --db artifacts/watches.db
+```
+
+`state=idle` means nothing was due on that check. Closing the runner stops checking; saved watches
+stay in SQLite for the next run. Restart it after changing watch code.
+
+A credential-free demo replays a saved game with a fake Telegram:
+
+```powershell
+uv run python scripts/run_watches.py --replay tests/fixtures/watch/yankees_scoring_replay.json
+```
+
+For Telegram, set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in the ignored `.env`, then run the
+opt-in smoke test:
+
+```powershell
+uv run pytest tests/live/test_telegram_live.py -q -s
+```
+
+### Watches on Cloud Run
+
+On Cloud Run, watches use Firestore instead of the container filesystem. Cloud Scheduler calls
+`POST /internal/watches/poll` once a minute with a Google OIDC token; that endpoint is separate
+from the public `POST /chat` contract. The bot token can come from Secret Manager through the
+service identity. Watch polling adds bounded provider requests and Firestore operations, with no
+model or web-search cost. Telegram's Bot API is free within its service limits.
+
+**Status.** Proven locally with real data: watch creation through Codex, the SQLite runner polling
+live MLB games through the real MCP servers, and real Telegram delivery. The Firestore, Scheduler,
+OIDC, and Secret Manager paths are tested against controlled stand-ins; live Google Cloud
+acceptance requires deployment.
+
+[Watches, explained from zero](docs/WATCHES_EXPLAINED.md) covers the design in plain language.
+[Watch monitoring and alerts](docs/research/WATCH_MONITORING_AND_ALERTS.md) is the technical
+reference.
 
 ## Assignment context
 
 This repository implements CSCI 599 Assignment 1: a deployed tool-using agent with MCP integration
 and conversational memory. The product design extends the assignment's minimum contract with
-typed sports data, source provenance, deterministic market checks, and direct Codex testing.
+typed sports data, source provenance, deterministic market checks, and direct Codex testing. The
+watch add-on goes beyond the assignment requirements.
 
 - [Assignment implementation and submission mapping](docs/assignment/IMPLEMENTATION_ALIGNMENT.md)
 - [Canonical assignment description](docs/assignment/Assignment_1_Description.md)
 - [Runtime architecture](docs/research/MCP_VERTICAL_SLICE.md)
 - [Testing strategy](docs/research/TESTING.md)
-- [Watch monitoring and alerts](docs/research/WATCH_MONITORING_AND_ALERTS.md)
-- [Event-aware watches explained from first principles](docs/WATCHES_EXPLAINED.md)
+- [Watch add-on, explained from zero](docs/WATCHES_EXPLAINED.md)
+- [Watch add-on technical reference](docs/research/WATCH_MONITORING_AND_ALERTS.md)
 - [Product scope](docs/planning/PROJECT_PROPOSAL.md)
 - [Implementation milestones](docs/planning/IMPLEMENTATION_PLAN.md)
 

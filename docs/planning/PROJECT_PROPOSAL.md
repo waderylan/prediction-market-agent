@@ -24,7 +24,8 @@ context. It routes narrow questions to the minimum useful source set and can bui
 brief from exact-game state, both market platforms, and bounded web evidence. Independent calls in
 one reasoning step run concurrently after required identifiers are established.
 
-The same conversation creates event-aware watches. LangGraph resolves an exact game and
+As an optional add-on to the core research agent, the same conversation creates event-aware
+watches. LangGraph resolves an exact game and
 full-game-winner contracts through those MCP tools, compiles one versioned rule, presents a precise
 preview, and activates it only after confirmation. The host coordinator shares observations across
 compatible rules and deterministically evaluates probability-point movement, scoring-event and
