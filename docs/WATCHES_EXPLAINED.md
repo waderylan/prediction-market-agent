@@ -541,3 +541,5 @@ credentials.
 - Secret Manager supplying the Telegram token on Cloud Run.
 
 None of the cloud pieces above are claimed as working live.
+
+[WATCHES_NEXT_STEPS.md](WATCHES_NEXT_STEPS.md) lists what the add-on needs before production use.

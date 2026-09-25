@@ -392,7 +392,8 @@ acceptance requires deployment.
 
 [Watches, explained from zero](docs/WATCHES_EXPLAINED.md) covers the design in plain language.
 [Watch monitoring and alerts](docs/research/WATCH_MONITORING_AND_ALERTS.md) is the technical
-reference.
+reference. [Next steps](docs/WATCHES_NEXT_STEPS.md) lists what the add-on needs before production
+use.
 
 ## Assignment context
 
