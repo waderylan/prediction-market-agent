@@ -121,10 +121,23 @@ class WatchService:
         return rule
 
     def pause(self, session_id: str, watch_id: str) -> bool:
-        return self.repository.set_status(watch_id, session_id, WatchStatus.PAUSED)
+        return self._transition(session_id, watch_id, WatchStatus.ACTIVE, WatchStatus.PAUSED)
 
     def resume(self, session_id: str, watch_id: str) -> bool:
-        return self.repository.set_status(watch_id, session_id, WatchStatus.ACTIVE)
+        return self._transition(session_id, watch_id, WatchStatus.PAUSED, WatchStatus.ACTIVE)
+
+    def _transition(
+        self, session_id: str, watch_id: str, current: WatchStatus, target: WatchStatus
+    ) -> bool:
+        """Pause/resume only move between active and paused; a finished watch stays finished."""
+        rule = self.repository.get_rule(watch_id, session_id)
+        if rule is None:
+            return False
+        if rule.status == target:
+            return True
+        if rule.status != current:
+            raise ValueError(f"A {rule.status.value} watch cannot become {target.value}.")
+        return self.repository.set_status(watch_id, session_id, target)
 
     def delete(self, session_id: str, watch_id: str) -> bool:
         return self.repository.delete_rule(watch_id, session_id)

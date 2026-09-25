@@ -872,3 +872,21 @@ def test_oidc_and_secret_manager_boundaries_use_controlled_substitutes() -> None
     assert GoogleSecretLoader("project", SecretClient()).access("telegram-token") == "secret-value"
     with pytest.raises(ValueError):
         GoogleSecretLoader("project", SecretClient()).access("projects/x/secrets/y")
+
+
+def test_pause_resume_cannot_revive_finished_watch_and_missing_runtime_is_armed(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteWatchRepository(tmp_path / "watches.db")
+    service = WatchService(repository)
+    watched = rule()
+    repository.save_rule(watched, due_at=BASE)
+    assert service.pause("session-a", watched.watch_id)
+    assert service.pause("session-a", watched.watch_id)
+    assert service.resume("session-a", watched.watch_id)
+    assert not service.resume("session-b", watched.watch_id)
+    repository.set_status(watched.watch_id, "session-a", WatchStatus.TERMINAL)
+    with pytest.raises(ValueError, match="terminal watch cannot become active"):
+        service.resume("session-a", watched.watch_id)
+    # A concurrent revision can remove runtime rows between claim and evaluation.
+    assert repository.condition_state(watched.watch_id, "removed_condition") == (True, None)

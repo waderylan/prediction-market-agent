@@ -320,7 +320,9 @@ class SQLiteWatchRepository:
                 "WHERE watch_id = ? AND condition_id = ?",
                 (watch_id, condition_id),
             ).fetchone()
-        return (bool(row["armed"]), _time(row["fired_at"]) if row and row["fired_at"] else None)
+        if row is None:
+            return True, None
+        return bool(row["armed"]), _time(row["fired_at"]) if row["fired_at"] else None
 
     def set_condition_state(
         self, watch_id: str, condition_id: str, armed: bool, fired_at: datetime | None

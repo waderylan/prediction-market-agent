@@ -35,7 +35,7 @@ class HttpxTelegramTransport:
                     url,
                     json={"chat_id": chat_id.get_secret_value(), "text": text},
                 )
-        except (httpx.TimeoutException, httpx.NetworkError) as error:
+        except httpx.TransportError as error:
             raise TelegramTransientError(type(error).__name__) from None
         try:
             payload = response.json()

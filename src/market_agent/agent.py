@@ -847,7 +847,8 @@ class ChatAgent:
         watch_tools = build_watch_tools() if self.watch_service else []
         all_tools = [*tools, *watch_tools]
         by_name = {tool.name: tool for tool in all_tools}
-        turn_prompt = SYSTEM_PROMPT + WATCH_PROMPT + "\n" + _source_availability_message(tools)
+        watch_prompt = WATCH_PROMPT if watch_tools else ""
+        turn_prompt = SYSTEM_PROMPT + watch_prompt + "\n" + _source_availability_message(tools)
         bound_model = (
             self.model.bind_tools(all_tools, parallel_tool_calls=True) if all_tools else self.model
         )

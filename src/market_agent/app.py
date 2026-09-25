@@ -1,5 +1,6 @@
 """HTTP contract and application-owned model/checkpointer lifecycle."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -109,7 +110,7 @@ def create_app(
         runtime: WatchRuntime | None = app.state.watch_runtime
         if runtime is None or runtime.oidc is None:
             raise HTTPException(503, "Scheduler authentication is not configured")
-        if not runtime.oidc.verify(authorization):
+        if not await asyncio.to_thread(runtime.oidc.verify, authorization):
             raise HTTPException(401, "Invalid scheduler identity")
         invocation = uuid4().hex
         result = await runtime.coordinator.poll(owner=f"cloud-{invocation}")

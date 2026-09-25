@@ -52,16 +52,21 @@ async def run(database: str, once: bool) -> None:
         flush=True,
     )
     while True:
-        result = await coordinator.poll(owner=owner)
-        attempts = await delivery.run_once(owner + "-delivery")
-        state = "polled" if result.claimed_watches else "idle"
-        print(
-            f"state={state} claimed={result.claimed_watches} "
-            f"groups={result.observation_groups} "
-            f"triggers={result.created_triggers} warnings={result.source_warnings} "
-            f"deliveries={attempts}",
-            flush=True,
-        )
+        try:
+            result = await coordinator.poll(owner=owner)
+            attempts = await delivery.run_once(owner + "-delivery")
+        except Exception as error:
+            # One bad cycle must not stop monitoring; expired leases let the next cycle retry.
+            print(f"state=error error={type(error).__name__}; retrying next cycle", flush=True)
+        else:
+            state = "polled" if result.claimed_watches else "idle"
+            print(
+                f"state={state} claimed={result.claimed_watches} "
+                f"groups={result.observation_groups} "
+                f"triggers={result.created_triggers} warnings={result.source_warnings} "
+                f"deliveries={attempts}",
+                flush=True,
+            )
         if once:
             return
         await asyncio.sleep(60)
