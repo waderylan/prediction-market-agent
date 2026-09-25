@@ -531,17 +531,19 @@ trigger inbox while using the same FastAPI, LangGraph, validation, and repositor
 ### Run polling in a second terminal
 
 ```powershell
-uv run python scripts/run_watches.py --db artifacts/watches.db
+uv run --env-file .env python scripts/run_watches.py --db artifacts/watches.db
 ```
 
-Stopping this process stops local polling. The SQLite data remains on disk.
+Keep exactly one foreground runner open for a SQLite database. `state=idle` means no watch is due
+in that cycle; it is not an error. Stopping this process stops local polling. The SQLite data
+remains on disk.
 
 ### Inspect through the typed CLI
 
 ```powershell
-uv run python scripts/watch_cli.py --operation list --session-id demo-session
-uv run python scripts/watch_cli.py --operation inbox --session-id demo-session --limit 10
-uv run python scripts/watch_cli.py --operation inspect --session-id demo-session --watch-id <watch-id>
+uv run --env-file .env python scripts/watch_cli.py --operation list --session-id demo-session
+uv run --env-file .env python scripts/watch_cli.py --operation inbox --session-id demo-session --limit 10
+uv run --env-file .env python scripts/watch_cli.py --operation inspect --session-id demo-session --watch-id <watch-id>
 ```
 
 The CLI also accepts JSON objects on standard input for preview and confirmation. Keep that CLI

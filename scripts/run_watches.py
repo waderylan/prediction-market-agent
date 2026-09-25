@@ -45,11 +45,19 @@ async def run(database: str, once: bool) -> None:
     telegram = TelegramDelivery(SecretStr(token), SecretStr(chat_id)) if token and chat_id else None
     delivery = DeliveryWorker(repository, telegram)
     owner = f"foreground-{uuid4().hex}"
+    print(
+        f"runner=started db={path} telegram="
+        f"{'enabled' if telegram is not None else 'inbox-only'} "
+        "mode=foreground; keep exactly one runner open",
+        flush=True,
+    )
     while True:
         result = await coordinator.poll(owner=owner)
         attempts = await delivery.run_once(owner + "-delivery")
+        state = "polled" if result.claimed_watches else "idle"
         print(
-            f"claimed={result.claimed_watches} groups={result.observation_groups} "
+            f"state={state} claimed={result.claimed_watches} "
+            f"groups={result.observation_groups} "
             f"triggers={result.created_triggers} warnings={result.source_warnings} "
             f"deliveries={attempts}",
             flush=True,

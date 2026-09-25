@@ -10,8 +10,9 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, cast, runtime_checkable
+from uuid import uuid4
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolCall, ToolMessage
 from langchain_core.tools import BaseTool
 
 from market_agent.agent import _validate_tool_result, mcp_tools_for_servers
@@ -62,7 +63,16 @@ class MCPWatchEvidenceProvider:
         tool = tools.get(name)
         if tool is None:
             raise ConnectionError(f"{name} unavailable")
-        result = await tool.ainvoke(arguments)
+        # MCP tools return their structured artifact only when invoked with a full
+        # LangChain tool-call envelope. Raw arguments return display content alone,
+        # which cannot pass the host application's schema validation.
+        call = ToolCall(
+            name=name,
+            args=arguments,
+            id=f"watch-poll-{uuid4().hex}",
+            type="tool_call",
+        )
+        result = await tool.ainvoke(call)
         if not isinstance(result, ToolMessage) or result.status == "error":
             raise ValueError(f"{name} failed")
         return _validate_tool_result(name, arguments, result)

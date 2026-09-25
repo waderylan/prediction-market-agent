@@ -92,7 +92,10 @@ snapshots and refresh only the sources needed by the follow-up.
 
 - Recognize create, confirm, revise, pause, resume, list, inspect, delete, inbox, and investigate
   intents. A local Codex conversation does not remain active after it exits; recurring monitoring
-  requires `uv run python scripts/run_watches.py` in a foreground process.
+  requires exactly one `uv run --env-file .env python scripts/run_watches.py` process in a separate
+  user-owned terminal. Never start or retain the foreground runner inside a Codex session. After
+  confirmation, give the user the command and explain that the confirmed SQLite rule survives when
+  Codex exits.
 - Clarify ambiguous teams, games, doubleheaders, platforms, outcomes, probability-point thresholds,
   windows, and event relationships. A move from `0.42` to `0.50` is eight points, not a relative
   percentage increase.
@@ -102,8 +105,10 @@ snapshots and refresh only the sources needed by the follow-up.
 - Support only MLB, NFL, and NCAA Division I football full-game-winner contracts. Reject an
   unsupported contract type instead of approximating it.
 - Compile one canonical version-1 watch payload and send it to
-  `uv run python scripts/watch_cli.py` as one JSON object per line. Keep that process open between
-  `preview` and `confirm`; the draft is deliberately not a persisted active rule.
+  `uv run --env-file .env python scripts/watch_cli.py` as one JSON object per line. Keep only that
+  CLI process open between `preview` and `confirm`; the draft is deliberately not a persisted
+  active rule. The CLI may read whether Telegram is configured, but never read, print, or return
+  the token or chat ID.
 - Prefer safe typed CLI arguments for routine management, such as
   `--operation list --session-id <session>` or
   `--operation pause --session-id <session> --watch-id <watch>`. Use JSON lines for typed rule

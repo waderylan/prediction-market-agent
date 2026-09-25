@@ -1586,8 +1586,9 @@ only because it has already been implemented.
 2. Codex resolves exact games and contracts through the existing configured MCPs, generates the
    canonical rule, and submits it to `scripts/watch_cli.py validate` through JSON standard input.
 3. The user confirms the preview before persistence.
-4. `uv run python scripts/run_watches.py` runs the shared deterministic coordinator in the
-   foreground against SQLite. Process shutdown stops polling cleanly; saved rules remain available.
+4. `uv run --env-file .env python scripts/run_watches.py` runs the shared deterministic
+   coordinator in the foreground against SQLite. Process shutdown stops polling cleanly; saved
+   rules remain available.
 5. Codex inspects triggers through the bounded watch CLI and uses existing MCP data tools for
    optional investigation. Direct Codex does not claim LangGraph checkpoint memory or Cloud
    Scheduler behavior.

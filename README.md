@@ -148,7 +148,7 @@ mutation but does not turn session IDs into authentication.
 The JSON-lines CLI exposes the shared validator and SQLite application service:
 
 ```powershell
-uv run python scripts/watch_cli.py --db artifacts/watches.db
+uv run --env-file .env python scripts/watch_cli.py --db artifacts/watches.db
 ```
 
 Send one JSON object per line. Keep the process open between `preview` and `confirm`; an unconfirmed
@@ -158,9 +158,9 @@ skill.
 Routine management also has safe typed arguments, for example:
 
 ```powershell
-uv run python scripts/watch_cli.py --operation list --session-id <creating-session>
-uv run python scripts/watch_cli.py --operation inbox --session-id <creating-session> --limit 10
-uv run python scripts/watch_cli.py --operation pause --session-id <creating-session> --watch-id <watch-id>
+uv run --env-file .env python scripts/watch_cli.py --operation list --session-id <creating-session>
+uv run --env-file .env python scripts/watch_cli.py --operation inbox --session-id <creating-session> --limit 10
+uv run --env-file .env python scripts/watch_cli.py --operation pause --session-id <creating-session> --watch-id <watch-id>
 ```
 
 The typed surface never accepts Telegram credentials or a destination chat ID.
@@ -168,7 +168,7 @@ The typed surface never accepts Telegram credentials or a destination chat ID.
 Run confirmed watches in the foreground:
 
 ```powershell
-uv run python scripts/run_watches.py --db artifacts/watches.db
+uv run --env-file .env python scripts/run_watches.py --db artifacts/watches.db
 ```
 
 Stopping the process stops local polling. SQLite rules remain for the next run. A deterministic,

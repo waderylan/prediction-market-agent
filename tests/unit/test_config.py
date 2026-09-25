@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from market_agent.config import ConfigurationError, load_settings
@@ -13,9 +15,11 @@ def clear_settings_cache() -> None:
 @pytest.mark.unit
 def test_missing_required_configuration_has_clear_error(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
 
     with pytest.raises(ConfigurationError) as caught:
         load_settings()

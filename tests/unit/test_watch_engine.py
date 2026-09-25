@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from langchain_core.messages import ToolMessage
 from pydantic import SecretStr, ValidationError
 
 from market_agent.watch.cloud import GoogleOIDCVerifier, GoogleSecretLoader
@@ -117,6 +118,40 @@ def test_polling_selects_only_required_mcp_servers() -> None:
     assert MCPWatchEvidenceProvider.required_servers(one_platform) == frozenset(
         {"sports_state", "kalshi"}
     )
+
+
+@pytest.mark.asyncio
+async def test_polling_invokes_mcp_with_tool_call_envelope(monkeypatch) -> None:
+    invocations: list[dict[str, Any]] = []
+
+    class CapturingTool:
+        async def ainvoke(self, invocation):
+            invocations.append(invocation)
+            return ToolMessage(
+                "validated evidence",
+                tool_call_id=invocation["id"],
+                status="success",
+                artifact={"structured_content": {}},
+            )
+
+    sentinel = object()
+    monkeypatch.setattr(
+        "market_agent.watch.coordinator._validate_tool_result",
+        lambda name, arguments, result: sentinel,
+    )
+    provider = MCPWatchEvidenceProvider()
+    result = await provider._invoke(
+        {"sports_state_get_game_state": CapturingTool()},  # type: ignore[dict-item]
+        "sports_state_get_game_state",
+        {"game_ref": "exact-ref"},
+    )
+
+    assert result is sentinel
+    assert len(invocations) == 1
+    assert invocations[0]["type"] == "tool_call"
+    assert invocations[0]["name"] == "sports_state_get_game_state"
+    assert invocations[0]["args"] == {"game_ref": "exact-ref"}
+    assert invocations[0]["id"].startswith("watch-poll-")
 
 
 @pytest.mark.asyncio
