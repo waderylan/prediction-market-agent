@@ -179,6 +179,8 @@ class ScoringPlay(StrictModel):
     description: Annotated[str, Field(min_length=1, max_length=500)]
     home_score: int | None = Field(default=None, ge=0)
     away_score: int | None = Field(default=None, ge=0)
+    period_label: str | None = Field(default=None, max_length=100)
+    scoring: bool = True
 
 
 class WatchObservation(StrictModel):
@@ -190,6 +192,7 @@ class WatchObservation(StrictModel):
     lifecycle: Literal["scheduled", "pregame", "live", "halftime", "delayed", "final", "cancelled"]
     quotes: list[QuoteObservation] = Field(max_length=4)
     new_scoring_plays: list[ScoringPlay] = Field(default_factory=list, max_length=20)
+    recent_plays: list[ScoringPlay] = Field(default_factory=list, max_length=20)
     sports_status: SourceStatus
     sports_warning: str | None = Field(default=None, max_length=500)
 
@@ -214,6 +217,7 @@ class WatchTrigger(StrictModel):
     game: GameIdentity
     deltas: list[EvidenceDelta] = Field(min_length=1, max_length=8)
     correlated_events: list[ScoringPlay] = Field(default_factory=list, max_length=10)
+    recent_plays: list[ScoringPlay] = Field(default_factory=list, max_length=10)
     lifecycle_before: str | None = None
     lifecycle_after: str | None = None
     source_warnings: list[str] = Field(default_factory=list, max_length=10)

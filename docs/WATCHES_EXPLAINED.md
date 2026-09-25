@@ -190,8 +190,8 @@ operations act only on watches owned by the supplied session ID.
 | Object | Purpose | Important contents |
 |---|---|---|
 | `WatchRule` | The confirmed instruction | Exact game, exact markets, typed conditions, delivery policy, owner session, schema version |
-| `WatchObservation` | One synchronized polling snapshot | Game lifecycle, scoring plays, market quotes, source states, separate timestamps |
-| `WatchTrigger` | An immutable alert decision | Matched condition, bounded before/after deltas, evidence IDs, warnings, message, fingerprint |
+| `WatchObservation` | One synchronized polling snapshot | Game lifecycle, scoring plays, recent plays, market quotes, source states, separate timestamps |
+| `WatchTrigger` | An immutable alert decision | Matched condition, bounded before/after deltas, recent plays, evidence IDs, warnings, message, fingerprint |
 | `OutboxItem` | Telegram delivery work | Trigger reference, retry status, attempt count, lease, provider message ID |
 
 Every persisted contract has schema version `1`. Unknown versions fail validation instead of being
@@ -398,16 +398,40 @@ sanitized classifications, not credentials or raw URLs.
 
 ### 4.4 Alert contents
 
-Each message is limited to 1,500 characters and includes:
+Each message is limited to 1,500 characters and is written in plain language:
 
-- exact league, matchup, and scheduled start;
-- platform, market ID, and outcome;
-- before and after price;
-- actual and configured evaluation windows;
-- correlated scoring or lifecycle evidence;
-- freshness or missing-source warnings;
-- trigger time;
-- the statement that timing alignment does not prove causation.
+- league and matchup;
+- what moved: each platform's before and after price with direction and size in points;
+- the last few plays in the rule's window (at-bat results or football plays, with scoring plays
+  marked `SCORE:`), or the last play if none fell in the window, plus the current score;
+- the rule that fired, in one sentence;
+- freshness or missing-source notes, merged when several platforms share the same limitation;
+- the alert time in the game's local timezone;
+- for price alerts, the statement that timing alignment does not prove causation.
+
+Example:
+
+```text
+MLB WATCH ALERT: San Diego Padres at Los Angeles Dodgers
+San Diego Padres win chance moved fast (within 64s).
+
+Kalshi: 41% -> 39% (down 2 pts)
+Polymarket: 36.5% -> 40% (up 3.5 pts)
+
+Plays in the last 3 min:
+- 7:41 PM, 3rd Inning: Ohtani singled to right.
+- 7:42 PM, 3rd Inning: Betts singled to right, Ohtani to second.
+Score: San Diego Padres 0, Los Angeles Dodgers 0 (3rd Inning)
+
+Your rule: 2+ pt move within 2 min, any cause.
+Note: Kalshi and Polymarket did not report quote times, so fetch times were used.
+Plays are timing context, not proof they caused the move.
+Alert time: 7:43 PM PDT
+```
+
+Recent plays come from a second `sports_state_get_play_by_play` call (`play_filter="all"`,
+`limit=50`) on each poll. Individual pitches, "pitches to" lines, and inning banners are dropped.
+The plays are display context only: if that call fails, the alert still fires without them.
 
 The inbox and Telegram use the same stored `WatchTrigger.message`, so delivery cannot reinterpret
 the evidence.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -17,7 +18,7 @@ from langchain_core.tools import BaseTool
 
 from market_agent.agent import _validate_tool_result, mcp_tools_for_servers
 from market_agent.mcp.common import MarketDetail
-from market_agent.providers.game_state import GameState, PlayByPlay
+from market_agent.providers.game_state import GamePlay, GameState, PlayByPlay
 from market_agent.watch.evaluator import build_trigger, evaluate_condition
 from market_agent.watch.models import (
     LifecycleCondition,
@@ -45,6 +46,28 @@ class BatchEvidenceProvider(Protocol):
 
 
 ToolConnection = Callable[[frozenset[str]], AbstractAsyncContextManager[list[BaseTool]]]
+
+# ESPN labels individual pitches and inning banners as plays; alerts only need outcomes.
+_PLAY_NOISE = re.compile(r"^(pitch \d+\s*:|.* pitches to |(top|bottom|middle|end) of the )", re.I)
+
+
+def _alert_worthy(play: GamePlay) -> bool:
+    if play.wallclock is None or play.event_kind in {"pitch", "substitution"}:
+        return False
+    return play.scoring_play or not _PLAY_NOISE.match(play.text)
+
+
+def _summarize(play: GamePlay) -> ScoringPlay:
+    assert play.wallclock is not None
+    return ScoringPlay(
+        play_id=play.play_id,
+        play_time=play.wallclock,
+        description=play.text,
+        home_score=play.home_score,
+        away_score=play.away_score,
+        period_label=play.period_label,
+        scoring=play.scoring_play,
+    )
 
 
 class MCPWatchEvidenceProvider:
@@ -110,6 +133,11 @@ class MCPWatchEvidenceProvider:
                 "sports_state_get_play_by_play",
                 {"game_ref": rule.game.game_ref, "limit": 20, "play_filter": "scoring"},
             ),
+            self._invoke(
+                tools,
+                "sports_state_get_play_by_play",
+                {"game_ref": rule.game.game_ref, "limit": 50, "play_filter": "all"},
+            ),
             *[
                 self._invoke(
                     tools,
@@ -123,7 +151,8 @@ class MCPWatchEvidenceProvider:
 
         state = results[0] if isinstance(results[0], GameState) else None
         plays = results[1] if isinstance(results[1], PlayByPlay) else None
-        market_results = results[2:]
+        recent = results[2] if isinstance(results[2], PlayByPlay) else None
+        market_results = results[3:]
         quote_observations: list[QuoteObservation] = []
         for market, result in zip(rule.markets, market_results, strict=True):
             if not isinstance(result, MarketDetail):
@@ -182,16 +211,16 @@ class MCPWatchEvidenceProvider:
                 play.scoring_play and play.wallclock is None for play in plays.plays
             )
             scoring = [
-                ScoringPlay(
-                    play_id=play.play_id,
-                    play_time=play.wallclock,
-                    description=play.text,
-                    home_score=play.home_score,
-                    away_score=play.away_score,
-                )
+                _summarize(play)
                 for play in plays.plays
                 if play.scoring_play and play.wallclock is not None
             ]
+        # Recent plays are display context only; their absence never blocks evaluation.
+        recent_plays = (
+            [_summarize(play) for play in recent.plays if _alert_worthy(play)][-20:]
+            if recent
+            else []
+        )
         lifecycle = state.lifecycle if state else "delayed"
         if lifecycle not in {
             "scheduled",
@@ -218,6 +247,7 @@ class MCPWatchEvidenceProvider:
         evidence_identity = {
             "state": state.observation_id if state else None,
             "plays": plays.observation_id if plays else None,
+            "recent": recent.observation_id if recent else None,
             "markets": [
                 (
                     result.observation_id
@@ -266,6 +296,7 @@ class MCPWatchEvidenceProvider:
             lifecycle=supported_lifecycle,
             quotes=quote_observations,
             new_scoring_plays=scoring,
+            recent_plays=recent_plays,
             sports_status=sports_status,
             sports_warning=sports_warning,
         )
@@ -377,7 +408,9 @@ class WatchCoordinator:
                     )
                     if not armed or not cooldown_ok:
                         continue
-                    trigger = build_trigger(rule, result, observed_at)
+                    trigger = build_trigger(
+                        rule, result, observed_at, recent_plays=observation.recent_plays
+                    )
                     if self.repository.record_trigger(rule, trigger):
                         created += 1
                     else:

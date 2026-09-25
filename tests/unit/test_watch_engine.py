@@ -14,8 +14,13 @@ import pytest
 from langchain_core.messages import ToolMessage
 from pydantic import SecretStr, ValidationError
 
+from market_agent.providers.game_state import GamePlay, _GameRefPayload, encode_game_ref
 from market_agent.watch.cloud import GoogleOIDCVerifier, GoogleSecretLoader
-from market_agent.watch.coordinator import MCPWatchEvidenceProvider, WatchCoordinator
+from market_agent.watch.coordinator import (
+    MCPWatchEvidenceProvider,
+    WatchCoordinator,
+    _alert_worthy,
+)
 from market_agent.watch.delivery import (
     DeliveryWorker,
     TelegramDelivery,
@@ -32,6 +37,7 @@ from market_agent.watch.models import (
     MarketIdentity,
     OutboxStatus,
     PriceMoveCondition,
+    ScoringPlay,
     SourceStatus,
     WatchObservation,
     WatchRule,
@@ -42,6 +48,16 @@ from market_agent.watch.service import WatchService
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "watch" / "yankees_scoring_replay.json"
 BASE = datetime(2026, 9, 24, tzinfo=UTC)
+REFERENCE_LA = _GameRefPayload(
+    version=1,
+    source="espn",
+    league="mlb",
+    event_id="401817071",
+    scheduled_start=datetime(2026, 9, 23, 23, 5, tzinfo=UTC),
+    timezone="America/Los_Angeles",
+    home_team="New York Yankees",
+    away_team="Boston Red Sox",
+)
 
 
 def replay() -> tuple[GameIdentity, list[MarketIdentity], list[WatchObservation]]:
@@ -235,14 +251,100 @@ def test_exact_probability_point_boundary_and_scoring_correlation() -> None:
     assert result.matched
     assert result.metric == Decimal("0.08")
     trigger = build_trigger(rule(), result, observations[1].retrieved_at)
-    assert "42.0% -> 50.0%" in trigger.message
-    assert "Game identity: mlb | 2026-09-23T23:05:00+00:00" in trigger.message
-    assert "observed 60s within configured 120s" in trigger.message
-    assert "Quote freshness: evaluated quotes passed source freshness checks." in trigger.message
-    assert "correlation, not proof of causation" in trigger.message
+    assert trigger.message.startswith("MLB WATCH ALERT: Boston Red Sox at New York Yankees\n")
+    assert "Kalshi: 42% -> 50% (up 8 pts)" in trigger.message
+    assert "moved fast (within 60s)" in trigger.message
+    assert "SCORE: New York scores on a two-run double" in trigger.message
+    assert "Score: Boston Red Sox 0, New York Yankees 2" in trigger.message
+    assert "Your rule: 8+ pt move within 2 min, only when a scoring play happens." in (
+        trigger.message
+    )
+    assert "not proof they caused the move" in trigger.message
     assert len(trigger.message) <= 1500
-    assert trigger.message.endswith("Timing alignment is correlation, not proof of causation.")
+    assert trigger.message.endswith("Alert time: 12:01 AM UTC")
     assert trigger.correlated_events[0].play_id == "score-101"
+
+
+def test_alert_lists_recent_plays_in_game_local_time_and_folds_warnings() -> None:
+    _, _, observations = replay()
+    untimed = "Provider supplies no authoritative timestamp for this quote observation."
+    current = observations[1].model_copy(
+        update={
+            "quotes": [
+                quote.model_copy(update={"warning": untimed}) for quote in observations[1].quotes
+            ]
+        }
+    )
+    result = evaluate_condition(condition(relationship="any"), current, observations[:1])
+    padres = rule().model_copy(
+        update={
+            "game": rule().game.model_copy(
+                update={"game_ref": encode_game_ref(REFERENCE_LA), "league": "mlb"}
+            )
+        }
+    )
+    plays = [
+        ScoringPlay(
+            play_id="old",
+            play_time=current.retrieved_at - timedelta(minutes=30),
+            description="Old at-bat outside the window.",
+            scoring=False,
+        ),
+        ScoringPlay(
+            play_id="single",
+            play_time=current.retrieved_at - timedelta(seconds=40),
+            description="Judge singled to right.",
+            period_label="3rd Inning",
+            home_score=0,
+            away_score=0,
+            scoring=False,
+        ),
+        ScoringPlay(
+            play_id="score-101",
+            play_time=datetime(2026, 9, 24, 0, 0, 45, tzinfo=UTC),
+            description="Stanton doubled, Judge scored.",
+            period_label="3rd Inning",
+            home_score=2,
+            away_score=0,
+            scoring=True,
+        ),
+    ]
+    trigger = build_trigger(padres, result, current.retrieved_at, recent_plays=plays)
+    message = trigger.message
+    assert "Plays in the last 3 min:" in message
+    assert "- 5:00 PM, 3rd Inning: Judge singled to right." in message
+    assert "- 5:00 PM, 3rd Inning: SCORE: Stanton doubled, Judge scored." in message
+    assert "Old at-bat" not in message
+    assert "Score: Boston Red Sox 0, New York Yankees 2 (3rd Inning)" in message
+    assert message.count("did not report quote times") == 1
+    assert "Kalshi and Polymarket did not report quote times" in message
+    assert message.endswith("Alert time: 5:01 PM PDT")
+    assert [play.play_id for play in trigger.recent_plays] == ["old", "single", "score-101"]
+    no_scoring = current.model_copy(update={"new_scoring_plays": []})
+    quiet_result = evaluate_condition(condition(relationship="any"), no_scoring, observations[:1])
+    quiet = build_trigger(padres, quiet_result, current.retrieved_at, recent_plays=plays[:1])
+    assert "No plays in the last 3 min. Last play:" in quiet.message
+
+
+def test_recent_play_filter_drops_pitch_noise() -> None:
+    def play(text: str, kind: str = "plate_appearance", scoring: bool = False) -> GamePlay:
+        return GamePlay.model_validate(
+            {
+                "play_id": text,
+                "sequence": 1,
+                "event_kind": kind,
+                "text": text,
+                "scoring_play": scoring,
+                "wallclock": BASE,
+                "context": {"sport": "baseball", "half": "top"},
+            }
+        )
+
+    assert _alert_worthy(play("Ohtani singled to right."))
+    assert _alert_worthy(play("Machado homered to left.", scoring=True))
+    assert not _alert_worthy(play("Pitch 3 : Ball 1"))
+    assert not _alert_worthy(play("End of the 3rd inning"))
+    assert not _alert_worthy(play("Nick Pivetta pitches to Mookie Betts", kind="pitch"))
 
 
 def test_no_tracked_scoring_event_is_bounded_and_source_required() -> None:
@@ -300,8 +402,8 @@ def test_divergence_lifecycle_and_rearm_metrics_are_deterministic() -> None:
     )
     assert lifecycle.matched
     lifecycle_alert = build_trigger(rule(), lifecycle, final.retrieved_at)
-    assert "before/after price not applicable" in lifecycle_alert.message
-    assert "Lifecycle: live -> final" in lifecycle_alert.message
+    assert "Game status changed: live -> final." in lifecycle_alert.message
+    assert "caused the move" not in lifecycle_alert.message
     unavailable_lifecycle = evaluate_condition(
         LifecycleCondition(condition_id="delayed", to_states=frozenset({"delayed"})),
         final.model_copy(update={"lifecycle": "delayed", "sports_status": SourceStatus.MISSING}),
