@@ -57,7 +57,7 @@ in the answer.
 - Build a sourced game brief with current state, market snapshots, injuries, lineups, weather, or
   schedule news.
 - Create, confirm, revise, pause, resume, list, inspect, or delete an event-aware watch.
-- Review a trigger timeline and Telegram delivery state, then request a bounded investigation.
+- Review the alert inbox and Telegram delivery state, then request a bounded investigation.
 
 Market Lens is read-only. It does not place orders, access market accounts, generate an independent
 win probability, or make betting picks.
@@ -273,7 +273,7 @@ four Python MCP processes. It requires no Node runtime.
 Cloud Run deployment uses one worker and `--max-instances 1` so the assignment's in-process session
 memory remains coherent within the service instance. Active cloud watches use Firestore rather than
 the ephemeral container filesystem. Cloud Scheduler sends a Google OIDC token to
-`POST /internal/watches/poll`; public `POST /chat` retains the assignment contract. The bot token can
+`POST /internal/watches/poll`; public `POST /chat` follows the assignment contract. The bot token can
 come from Secret Manager through the service identity. Deployment requires an Artifact Registry
 image and runtime environment variables. The local Codex gateway and local credentials never enter
 the image. The live Cloud Run URL and every live Google Cloud watch boundary remain submission work.
@@ -309,7 +309,7 @@ flowchart LR
     CS[Cloud Scheduler + Google OIDC] --> PE[Internal poll endpoint]
     LR[Foreground local runner] --> CO[Deterministic coordinator]
     PE --> CO
-    CO --> SA[Selected existing MCP tools]
+    CO --> SA[Selected MCP tools]
     SA <--> K
     SA <--> P
     SA <--> S

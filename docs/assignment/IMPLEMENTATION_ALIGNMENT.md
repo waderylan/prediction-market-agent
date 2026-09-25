@@ -20,7 +20,7 @@ API usage, deployment status, costs, and architecture diagrams remain in the rep
 | Cloud deployment | The Docker image is designed for Google Cloud Run. A live URL remains required for submission. |
 | Testing | Unit, integration, stdio, bounded live-provider, and optional real-model suites cover the application and MCP boundaries. |
 | Event-aware watches | LangGraph compiles exact confirmed rules; a no-model coordinator evaluates shared MCP observations into a persistent inbox. |
-| External alerts | A transactional outbox projects explicitly opted-in triggers to one configured Telegram chat; fake delivery is locally verified. |
+| External alerts | A transactional outbox projects explicitly opted-in triggers to one configured Telegram chat; live delivery is verified from the local runner. |
 
 ## Repository deliverables
 
@@ -48,7 +48,7 @@ API usage, deployment status, costs, and architecture diagrams remain in the rep
 - Build and run the container with the intended runtime environment variables.
 - Deploy the image to Cloud Run with one worker and `--max-instances 1`.
 - Configure Firestore, Cloud Scheduler OIDC, Secret Manager, and the optional Telegram recipient;
-  local substitutes do not establish live Google Cloud or Telegram acceptance.
+  local substitutes do not establish live Google Cloud acceptance.
 - Verify the public `POST /chat` endpoint with a new session and a same-session follow-up.
 - Confirm the submitted source archive excludes `.env`, credentials, caches, virtual
   environments, and local build artifacts.

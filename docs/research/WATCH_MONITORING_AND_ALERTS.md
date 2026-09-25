@@ -4,7 +4,7 @@
 
 Market Lens compiles a conversational request into one versioned `WatchRule`, presents the exact
 game, contracts, outcomes, thresholds, windows, and delivery policy, and activates the rule only
-after explicit confirmation. The initial scope is MLB, NFL, and NCAA Division I football
+after explicit confirmation. The scope is MLB, NFL, and NCAA Division I football
 full-game-winner contracts on Kalshi, Polymarket, or both.
 
 Watches observe public evidence and create informational alerts. They do not place trades,
@@ -87,9 +87,9 @@ means eight points.
 | observation `retrieved_at` | Coordinator collection time |
 
 It also carries provider observation IDs, cache flags, source status, lifecycle, normalized prices,
-and bounded scoring plays. `WatchTrigger` contains bounded deltas, correlated events, lifecycle
-changes, source warnings, evidence IDs, a stable SHA-256 fingerprint, and a deterministic message
-under 1,500 characters. `OutboxItem` tracks one logical Telegram projection through pending,
+bounded scoring plays, and bounded recent plays for alert context. `WatchTrigger` contains bounded
+deltas, correlated events, recent plays, lifecycle changes, source warnings, evidence IDs, a
+stable SHA-256 fingerprint, and a deterministic message under 1,500 characters. `OutboxItem` tracks one logical Telegram projection through pending,
 leased, retry, sent, and terminal-failure states. Schema versions other than 1 fail safely.
 
 ## Deterministic polling and trigger semantics
@@ -127,7 +127,7 @@ both repositories instead of relying on Firestore TTL billing.
 - Automatic model explanations are disabled; a user requests a bounded investigation.
 - Polling stores normalized deltas and evidence references instead of unbounded provider payloads.
 
-The cadence matches the conservative initial policy. Public APIs have no contractual latency or
+The cadence is deliberately conservative. Public APIs have no contractual latency or
 availability guarantee, so alerts promise delivery within one polling cycle after providers expose
 the relevant evidence, not relative to the real-world event.
 
@@ -136,7 +136,8 @@ the relevant evidence, not relative to the real-world event.
 SQLite is the complete local implementation. Immediate write transactions, foreign keys, WAL,
 bounded leases, unique fingerprints, and a trigger/outbox transaction cover restart and concurrent
 runner behavior. `scripts/run_watches.py` is an explicit foreground process; stopping it stops
-polling while preserving rules.
+polling while preserving rules. A failed cycle prints `state=error` and the runner retries on the
+next cycle; expired leases release any claimed work.
 
 Firestore implements the same repository interface. Transaction callbacks claim watches and
 outbox records and atomically commit trigger, fingerprint, evidence, and delivery records. The
@@ -172,9 +173,12 @@ authorization, and blocked-recipient errors become terminal and visible beside t
 Missing configuration schedules inbox-first fallback and never disables the watch.
 
 Telegram's [Bot API](https://core.telegram.org/bots/api) permits messages longer than this product
-uses; Market Lens enforces its own 1,500-character ceiling. The alert names the exact game,
-platform, contract, outcome, before/after price, evaluation window, correlated scoring or lifecycle
-event, freshness/source warning, trigger time, and non-causation notice.
+uses; Market Lens enforces its own 1,500-character ceiling. The alert is plain language: league
+and matchup, each platform's before/after price with direction and size in points, up to five
+recent plays in the rule's window with scoring plays and turnovers marked, the current score, a
+one-sentence rule summary, merged freshness/source notes, the alert time in the game's local
+timezone, and, for price alerts, a non-causation notice. Market IDs stay in the stored trigger
+rather than the message. [WATCHES_EXPLAINED.md](../WATCHES_EXPLAINED.md) shows a full example.
 
 ## Security and secrets
 
@@ -206,14 +210,16 @@ projects one fake Telegram delivery. The fixture's quote clock precedes its dete
 clock by two seconds. These numbers measure local evaluation and SQLite work; they do not estimate
 provider, network, Cloud Run, or real-world event latency.
 
-The complete non-live repository suite reports 415 passed and 17 live tests deselected. Ruff lint,
+The complete non-live repository suite passes, with live tests skipped unless enabled. Ruff lint,
 Ruff formatting, strict mypy over `src`, JavaScript syntax checking, and `git diff --check` pass.
 
 Tests protect confirmation before persistence, session scope, schema rejection, point boundaries,
 scoring and no-tracked-scoring windows, stale and out-of-order quotes, shared observations, restart
 recovery, SQLite leases, duplicate fingerprints, Firestore transactions through a fake, OIDC and
 Secret Manager substitutes, Telegram timeout/disconnect/429/5xx/malformed/auth/blocked behavior,
-retry leasing, and inbox fallback. The opt-in live Telegram smoke test skips without credentials.
+retry leasing, and inbox fallback. The opt-in live Telegram smoke test passes with configured
+credentials and skips without them. A live SQLite runner against an in-progress MLB game polls
+the real MCP servers and delivers alerts to the configured Telegram chat.
 
 A fresh headless Codex gateway session exercises the LangGraph conversation against the configured
 MCP servers. The first ambiguous request asks for a future game and clarifies whether the
@@ -238,7 +244,6 @@ does not invent a replacement for the terminal game returned by the first discov
   verified only through controlled substitutes.
 - The Firestore query set can require composite indexes during deployment; local fake verification
   establishes repository semantics but not production index provisioning or contention behavior.
-- Live Telegram delivery remains pending bot credentials.
 - The foreground runner must remain active for local recurring monitoring.
 
 ## Manual Telegram setup

@@ -1574,8 +1574,8 @@ only because it has already been implemented.
 6. The deterministic coordinator groups compatible watches by game and market reference, performs
    one shared observation set, evaluates every rule, and records the poll through the shared state
    repository without exposing a model-callable mutation tool.
-7. A new trigger creates a template alert. When the rule enables automatic explanation, LangGraph
-   performs at most one bounded investigation for that unique trigger.
+7. A trigger creates a template alert. Automatic explanations are disabled; a user requests a
+   bounded investigation of a stored trigger through `/chat`.
 8. The user lists alerts or asks a follow-up through `/chat`; the agent retrieves bounded event
    history and refreshes only evidence needed for the answer.
 
@@ -1808,7 +1808,7 @@ only because it has already been implemented.
 - **Status:** Complete locally; cloud acceptance pending Milestone 14.
 - The transactional SQLite/Firestore outbox, bounded Telegram adapter, retry classifier, inbox
   delivery status, Secret Manager boundary, fake transport end-to-end replay, and opt-in live smoke
-  test are implemented. Local fake delivery is verified; live Telegram remains pending credentials.
+  test are implemented. Fake delivery and live delivery to the configured chat are verified locally.
 
 #### Pivot Point
 

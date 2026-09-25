@@ -39,8 +39,8 @@ No test requires a particular game to be open.
 | Headless Codex with `.agents/skills/sports-information` | Repository skill discovery and direct routing to the user's configured MCP servers |
 | `unit/test_watch_engine.py` | Versioned schemas, confirmation, point thresholds, scoring correlation, stale/out-of-order evidence, leases, restart recovery, SQLite/Firestore parity, outbox retry, Telegram failures, OIDC, Secret Manager |
 | `integration/test_watch_cli.py` | Local Codex preview, confirm, inspect, and lifecycle workflow through the shared SQLite service |
-| `integration/test_watch_endpoint.py` | Dedicated Scheduler OIDC boundary and unchanged public `/chat` contract |
-| `live/test_telegram_live.py` | Opt-in real Telegram send; clean skip without deployment-owned credentials |
+| `integration/test_watch_endpoint.py` | Dedicated Scheduler OIDC boundary and the public `/chat` contract |
+| `live/test_telegram_live.py` | Opt-in real Telegram send (passes with configured credentials); clean skip without them |
 
 The sports suite specifically verifies:
 
@@ -144,6 +144,10 @@ The watch suite additionally verifies:
 - Trigger fingerprints and unique outbox records suppress duplicate logical alerts across retries.
 - The foreground replay produces one inbox alert and one fake Telegram projection with zero model
   calls and zero Tavily calls.
+- Alert text states each platform's move in points, lists recent plays in game-local time (MLB
+  at-bats with an in-progress pitch sequence and count; NFL/NCAA plays with quarter, clock, and
+  starting down and distance), and folds duplicate source notes.
+- Pause and resume move only between active and paused; a terminal watch cannot be revived.
 - Telegram timeout, disconnect, `429`, `5xx`, malformed body, authorization failure, and blocked
   recipient behavior produces bounded retry or sanitized terminal state without losing the inbox.
 - Firestore transactions, Google OIDC claims, and Secret Manager access run through controlled
@@ -214,9 +218,9 @@ local polling elapsed time plus the fixture quote-to-trigger interval. Five cons
 measure 104-118 ms with a 108 ms median for three polls. This is a local deterministic benchmark,
 not a provider or deployment latency claim.
 
-The complete non-live suite reports 415 passed and 17 live tests deselected on the local Windows
-development environment. Ruff lint and formatting, strict mypy over `src`, JavaScript syntax
-checking, and `git diff --check` pass.
+The complete non-live suite passes on the local Windows development environment, with live tests
+skipped unless their credentials or opt-in flags are set. Ruff lint and formatting, strict mypy
+over `src`, JavaScript syntax checking, and `git diff --check` pass.
 
 A fresh headless Codex gateway session covers the conversational path with the configured MCPs. It
 clarifies a terminal/ambiguous Yankees request, resolves the next exact Yankees-Rays game, pins one

@@ -42,8 +42,8 @@ flowchart LR
 
 ### 2.1 The LangGraph agent (the assignment's chatbot on Cloud Run)
 
-This is the chatbot that answers `POST /chat`. It still answers ordinary questions exactly as
-before. The watch feature only gave it eight more tools it can call:
+This is the chatbot that answers `POST /chat`. It answers ordinary questions without touching
+watch code. For watches, it has eight extra tools it can call:
 
 ```text
 watch_preview   watch_confirm   watch_list      watch_inspect
@@ -271,7 +271,7 @@ is opened. When checks are due, it reuses one MCP session and handles at most tw
 | Play time | When ESPN timestamps a play |
 
 The runner uses the market's quote time when there is one, and fetch time only as a fallback.
-Kalshi and Polymarket currently don't send quote times, which is why alerts include a note about it.
+Kalshi and Polymarket don't send quote times, which is why alerts include a note about it.
 Play time is used for "did a scoring play happen in the window."
 
 Keeping these separate stops a slow download from looking like earlier evidence. And lining up
@@ -529,11 +529,11 @@ credentials.
 - The Firestore storage adapter, Google OIDC check, and Secret Manager loading, each against a
   controlled stand-in.
 
-**Not yet done, because it needs cloud setup:**
+**Not proven, because it needs cloud setup:**
 
 - Watch tools running inside the deployed Cloud Run service.
 - Firestore in production (indexes, permissions, concurrency, restart recovery).
 - Cloud Scheduler calling `/internal/watches/poll`, with live OIDC and service-account permissions.
 - Secret Manager supplying the Telegram token on Cloud Run.
 
-None of the cloud pieces above have been claimed as working live.
+None of the cloud pieces above are claimed as working live.
