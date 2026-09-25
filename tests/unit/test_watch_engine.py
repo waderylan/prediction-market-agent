@@ -20,6 +20,7 @@ from market_agent.watch.coordinator import (
     MCPWatchEvidenceProvider,
     WatchCoordinator,
     _alert_worthy,
+    _pitch_code,
     _recent_plays,
 )
 from market_agent.watch.delivery import (
@@ -355,16 +356,89 @@ def test_recent_play_filter_drops_pitch_noise() -> None:
         play("Bottom of the 4th inning"),
         play("Nick Pivetta pitches to Teoscar Hernandez", kind="pitch"),
         play("Pitch 1 : Ball 1"),
+        play("Pitch 2 : Strike 1 Looking"),
+        play("Pitch 3 : Strike 2 Foul"),
+        play("Pitch 4 : Ball 2"),
+        play("Pitch 5 : Ball 3"),
         play("Pitch 6 : Strike 2 Foul"),
     ]
     assert [summary.description for summary in _recent_plays(gap)] == [
         "France flied out to center.",
         "Bottom of the 4th inning",
-        "At bat now: Nick Pivetta pitching to Teoscar Hernandez, 2 pitches so far "
-        "(last: Strike 2 Foul)",
+        "At bat now: Nick Pivetta pitching to Teoscar Hernandez, count 3-2 (pitches: BSFBBF)",
     ]
-    finished = [*gap, play("T. Hernandez hit by pitch.")]
+    assert _pitch_code("Ball In Play") == "X"
+    assert _pitch_code("Strike 3 Swinging") == "S"
+    assert _pitch_code("Hit By Pitch") == "H"
+    assert _pitch_code("Pickoff Attempt") == "?"
+    finished = [*gap, play("Pitch 7 : Ball In Play"), play("T. Hernandez hit by pitch.")]
     assert _recent_plays(finished)[-1].description == "T. Hernandez hit by pitch."
+
+    # A mid-at-bat play must not reset the pitch sequence.
+    wild = [
+        play("Nick Pivetta pitches to Andy Pages", kind="pitch"),
+        play("Pitch 1 : Ball 1"),
+        play("Pitch 2 : Strike 1 Looking"),
+        play("Pages to second on wild pitch by Pivetta."),
+        play("Pitch 3 : Ball 2"),
+    ]
+    assert [summary.description for summary in _recent_plays(wild)] == [
+        "Pages to second on wild pitch by Pivetta.",
+        "At bat now: Nick Pivetta pitching to Andy Pages, count 2-1 (pitches: BSB)",
+    ]
+    walk = [*wild, play("Pitch 4 : Ball 3"), play("Pitch 5 : Ball 4")]
+    assert "At bat now" not in _recent_plays(walk)[-1].description
+    fresh = _recent_plays([play("Nick Pivetta pitches to Max Muncy", kind="pitch")])
+    assert fresh[-1].description == "At bat now: Nick Pivetta pitching to Max Muncy"
+
+
+def test_football_plays_show_clock_and_starting_down_and_distance() -> None:
+    def snap(text: str, clock: str, **context: object) -> GamePlay:
+        return GamePlay.model_validate(
+            {
+                "play_id": clock,
+                "sequence": 1,
+                "period": 4,
+                "period_label": "Quarter 4",
+                "clock": clock,
+                "event_kind": "football_play",
+                "text": text,
+                "scoring_play": False,
+                "wallclock": BASE,
+                "context": {"sport": "football", **context},
+            }
+        )
+
+    # The provider stores end-of-play situations, as ESPN reported for Packers-Falcons.
+    drive = [
+        snap(
+            "(Shotgun) J.Love pass incomplete short left.",
+            "1:31",
+            down=3,
+            distance=10,
+            field_position="ATL 30",
+        ),
+        snap(
+            "(Shotgun) J.Love pass short left to M.Golden for 20 yards.",
+            "1:28",
+            down=1,
+            distance=10,
+            field_position="ATL 10",
+        ),
+        snap(
+            "(No Huddle, Shotgun) J.Love pass INTERCEPTED by X.Watts.",
+            "1:17",
+            down=1,
+            distance=10,
+            field_position="ATL 20",
+            turnover=True,
+        ),
+    ]
+    assert [(summary.period_label, summary.description) for summary in _recent_plays(drive)] == [
+        ("Q4 1:31", "J.Love pass incomplete short left."),
+        ("Q4 1:28", "3rd & 10 at ATL 30: J.Love pass short left to M.Golden for 20 yards."),
+        ("Q4 1:17", "TURNOVER: 1st & 10 at ATL 10: J.Love pass INTERCEPTED by X.Watts."),
+    ]
 
 
 def test_no_tracked_scoring_event_is_bounded_and_source_required() -> None:

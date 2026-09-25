@@ -328,7 +328,7 @@ Polymarket: 41.5% -> 36.5% (down 5 pts)
 
 Plays in the last 3 min:
 - 8:05 PM, 4th Inning: Bottom of the 4th inning
-- 8:07 PM, 4th Inning: At bat now: Nick Pivetta pitching to Teoscar Hernandez, 6 pitches so far (last: Strike 2 Foul)
+- 8:07 PM, 4th Inning: At bat now: Nick Pivetta pitching to Teoscar Hernandez, count 3-2 (pitches: BSFBBF)
 Score: San Diego Padres 0, Los Angeles Dodgers 0 (4th Inning)
 
 Your rule: 2+ pt move within 2 min, any cause.
@@ -346,11 +346,27 @@ Reading it top to bottom:
 - **Notes** about data quality. The same note for several platforms is merged into one line.
 - **Alert time** in the game's local timezone.
 
-Plays come from a second play-by-play call on each check (`play_filter="all"`, last 50 plays). ESPN
-logs every pitch as a separate "play," so the runner keeps completed at-bats, football plays, and
-the start of each half-inning. It drops individual pitches, "X pitches to Y" lines, and
-middle/end-of-inning banners. If an at-bat is still going, its pitches are folded into one
-"At bat now" line. Plays are display context only: if that call fails, the alert still fires.
+Plays come from a second play-by-play call on each check (`play_filter="all"`, last 50 plays).
+They are display context only: if that call fails, the alert still fires.
+
+**Baseball.** ESPN logs every pitch as a separate "play." The runner keeps completed at-bats,
+mid-at-bat events (stolen bases, wild pitches), and the start of each half-inning. It drops
+individual pitches, "X pitches to Y" lines, and middle/end-of-inning banners. If the latest batter
+is still up, one "At bat now" line shows the count and every pitch as scorebook letters:
+`B` ball, `S` called or swinging strike, `F` foul, `X` ball in play, `H` hit by pitch, `?` unknown.
+The count is computed from those letters (a two-strike foul doesn't add a strike). The at-bat is
+treated as over on ball in play, ball four, strike three, or an inning break.
+
+**Football.** Every ESPN entry is a real play, so none are dropped. Each line shows the quarter and
+game clock (`Q4 1:17`), the down, distance, and spot the play *started* from, and marks turnovers
+`TURNOVER:`. Formation notes like `(Shotgun)` are removed. The provider records each play's
+end-of-play situation, so the starting situation comes from the play before it. The first play in
+the list has no earlier play to read from, so it's shown without down and distance.
+
+```text
+- 8:14 PM, Q4 1:28: 3rd & 10 at ATL 30: J.Love pass short left to M.Golden ran ob at ATL 10 for 20 yards (B.Bowman).
+- 8:15 PM, Q4 1:18: TURNOVER: 2nd & 10 at ATL 10: J.Love pass short middle intended for J.Smith INTERCEPTED by X.Watts ...
+```
 
 Messages are capped at 1,500 characters. The inbox and Telegram get the exact same saved text.
 

@@ -296,7 +296,7 @@ def _play_line(play: ScoringPlay, zone: tzinfo) -> str:
     if play.period_label:
         when += f", {play.period_label}"
     marker = "SCORE: " if play.scoring else ""
-    return f"- {when}: {marker}{_short(play.description, 110)}"
+    return f"- {when}: {marker}{_short(play.description, 150)}"
 
 
 def _score_line(game: GameIdentity, plays: list[ScoringPlay]) -> str | None:

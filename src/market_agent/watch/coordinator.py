@@ -18,7 +18,7 @@ from langchain_core.tools import BaseTool
 
 from market_agent.agent import _validate_tool_result, mcp_tools_for_servers
 from market_agent.mcp.common import MarketDetail
-from market_agent.providers.game_state import GamePlay, GameState, PlayByPlay
+from market_agent.providers.game_state import FootballPlayContext, GamePlay, GameState, PlayByPlay
 from market_agent.watch.evaluator import build_trigger, evaluate_condition
 from market_agent.watch.models import (
     LifecycleCondition,
@@ -51,6 +51,8 @@ ToolConnection = Callable[[frozenset[str]], AbstractAsyncContextManager[list[Bas
 # starts, and fold an unfinished at-bat into one summary line.
 _PITCH = re.compile(r"^pitch (\d+)\s*:\s*(.+)$", re.I)
 _MATCHUP = re.compile(r"^(.+?) pitches to (.+)$", re.I)
+_FORMATION = re.compile(r"^\((?:[^)]*(?:shotgun|huddle|formation)[^)]*)\)\s*", re.I)
+_INNING_BREAK = re.compile(r"^(middle|end) of the ", re.I)
 _PLAY_NOISE = re.compile(r"^(pitch \d+\s*:|.* pitches to |(middle|end) of the )", re.I)
 
 
@@ -60,30 +62,100 @@ def _alert_worthy(play: GamePlay) -> bool:
     return play.scoring_play or not _PLAY_NOISE.match(play.text)
 
 
-def _summarize(play: GamePlay) -> ScoringPlay:
+def _ordinal(value: int) -> str:
+    return {1: "1st", 2: "2nd", 3: "3rd"}.get(value, f"{value}th")
+
+
+def _summarize(play: GamePlay, before: FootballPlayContext | None = None) -> ScoringPlay:
+    """Alert line for one play. ``before`` is the previous play's context.
+
+    The provider stores each football play's end-of-play situation, so the situation a play
+    started from is the one recorded on the play before it.
+    """
     assert play.wallclock is not None
+    description = play.text
+    period_label = play.period_label
+    context = play.context
+    if isinstance(context, FootballPlayContext):
+        # Down and distance are football's equivalent of the count; formation notes are noise.
+        description = _FORMATION.sub("", description)
+        if before is not None and before.down is not None and before.distance is not None:
+            spot = f" at {before.field_position}" if before.field_position else ""
+            description = f"{_ordinal(before.down)} & {before.distance}{spot}: {description}"
+        if context.turnover:
+            description = f"TURNOVER: {description}"
+        if play.period is not None:
+            period_label = f"Q{play.period}" + (f" {play.clock}" if play.clock else "")
     return ScoringPlay(
         play_id=play.play_id,
         play_time=play.wallclock,
-        description=play.text,
+        description=description[:500],
         home_score=play.home_score,
         away_score=play.away_score,
-        period_label=play.period_label,
+        period_label=period_label,
         scoring=play.scoring_play,
     )
 
 
-def _at_bat_in_progress(tail: list[GamePlay]) -> ScoringPlay | None:
-    """Summarize pitches thrown after the last completed play, if an at-bat is still going."""
-    matchup = next((m for p in reversed(tail) if (m := _MATCHUP.match(p.text))), None)
-    pitches = [m for p in tail if (m := _PITCH.match(p.text))]
-    last = tail[-1] if tail else None
-    if matchup is None or last is None or last.wallclock is None:
+def _pitch_code(result: str) -> str:
+    """Scorebook letter for one ESPN pitch result such as "Strike 2 Foul" or "Ball In Play"."""
+    text = result.casefold()
+    if "in play" in text:
+        return "X"
+    if "foul" in text:
+        return "F"
+    if "hit by" in text:
+        return "H"
+    if text.startswith("strike"):
+        return "S"
+    if text.startswith("ball"):
+        return "B"
+    return "?"
+
+
+def _count(codes: str) -> tuple[int, int]:
+    balls = strikes = 0
+    for code in codes:
+        if code == "B":
+            balls = min(balls + 1, 4)
+        elif code == "S" or (code == "F" and strikes < 2):
+            strikes = min(strikes + 1, 3)
+    return balls, strikes
+
+
+def _at_bat_in_progress(plays: list[GamePlay]) -> ScoringPlay | None:
+    """Summarize the latest batter's pitches if that at-bat has not ended yet.
+
+    Starts at the last "X pitches to Y" line so pitches before a mid-at-bat play (wild pitch,
+    stolen base) still count. The at-bat is over on ball in play, ball four, strike three, or an
+    inning break.
+    """
+    start = next(
+        (index for index in range(len(plays) - 1, -1, -1) if _MATCHUP.match(plays[index].text)),
+        None,
+    )
+    if start is None:
         return None
+    tail = [play for play in plays[start:] if play.wallclock is not None]
+    matchup = _MATCHUP.match(plays[start].text)
+    codes = "".join(_pitch_code(m.group(2)) for p in tail if (m := _PITCH.match(p.text)))
+    balls, strikes = _count(codes)
+    inning_over = any(_INNING_BREAK.match(play.text) for play in tail)
+    if (
+        not tail
+        or matchup is None
+        or inning_over
+        or "X" in codes
+        or "H" in codes
+        or balls >= 4
+        or strikes >= 3
+    ):
+        return None
+    last = tail[-1]
+    assert last.wallclock is not None
     description = f"At bat now: {matchup.group(1)} pitching to {matchup.group(2)}"
-    if pitches:
-        count = "pitch" if len(pitches) == 1 else "pitches"
-        description += f", {len(pitches)} {count} so far (last: {pitches[-1].group(2).strip()})"
+    if codes:
+        description += f", count {balls}-{strikes} (pitches: {codes})"
     return ScoringPlay(
         play_id=f"{last.play_id}:in-progress",
         play_time=last.wallclock,
@@ -97,9 +169,16 @@ def _at_bat_in_progress(tail: list[GamePlay]) -> ScoringPlay | None:
 
 def _recent_plays(plays: list[GamePlay]) -> list[ScoringPlay]:
     kept = [index for index, play in enumerate(plays) if _alert_worthy(play)]
-    recent = [_summarize(plays[index]) for index in kept]
-    start = kept[-1] + 1 if kept else 0
-    in_progress = _at_bat_in_progress([p for p in plays[start:] if p.wallclock is not None])
+    recent = [
+        _summarize(
+            plays[index],
+            before
+            if index > 0 and isinstance(before := plays[index - 1].context, FootballPlayContext)
+            else None,
+        )
+        for index in kept
+    ]
+    in_progress = _at_bat_in_progress(plays)
     if in_progress is not None:
         recent.append(in_progress)
     return recent[-20:]
