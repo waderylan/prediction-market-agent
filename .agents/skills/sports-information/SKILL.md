@@ -90,6 +90,20 @@ snapshots and refresh only the sources needed by the follow-up.
 
 ## Manage local watches
 
+- Distinguish the two local paths. A direct Codex prompt using this skill calls the watch CLI and
+  tests the CLI application service. The Market Lens UI or `POST /chat` runs the LangGraph agent,
+  its checkpointer, and host watch tools. To test chat behavior, use the UI or send the natural
+  language request to `/chat`; a direct Codex answer is not evidence that `/chat` handled it.
+- In `/chat`, create and material revision show a preview first. Confirmation must name the exact
+  draft ID in the same session. Deletion has its own preview and exact confirmation. Pause and
+  resume can follow explicit commands. List defaults to active watches; ask for paused, terminal,
+  or all when needed. Inspect one watch for desired status, runtime state, source readiness, last
+  attempt, last success, next due time, and delivery. The unified inbox includes lifecycle and
+  condition events; event inspection shows stored trigger evidence and delivery status.
+- Do not treat a Telegram message as a management interface. The bot sends opted-in lifecycle and
+  condition notifications; it does not read incoming status requests. Use `/chat` or the CLI to
+  check watch status. A saved watch remains `awaiting_first_poll` until a usable runner poll records
+  monitoring or degradation.
 - Recognize create, confirm, revise, pause, resume, list, inspect, delete, inbox, and investigate
   intents. A local Codex conversation does not remain active after it exits; recurring monitoring
   requires exactly one `uv run --env-file .env python scripts/run_watches.py` process in a separate

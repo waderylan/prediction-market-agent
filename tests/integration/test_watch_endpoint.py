@@ -98,7 +98,7 @@ async def test_host_watch_management_survives_complete_mcp_outage(tmp_path) -> N
     turn = await ChatAgent(model, no_mcp_tools, watch_service=service).chat_detailed(
         "List my watches", "outage-session"
     )
-    assert turn.response == "No watches yet."
+    assert turn.response == "No watches matched that status filter."
     assert len(turn.activity) == 1
     assert turn.activity[0].server == "watch_host"
     assert turn.activity[0].status == "success"

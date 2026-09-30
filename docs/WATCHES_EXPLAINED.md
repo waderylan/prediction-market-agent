@@ -25,7 +25,7 @@ The feature splits into four jobs. Each is handled by a different piece:
 
 | Job | Who does it | Uses an AI model? |
 |---|---|---|
-| 1. You describe the rule | Codex with the `sports-information` skill or the local CLI | Yes for language |
+| 1. You describe the rule | The `/chat` agent; the Codex skill and CLI are local evaluator paths | Yes for language |
 | 2. The confirmed rule is saved | SQLite (`artifacts/watches.db`) locally | No |
 | 3. Due game and market evidence is checked | `scripts/run_watches.py` locally | No |
 | 4. You see lifecycle and condition events | Unified inbox; optional Telegram copy | No |
@@ -35,9 +35,11 @@ what you want. It never decides whether an alert fires.
 
 ```mermaid
 flowchart LR
-    U[You] --> FRONT[Step 1: Codex skill or local CLI]
-    FRONT --> MCP[Sports and market MCP tools]
-    FRONT -->|you confirm| DB[(Step 2: SQLite rule and runtime)]
+    U[You] --> CHAT[Step 1: POST /chat and LangGraph]
+    CHAT --> HOST[Typed chat host tools] --> SVC[Watch application service]
+    CHAT --> MCP[Sports and market MCP tools]
+    SVC -->|you confirm| DB[(Step 2: SQLite rule and runtime)]
+    U -. evaluator path .-> CLI[Codex skill or local CLI] --> SVC
     RUNNER[Step 3: runner, every 60s] --> DB
     RUNNER --> MCP
     RUNNER -->|first usable poll and later transitions| INBOX[Step 4: inbox]
@@ -46,29 +48,32 @@ flowchart LR
 
 ### 2.1 The LangGraph agent (the assignment's chatbot on Cloud Run)
 
-The chatbot answers `POST /chat` and has eight basic watch tools:
+The chatbot answers `POST /chat` and has typed host tools for the full watch lifecycle:
 
 ```text
-watch_preview   watch_confirm   watch_list      watch_inspect
-watch_pause     watch_resume    watch_delete    watch_inbox
+preview   confirm   cancel preview   list/filter   inspect   revise preview
+pause     resume    delete preview   delete confirm  inbox   event/delivery reads
 ```
 
-Complete conversational watch management and runtime-health presentation remain planned work.
-The local CLI and repository skill provide the verified management and status workflow.
+The host supplies ownership from the HTTP request and validates every command. A preview is held
+in the conversation until its exact draft ID is confirmed. Revision and deletion check the stored
+rule version. Status and inbox questions read durable state without contacting providers. The
+agent distinguishes a saved rule from evidence-backed monitoring and reports Telegram delivery
+separately.
 
 It does **not** do the watching. The chat request ends as soon as the rule is saved.
 
 ### 2.2 The skill in Codex / Claude Code
 
-`.agents/skills/sports-information` does the same step 1 (describe, preview, confirm), but with
+`.agents/skills/sports-information` can perform the same local workflow, but with
 Codex or Claude Code as the chat window instead of `/chat`. The coding agent reads the skill, uses
 the same MCP tools, and drives `scripts/watch_cli.py` to preview and confirm the rule. It saves to
 the same `artifacts/watches.db`.
 
 It also doesn't do the watching.
 
-The local CLI and skill are the evaluator path for lifecycle visibility. The assignment grades
-the separate `/chat` agent and its MCP behavior.
+The CLI and skill test their own direct path. They do not prove LangGraph tool choice, memory, or
+the HTTP contract; those are tested through `/chat`.
 
 ### 2.3 The runner (the piece that actually watches)
 
@@ -98,13 +103,14 @@ through a bot. If Telegram is down or not set up, the alert is still in the inbo
 ### 2.5 One watch, end to end
 
 ```text
-You (in Codex)  --skill-->  watch_cli.py  --saves awaiting_first_poll--> watches.db
+You --POST /chat--> LangGraph --host watch service--> saves awaiting_first_poll in watches.db
                                                           |
 run_watches.py (terminal, every 60s) <--reads-------------+
       |--MCP--> ESPN score and plays, Kalshi price, Polymarket price
       |--first usable poll--> monitoring_started --> inbox --> Telegram bot
       |--later condition match--> condition_triggered --> inbox --> Telegram bot
       +--terminal game and contracts--> monitoring_completed --> inbox
+You --POST /chat--> ask status, inspect rule, manage watch, or read inbox from watches.db
 ```
 
 The planned cloud integration uses Firestore and authenticated Cloud Scheduler polling. The same
@@ -445,15 +451,16 @@ category, never the token or raw URL.
 uv run python main.py
 ```
 
-`POST /chat` handles ordinary questions and basic watch tools. Complete conversational watch
-management and runtime status are planned. For a browser UI:
+`POST /chat` handles ordinary questions and the full local watch command and status flow. For a
+browser UI:
 
 ```powershell
 uv run python scripts/run_chat_ui.py
 ```
 
-Open `http://127.0.0.1:3000`. The watch panel shows previews and basic watch data. Use the CLI
-below to inspect evidence-backed runtime status.
+Open `http://127.0.0.1:3000`. Describe a watch, inspect its preview, then confirm its exact draft
+ID. Ask the same chat to list, inspect, revise, pause, resume, delete, or read the inbox. The CLI
+below exercises the same service directly for evaluator checks.
 
 ### 7.2 Start the runner in a second terminal
 

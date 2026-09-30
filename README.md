@@ -133,9 +133,8 @@ uv run python scripts/run_chat_ui.py
 ```
 
 This starts Market Lens at `http://127.0.0.1:3000`, the FastAPI backend, and a local Codex model
-gateway. The application owns LangGraph memory and MCP execution. The UI displays the actual
-tool activity for each turn and includes basic watch entry points. Complete conversational watch
-management remains a planned milestone.
+gateway. The application owns LangGraph memory, MCP execution, and watch commands. The UI displays
+tool activity and supports watch preview, confirmation, status, and management.
 The gateway uses local CLI authentication and is not included as a production backend.
 
 ## Test the MCP workflow in Codex
@@ -151,8 +150,8 @@ codex exec '$sports-information Find today''s MLB games in UTC. Use sports state
 This path is a direct MCP test surface. It checks tool discovery, routing instructions, schemas,
 and provider behavior inside a normal Codex conversation. It does not exercise the application's
 LangGraph memory, per-turn budgets, or `/chat` contract. The FastAPI and LangGraph path is the
-product and assignment implementation. The same skill can also create watches through the watch
-CLI.
+product and assignment implementation. The skill manages local watches through the same service
+using the CLI; this direct Codex path does not test `/chat` routing or its checkpointer.
 
 ## MCP tool surface
 
@@ -233,6 +232,10 @@ flowchart LR
     G <--> M[InMemorySaver]
     G --> V[Host validation and deterministic matching]
     G --> WA[Watch tools and service]
+    WA --> WR[(SQLite watch rules, runtime, events)]
+    RUN[Local foreground runner] --> WR
+    RUN --> A
+    WR --> OUT[Telegram outbox and delivery]
     G --> A[MCP client adapter]
     A <--> K[Kalshi MCP]
     A <--> P[Polymarket MCP]
@@ -252,7 +255,7 @@ flowchart LR
     Q[User query + session] --> A[Agent entry]
     A --> L[LLM reasoning step]
     L --> TS[Tool selection]
-    TS --> CALL[MCP tools/call]
+    TS --> CALL[MCP tools/call or host watch command]
     CALL --> RESP[MCP server response]
     RESP --> VAL[Typed host validation]
     VAL --> MORE{Another tool needed?}
@@ -276,9 +279,10 @@ flowchart LR
 
 ## Watches and Telegram alerts
 
-The same game and market evidence supports on-demand answers and saved watch rules. Local watch
-management uses the CLI. Complete conversational management and automatic Cloud Run operation are
-planned integration work.
+The same game and market evidence supports on-demand answers and saved watch rules. Describe a
+watch through `/chat`, review the exact game, contract, condition, polling cadence, and Telegram
+choice, then confirm its draft ID. Chat reads and changes the stored watch in that session.
+Automatic Cloud Run watch operation remains planned integration work.
 
 **What a watch is.** A saved rule such as "text me if the Padres win chance moves 2+ points within 2
 minutes." Confirmation saves the rule in `awaiting_first_poll`; it does not prove monitoring. A
@@ -292,7 +296,7 @@ separate from observed runtime state (`awaiting_first_poll`, `awaiting_sources`,
 
 | Job | Who does it | Uses the model? |
 |---|---|---|
-| Describe and validate the rule | Codex through the repository skill and local CLI | Yes for language, no for validation |
+| Describe and validate the rule | LangGraph through typed host watch tools; Codex skill and CLI are local evaluator paths | Yes for language, no for validation |
 | Save the rule and runtime state | SQLite locally; Firestore adapter has controlled tests | No |
 | Check due games and markets | `scripts/run_watches.py` locally | No |
 | Store lifecycle and condition events | Unified inbox and event outbox | No |
@@ -304,7 +308,7 @@ separate from observed runtime state (`awaiting_first_poll`, `awaiting_sources`,
   through the same sports-state, Kalshi, and Polymarket MCP servers the agent uses. It never
   calls the model or Tavily.
 - Creating a watch always takes two steps: a preview with an exact draft ID, then an explicit
-  confirmation. Nothing is monitored until you confirm.
+  confirmation. Confirmation saves the rule; monitoring starts only after a usable poll.
 - Watches are scoped to the session that created them. Session IDs are routing keys, not login.
 - Supported: MLB, NFL, and NCAA Division I football full-game-winner contracts on Kalshi,
   Polymarket, or both. Rules can watch price moves (with or without a scoring play), a gap between
@@ -332,19 +336,47 @@ Alert time: 8:08 PM PDT
 
 ```mermaid
 flowchart LR
-    U[User] --> FRONT[Codex skill and local watch CLI]
-    FRONT -->|preview, then confirm| DB[(SQLite rule and runtime state)]
+    U[User] --> CHAT[POST /chat, LangGraph memory]
+    CHAT --> HOST[Typed chat host tools] --> SVC[Watch application service]
+    SVC -->|preview, then confirm| DB[(SQLite rule and runtime state)]
+    U -. local evaluator .-> CLI[Codex skill and watch CLI] --> SVC
     LR[Local runner, every 60s] --> CO[Deterministic coordinator]
     CS[Cloud Scheduler + Google OIDC, planned deployment] -.-> PE[POST /internal/watches/poll] --> CO
     CO -->|observation and runtime transition| DB
     CO --> MCP[Sports-state, Kalshi, Polymarket MCP]
     CO -->|lifecycle or condition event| IN[Unified inbox]
     IN --> OB[Telegram outbox] --> TG[Telegram Bot API]
+    DB -->|status and inbox reads| SVC
 ```
+
+### Manage watches in chat
+
+Use one conversation for the full flow:
+
+| Say | What happens |
+|---|---|
+| "Watch the Yankees full-game winner on Kalshi. Alert me if its price moves 4 points in 2 minutes; send Telegram updates." | Resolves the exact game and contract, then shows a preview. Nothing is saved yet. |
+| "confirm draft_…" | Saves that exact preview once and reports `awaiting_first_poll`. |
+| "Cancel that" | Discards the pending preview without saving a watch. |
+| "What are you watching?" or "Show paused watches" | Lists bounded runtime summaries with last success, next due time, and delivery state. |
+| "Is the Yankees watch running?" | Explains desired status, observed runtime state, source readiness, and evidence time. |
+| "Change it to 6 points" | Previews a versioned revision; the current rule stays active until confirmed. |
+| "Pause it" or "Resume it" | Applies the explicit command; resume returns to `awaiting_first_poll`. |
+| "Delete it" | Shows the exact target and consequences; deletion requires `confirm delete watch_…`. |
+| "Show my alerts" | Reads stored lifecycle and condition events from the inbox. |
+| "Did Telegram send that event?" | Reads the saved delivery result. |
+| "Why did this alert fire?" | Reads the stored trigger first; requested fresh evidence is labeled separately. |
+
+If more than one watch matches a phrase, choose a watch ID. Chat replies are receipts and stored
+status views. Telegram sends asynchronous messages only for watches with Telegram enabled; the bot
+does not accept incoming management commands. A completed chat response does not wait for the next
+poll or promise a later message in that response.
 
 ### Run watches locally
 
-Create and confirm watches through the local JSON-lines CLI or repository Codex skill:
+Start the chat UI above and use the examples in the same conversation. Start the runner separately
+with the same local SQLite configuration. The CLI and repository Codex skill provide an evaluator
+path over the same watch service:
 
 ```powershell
 uv run --env-file .env python scripts/watch_cli.py --db artifacts/watches.db
@@ -396,10 +428,10 @@ that endpoint is separate from the public `POST /chat` contract. The bot token c
 Secret Manager through the service identity. Polling adds bounded provider requests and Firestore
 operations, with no model or web-search cost. Telegram's Bot API is free within its service limits.
 
-**Status.** Local watch polling through real MCP servers and Telegram alert delivery are verified.
-The first-poll lifecycle path also reached the configured Telegram recipient using recorded game
-evidence. Firestore, Scheduler, OIDC, and Secret Manager have controlled tests; live Google Cloud
-acceptance requires deployment.
+**Status.** Local `/chat` management, recorded-evidence polling, the stored inbox, and real
+Telegram activation delivery passed one integrated run. Real-model preview, confirmation, and
+management routing also passed through the local Codex gateway. Firestore, Scheduler, OIDC, and
+Secret Manager have controlled tests; live Google Cloud acceptance requires deployment.
 
 [Watches, explained from zero](docs/WATCHES_EXPLAINED.md) covers the design in plain language.
 [Watch monitoring and alerts](docs/research/WATCH_MONITORING_AND_ALERTS.md) is the technical

@@ -183,7 +183,9 @@ could not be verified; never invent prices, sources, or current evidence.
 
 WATCH_PROMPT = """
 You also manage event-aware watches through host-owned watch tools. Recognize create, confirm,
-list, inspect, revise, pause, resume, delete, inbox, and investigate intents. For create or revise,
+cancel, list, inspect, revise, pause, resume, delete, inbox, delivery status, and investigation.
+Do not use watch tools for ordinary sports questions, research, or 'watch' meaning view a game.
+For create or revise,
 clarify every ambiguous team/game (including doubleheaders), platform, outcome, probability-point
 threshold, time window, and scoring relationship. Never guess identifiers. Resolve a game with
 sports_state_find_games and then sports_state_get_game_state. Resolve every contract with platform
@@ -191,12 +193,103 @@ search and exact detail. Only then call watch_preview using unchanged IDs and na
 Only full-game-winner contracts are supported. A move from 0.42 to 0.50 is eight probability
 points. no_tracked_scoring_event means no new normalized scoring play in the configured correlation
 window; never paraphrase it as proof that nothing happened. Do not call watch_confirm until the
-user explicitly confirms the exact draft ID shown in the preview. Telegram is an explicit per-watch
+user explicitly says 'confirm draft_ID' after the preview. The host checks the pending preview.
+Delete requires watch_delete_preview followed by 'confirm delete watch_ID' in a later turn.
+Telegram is an explicit per-watch
 opt-in and never accepts a chat ID. Routine polling and delivery use zero model and Tavily calls.
 For revision, inspect the watch, resolve any changed identity, preview a full replacement using
 replaces_watch_id, and require confirmation. Investigation is user-requested: inspect the alert,
 then use the ordinary exact MCP evidence tools; do not imply causation from timing.
+Use watch_list for bounded active runtime summaries, watch_inspect for one rule and runtime,
+watch_inbox for stored lifecycle and trigger events, watch_event for exact event evidence, and
+watch_delivery_status for the stored delivery result. Use watch_investigate only when the user
+asks why a stored condition trigger fired; first explain the saved trigger evidence, then label
+any refreshed MCP or Tavily evidence separately. Never equate active with monitoring.
+On creation, revision, and resume say saved and awaiting_first_poll. Runtime reads never poll.
+If a natural watch reference matches multiple summaries, ask which ID the user means.
 """
+
+
+def _watch_command_response(receipt: dict[str, Any]) -> str:
+    operation = receipt.get("operation")
+    if operation == "watch_list":
+        watches = receipt["watches"]
+        if not watches:
+            return "No watches matched that status filter."
+        lines = [
+            f"{item['watch_id']}: {item['game']['away_team']} at "
+            f"{item['game']['home_team']} — {item['condition_summary']}; "
+            f"desired {item['desired_status']}, runtime {item['runtime_state']}; "
+            f"last success {item['last_success_at'] or 'none'}, "
+            f"next due {item['next_due_at'] or 'none'}; delivery {item['delivery_status']}."
+            for item in watches
+        ]
+        if receipt.get("next_cursor") is not None:
+            lines.append(f"More watches available (cursor {receipt['next_cursor']}).")
+        return "\n".join(lines)
+    if operation == "watch_inspect":
+        runtime = receipt["runtime"]
+        rule = receipt["rule"]
+        readiness = (
+            ", ".join(
+                f"{source['source']}: {source['status']}" for source in runtime["source_readiness"]
+            )
+            or "not recorded"
+        )
+        return (
+            f"Watch {rule['watch_id']}: {runtime['condition_summary']}. "
+            f"Desired {runtime['desired_status']}; observed runtime {runtime['runtime_state']}. "
+            f"First usable poll {runtime['first_success_at'] or 'none'}; "
+            f"last attempt {runtime['last_attempt_at'] or 'none'}; "
+            f"last success {runtime['last_success_at'] or 'none'}; "
+            f"next due {runtime['next_due_at'] or 'none'}. "
+            f"Sources: {readiness}. Delivery: {runtime['delivery_status']}."
+        )
+    if operation == "watch_inbox":
+        events = receipt["events"]
+        if not events:
+            return "No stored watch events matched this page."
+        lines = [
+            f"{item['occurred_at']} {item['event_kind']} "
+            f"({item['event_id']}, watch {item['watch_id']}): "
+            f"{item['message']} Delivery: {item['delivery_status']}."
+            for item in events
+        ]
+        if receipt.get("next_cursor") is not None:
+            lines.append(f"More events available (cursor {receipt['next_cursor']}).")
+        return "\n".join(lines)
+    if operation == "watch_delivery_status":
+        return f"Event {receipt['event_id']} delivery: {receipt['delivery_status']}."
+    if operation == "watch_error":
+        return f"Watch command not completed: {receipt['message']}"
+    status = receipt["status"]
+    if status == "preview":
+        return str(receipt["preview"])
+    if status == "saved":
+        return (
+            f"Watch {receipt['watch_id']} saved. Runtime: awaiting_first_poll. "
+            "Monitoring starts only after the runner records usable evidence. "
+            "Ask for status or alerts later; Telegram sends updates only if enabled."
+        )
+    if status == "delete_preview":
+        return (
+            f"Delete watch {receipt['watch_id']} for {receipt['game']}? "
+            "This stops polling and removes its stored history. "
+            f"Reply: confirm delete {receipt['watch_id']}"
+        )
+    if status == "deleted":
+        return f"Watch {receipt['watch_id']} deleted. Its stored rule and history were removed."
+    if status == "cancelled":
+        return "Pending watch preview cancelled. No rule was saved."
+    if status == "paused":
+        return f"Watch {receipt['watch_id']} paused. No future poll is due."
+    if status == "resumed":
+        return (
+            f"Watch {receipt['watch_id']} saved and awaiting_first_poll. "
+            "Monitoring resumes after a usable poll."
+        )
+    return "Watch command completed."
+
 
 ToolConnection = Callable[[], AbstractAsyncContextManager[list[BaseTool]]]
 
@@ -252,6 +345,11 @@ class AgentState(MessagesState):
     research_results: list[dict[str, Any]]
     matching_report: dict[str, Any] | None
     activity: list[dict[str, Any]]
+    pending_watch_action: dict[str, str] | None
+    watch_receipt: dict[str, Any] | None
+    selected_watch_id: str | None
+    recent_watch_ids: list[str]
+    consumed_watch_actions: dict[str, dict[str, Any]]
 
 
 class ToolActivity(BaseModel):
@@ -901,6 +999,30 @@ class ChatAgent:
             research_results = list(state["research_results"])
             matching_report = state["matching_report"]
             activity = list(state["activity"])
+            pending_watch_action = state.get("pending_watch_action")
+            watch_receipt: dict[str, Any] | None = None
+            selected_watch_id = state.get("selected_watch_id")
+            recent_watch_ids = state.get("recent_watch_ids", [])
+            consumed_watch_actions = dict(state.get("consumed_watch_actions", {}))
+            human_query = next(
+                (
+                    str(item.text).strip()
+                    for item in reversed(state["messages"])
+                    if isinstance(item, HumanMessage)
+                ),
+                "",
+            )
+            mutation_names = {
+                "watch_preview",
+                "watch_confirm",
+                "watch_cancel_preview",
+                "watch_pause",
+                "watch_resume",
+                "watch_delete_preview",
+                "watch_delete_confirm",
+                "watch_delete",
+            }
+            mutation_seen = False
             plans: list[_ToolPlan] = []
             for call in message.tool_calls:
                 plan = _ToolPlan(call=call, started=time.perf_counter())
@@ -912,7 +1034,12 @@ class ChatAgent:
                     server = _server_for_tool(name)
                     plan.summary = f"The {server} tool failed or returned invalid data."
                     if name in WATCH_TOOL_NAMES:
-                        pass
+                        if name in mutation_names:
+                            if mutation_seen:
+                                plan.allowed = False
+                                plan.activity_status = "skipped"
+                                plan.content = "Only one watch command may run in a tool batch."
+                            mutation_seen = True
                     elif name == RESEARCH_TOOL:
                         if research_searches >= MAX_RESEARCH_SEARCHES:
                             plan.allowed = False
@@ -962,14 +1089,139 @@ class ChatAgent:
                     if name in WATCH_TOOL_NAMES:
                         if self.watch_service is None:
                             raise RuntimeError("watch service unavailable")
-                        payload = execute_watch_tool(
-                            self.watch_service,
-                            session_id,
-                            name,
-                            plan.call["args"],
-                            game_states,
-                            details,
-                        )
+                        args = plan.call["args"]
+                        if name == "watch_confirm":
+                            draft_id = args.get("draft_id")
+                            replay = consumed_watch_actions.get(str(draft_id))
+                            if (
+                                human_query.casefold() == f"confirm {draft_id}".casefold()
+                                and replay is not None
+                            ):
+                                payload = replay
+                                return ToolMessage(
+                                    json.dumps(payload, default=str),
+                                    tool_call_id=plan.call["id"],
+                                    status="success",
+                                )
+                            if (
+                                pending_watch_action is None
+                                or pending_watch_action.get("kind") != "preview"
+                                or pending_watch_action.get("draft_id") != draft_id
+                                or human_query.casefold() != f"confirm {draft_id}".casefold()
+                            ):
+                                raise ValueError(
+                                    "Confirm the exact pending draft ID in this session."
+                                )
+                        if name == "watch_cancel_preview" and (
+                            pending_watch_action is None
+                            or pending_watch_action.get("kind") != "preview"
+                            or pending_watch_action.get("draft_id") != args.get("draft_id")
+                        ):
+                            raise ValueError("No matching pending preview in this session.")
+                        if name == "watch_delete_confirm":
+                            watch_id = str(args.get("watch_id"))
+                            replay = consumed_watch_actions.get(f"delete:{watch_id}")
+                            if (
+                                human_query.casefold() == f"confirm delete {watch_id}".casefold()
+                                and replay is not None
+                            ):
+                                return ToolMessage(
+                                    json.dumps(replay),
+                                    tool_call_id=plan.call["id"],
+                                    status="success",
+                                )
+                            if (
+                                pending_watch_action is None
+                                or pending_watch_action.get("kind") != "delete"
+                                or pending_watch_action.get("watch_id") != watch_id
+                                or human_query.casefold() != f"confirm delete {watch_id}".casefold()
+                            ):
+                                raise ValueError(
+                                    "Confirm the exact pending delete target in this session."
+                                )
+                            self.watch_service.delete_if_version(
+                                session_id, watch_id, pending_watch_action["version"]
+                            )
+                            payload = {
+                                "status": "deleted",
+                                "watch_id": watch_id,
+                                "retention": "Stored rule and associated history removed.",
+                            }
+                        else:
+                            if name == "watch_investigate" and not any(
+                                word in human_query.casefold()
+                                for word in ("why", "investigate", "explain", "what caused")
+                            ):
+                                raise ValueError(
+                                    "Investigations need an explicit question about a stored alert."
+                                )
+                            if name in {
+                                "watch_inspect",
+                                "watch_pause",
+                                "watch_resume",
+                                "watch_delete_preview",
+                                "watch_event",
+                                "watch_delivery_status",
+                            }:
+                                requested_id = args.get("watch_id")
+                                if isinstance(requested_id, str):
+                                    allowed = requested_id in human_query
+                                    if not allowed and requested_id == selected_watch_id:
+                                        allowed = human_query.casefold() in {
+                                            "pause it",
+                                            "resume it",
+                                            "inspect it",
+                                            "delete it",
+                                            "pause that watch",
+                                            "resume that watch",
+                                            "inspect that watch",
+                                            "delete that watch",
+                                        }
+                                    if not allowed and requested_id in recent_watch_ids:
+                                        ordinal = recent_watch_ids.index(requested_id)
+                                        allowed = (
+                                            (ordinal == 0 and "first" in human_query.casefold())
+                                            or (ordinal == 1 and "second" in human_query.casefold())
+                                            or (ordinal == 2 and "third" in human_query.casefold())
+                                        )
+                                    if not allowed:
+                                        summaries = self.watch_service.list_runtime(
+                                            session_id, "all"
+                                        )
+                                        words = human_query.casefold()
+                                        matches = {
+                                            summary.watch_id
+                                            for summary in summaries
+                                            if any(
+                                                team.casefold() in words
+                                                or (
+                                                    len(team.split()[-1]) > 3
+                                                    and team.split()[-1].casefold() in words
+                                                )
+                                                for team in (
+                                                    summary.game.home_team,
+                                                    summary.game.away_team,
+                                                )
+                                            )
+                                        }
+                                        allowed = matches == {requested_id}
+                                    if not allowed:
+                                        raise ValueError(
+                                            "Choose one watch by ID or inspect it first."
+                                        )
+                            payload = execute_watch_tool(
+                                self.watch_service,
+                                session_id,
+                                name,
+                                args,
+                                game_states,
+                                details,
+                                expected_fingerprint=(
+                                    pending_watch_action.get("fingerprint")
+                                    if name == "watch_confirm" and pending_watch_action
+                                    else None
+                                ),
+                            )
                         return ToolMessage(
                             json.dumps(payload, default=str),
                             tool_call_id=plan.call["id"],
@@ -980,6 +1232,14 @@ class ChatAgent:
                     async with asyncio.timeout(45):
                         result = await tool.ainvoke(plan.call)
                     return result if isinstance(result, ToolMessage) else None
+                except (ValueError, KeyError) as error:
+                    if name in WATCH_TOOL_NAMES:
+                        return ToolMessage(
+                            str(error).strip("'"),
+                            tool_call_id=plan.call["id"],
+                            status="error",
+                        )
+                    return None
                 except Exception:
                     return None
                 finally:
@@ -991,7 +1251,13 @@ class ChatAgent:
                 name = planned_call["name"]
                 if plan.allowed:
                     if result is None or result.status == "error":
-                        plan.content = "Data tool failed. Check arguments or try again later."
+                        plan.content = (
+                            str(result.content)
+                            if name in WATCH_TOOL_NAMES and result is not None
+                            else "Data tool failed. Check arguments or try again later."
+                        )
+                        if name in WATCH_TOOL_NAMES:
+                            watch_receipt = {"operation": "watch_error", "message": plan.content}
                     else:
                         try:
                             if name in WATCH_TOOL_NAMES:
@@ -1000,6 +1266,64 @@ class ChatAgent:
                                 plan.status = "success"
                                 plan.activity_status = "success"
                                 validated = None
+                                payload = json.loads(plan.content)
+                                watch_receipt = {"operation": name, **payload}
+                                if name == "watch_preview":
+                                    pending_watch_action = {
+                                        "kind": "preview",
+                                        "draft_id": payload["draft_id"],
+                                        "fingerprint": payload["fingerprint"],
+                                    }
+                                elif name == "watch_delete_preview":
+                                    pending_watch_action = {
+                                        "kind": "delete",
+                                        "watch_id": payload["watch_id"],
+                                        "version": payload["version"],
+                                    }
+                                elif name in {
+                                    "watch_confirm",
+                                    "watch_cancel_preview",
+                                    "watch_delete_confirm",
+                                }:
+                                    if name == "watch_confirm":
+                                        consumed_watch_actions[planned_call["args"]["draft_id"]] = (
+                                            payload
+                                        )
+                                    elif name == "watch_delete_confirm":
+                                        consumed_watch_actions[f"delete:{payload['watch_id']}"] = (
+                                            payload
+                                        )
+                                    consumed_watch_actions = dict(
+                                        list(consumed_watch_actions.items())[-20:]
+                                    )
+                                    if (
+                                        pending_watch_action is not None
+                                        and pending_watch_action.get("draft_id")
+                                        == planned_call["args"].get("draft_id")
+                                    ) or (
+                                        pending_watch_action is not None
+                                        and name == "watch_delete_confirm"
+                                        and pending_watch_action.get("watch_id")
+                                        == planned_call["args"].get("watch_id")
+                                    ):
+                                        pending_watch_action = None
+                                if name == "watch_list":
+                                    recent_watch_ids = [
+                                        item["watch_id"] for item in payload["watches"]
+                                    ]
+                                elif name in {"watch_inspect", "watch_confirm"}:
+                                    selected_watch_id = (
+                                        payload["rule"]["watch_id"]
+                                        if name == "watch_inspect"
+                                        else payload["watch_id"]
+                                    )
+                                elif name == "watch_delete_confirm":
+                                    selected_watch_id = None
+                                    recent_watch_ids = [
+                                        watch_id
+                                        for watch_id in recent_watch_ids
+                                        if watch_id != payload["watch_id"]
+                                    ]
                             else:
                                 validated = _validate_tool_result(
                                     name, planned_call["args"], result
@@ -1166,6 +1490,11 @@ class ChatAgent:
                 "research_results": research_results,
                 "matching_report": matching_report,
                 "activity": activity,
+                "pending_watch_action": pending_watch_action,
+                "watch_receipt": watch_receipt,
+                "selected_watch_id": selected_watch_id,
+                "recent_watch_ids": recent_watch_ids,
+                "consumed_watch_actions": consumed_watch_actions,
             }
 
         async def finish(state: AgentState) -> dict[str, Any]:
@@ -1244,24 +1573,49 @@ class ChatAgent:
                             "research_results": [],
                             "matching_report": None,
                             "activity": [],
+                            "watch_receipt": None,
                         },
                         {"configurable": {"thread_id": session_id}, "recursion_limit": 20},
                     )
                     answer = str(result["messages"][-1].text)
-                    if result.get("matching_report"):
+                    receipt = result.get("watch_receipt")
+                    watch_direct_answer = bool(receipt) and (
+                        receipt.get("operation")
+                        in {
+                            "watch_list",
+                            "watch_inspect",
+                            "watch_inbox",
+                            "watch_delivery_status",
+                            "watch_error",
+                        }
+                        or receipt.get("status")
+                        in {
+                            "preview",
+                            "saved",
+                            "cancelled",
+                            "paused",
+                            "resumed",
+                            "delete_preview",
+                            "deleted",
+                        }
+                    )
+                    if watch_direct_answer:
+                        answer = _watch_command_response(receipt)
+                    if not watch_direct_answer and result.get("matching_report"):
                         notice = comparison_notice(
                             MatchingReport.model_validate(result["matching_report"])
                         )
                         answer = notice + "\n\n" + answer
-                    if sports_notice := _sports_state_notice(
-                        result.get("game_states", []),
-                        result.get("box_scores", []),
-                        result.get("player_stats", []),
-                        result.get("play_by_play", []),
-                    ):
-                        answer = sports_notice + "\n\n" + answer
-                    if research_notice := _research_notice(result.get("research_results", [])):
-                        answer = research_notice + "\n\n" + answer
+                    if not watch_direct_answer:
+                        if sports_notice := _sports_state_notice(
+                            result.get("game_states", []),
+                            result.get("box_scores", []),
+                            result.get("player_stats", []),
+                            result.get("play_by_play", []),
+                        ):
+                            answer = sports_notice + "\n\n" + answer
+                        if research_notice := _research_notice(result.get("research_results", [])):
+                            answer = research_notice + "\n\n" + answer
                     return ChatTurn(response=answer, activity=result["activity"])
             except Exception as error:
                 log_event(logger, "chat_dependency_unavailable", error_type=type(error).__name__)

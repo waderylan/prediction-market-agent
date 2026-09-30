@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -36,12 +37,19 @@ class WatchDraft(BaseModel):
     delivery: DeliveryPolicy
     created_at: datetime
     replaces_watch_id: str | None = None
+    replaces_version: str | None = None
+
+    @property
+    def fingerprint(self) -> str:
+        content = self.model_dump_json(exclude={"draft_id", "created_at"})
+        return hashlib.sha256(content.encode()).hexdigest()
 
 
 @dataclass(frozen=True)
 class WatchPreview:
     draft_id: str
     text: str
+    fingerprint: str
 
 
 class WatchService:
@@ -66,7 +74,10 @@ class WatchService:
     ) -> WatchPreview:
         if creation_source not in {"langgraph", "codex", "cli"}:
             raise ValueError("unsupported creation source")
-        if replaces_watch_id and not self.repository.get_rule(replaces_watch_id, session_id):
+        existing = (
+            self.repository.get_rule(replaces_watch_id, session_id) if replaces_watch_id else None
+        )
+        if replaces_watch_id and existing is None:
             raise KeyError("watch not found in this session")
         created_at = utc_now()
         draft = WatchDraft(
@@ -79,6 +90,7 @@ class WatchService:
             delivery=delivery,
             created_at=created_at,
             replaces_watch_id=replaces_watch_id,
+            replaces_version=self.version(existing) if existing else None,
         )
         # Build the final rule once as a deterministic semantic-validation dry run.
         self._rule_from_draft(draft, confirmed_at=draft.created_at)
@@ -91,21 +103,59 @@ class WatchService:
             if len(self._drafts) > 1024:
                 oldest = min(self._drafts, key=lambda key: self._drafts[key].created_at)
                 del self._drafts[oldest]
-        return WatchPreview(draft.draft_id, self._render_preview(draft))
+        return WatchPreview(draft.draft_id, self._render_preview(draft), draft.fingerprint)
 
-    def confirm(self, session_id: str, draft_id: str, *, now: datetime | None = None) -> WatchRule:
+    def confirm(
+        self,
+        session_id: str,
+        draft_id: str,
+        *,
+        now: datetime | None = None,
+        expected_fingerprint: str | None = None,
+    ) -> WatchRule:
         with self._lock:
             self._prune_drafts(utc_now())
             draft = self._drafts.get((session_id, draft_id))
             if draft is None:
                 raise KeyError("preview not found for this session")
+            if expected_fingerprint is not None and draft.fingerprint != expected_fingerprint:
+                raise ValueError("Pending preview changed. Review it again.")
             rule = self._rule_from_draft(draft, confirmed_at=now or utc_now())
             if draft.replaces_watch_id:
+                current = self.repository.get_rule(draft.replaces_watch_id, session_id)
+                if current is None or self.version(current) != draft.replaces_version:
+                    raise ValueError("Watch changed since preview. Preview the revision again.")
                 self.repository.replace_rule(rule, session_id)
             else:
                 self.repository.save_rule(rule, due_at=rule.monitoring_starts_at)
             del self._drafts[(session_id, draft_id)]
             return rule
+
+    @staticmethod
+    def version(rule: WatchRule) -> str:
+        return hashlib.sha256(rule.model_dump_json().encode()).hexdigest()
+
+    def cancel_preview(self, session_id: str, draft_id: str) -> bool:
+        with self._lock:
+            return self._drafts.pop((session_id, draft_id), None) is not None
+
+    def delete_if_version(self, session_id: str, watch_id: str, version: str) -> bool:
+        with self._lock:
+            current = self.repository.get_rule(watch_id, session_id)
+            if current is None or self.version(current) != version:
+                raise ValueError("Watch changed since delete preview. Inspect it again.")
+            return self.repository.delete_rule(watch_id, session_id)
+
+    def event(self, session_id: str, event_id: str) -> WatchEvent:
+        event = self.repository.event_by_id(event_id)
+        if event is None or event.session_id != session_id:
+            raise KeyError("event not found in this session")
+        return event
+
+    def delivery_status(self, session_id: str, event_id: str) -> str:
+        self.event(session_id, event_id)
+        item = self.repository.outbox_for_trigger(event_id)
+        return item.status.value if item else "inbox_only"
 
     def _prune_drafts(self, now: datetime) -> None:
         cutoff = now - timedelta(minutes=30)

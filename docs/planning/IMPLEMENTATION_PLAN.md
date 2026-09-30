@@ -40,7 +40,7 @@
 | 15. Event-aware natural-language watches | Complete locally; cloud acceptance pending Milestone 14A |
 | 16. External watch alerts | Complete locally; cloud acceptance pending Milestone 14A |
 | 16A. Watch activation acknowledgements and operational visibility | Complete locally; `/chat` and live Cloud Run acceptance deferred |
-| 16B. Conversational watch operations and agent acceptance | Planned after Milestone 16A |
+| 16B. Conversational watch operations and agent acceptance | Implemented locally; broader model acceptance pending |
 | 16C. Inbound Telegram watch status and help | Planned after Milestone 16B; local first |
 | 17. Polymarket US migration evaluation | Optional after deployment |
 
@@ -2772,11 +2772,13 @@ only because it has already been implemented.
 
 #### Current State
 
-- **Status:** Planned after Milestone 16A.
-- Milestone 15 already provides basic LangGraph preview, confirmation, lifecycle, inbox, and
-  investigation flows. Those flows do not satisfy this milestone until they consume the complete
-  runtime-health, lifecycle-event, notification, and interface-boundary contracts from Milestone
-  16A and pass the expanded operation matrix.
+- **Status:** Implemented locally. Scripted `/chat` lifecycle, real Telegram activation after a
+  separately invoked first poll, and real-model preview/confirm/list/inspect/pause/resume/delete
+  through the local Codex gateway pass. Broader paraphrase, investigation, prompt-injection, and lost
+  checkpoint acceptance remain open. Cloud acceptance belongs to Milestone 14A.
+- Milestone 15 provided the initial LangGraph watch tools. The local 16B implementation now reads
+  Milestone 16A runtime summaries and lifecycle events through the shared service. The remaining
+  adversarial evaluation items above are required before claiming full agent acceptance.
 
 #### Pivot Point
 

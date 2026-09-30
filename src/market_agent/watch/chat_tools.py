@@ -19,6 +19,8 @@ from market_agent.watch.models import (
     MarketIdentity,
     PriceMoveCondition,
     WatchCondition,
+    WatchLifecycleEvent,
+    WatchTrigger,
 )
 from market_agent.watch.service import WatchService
 
@@ -29,8 +31,13 @@ WATCH_TOOL_NAMES = {
     "watch_inspect",
     "watch_pause",
     "watch_resume",
-    "watch_delete",
     "watch_inbox",
+    "watch_cancel_preview",
+    "watch_delete_preview",
+    "watch_delete_confirm",
+    "watch_event",
+    "watch_delivery_status",
+    "watch_investigate",
 }
 
 
@@ -76,10 +83,24 @@ class WatchIdInput(ToolInput):
 
 class LimitInput(ToolInput):
     limit: int = Field(default=20, ge=1, le=50)
+    cursor: int = Field(default=0, ge=0, le=200)
+
+
+class ListInput(LimitInput):
+    status: Literal["active", "paused", "terminal", "all"] = "active"
+    cursor: int = Field(default=0, ge=0, le=100)
+
+
+class EventInput(ToolInput):
+    event_id: str
 
 
 class EmptyInput(ToolInput):
     pass
+
+
+def _event_id(event: WatchLifecycleEvent | Any) -> str:
+    return event.event_id if isinstance(event, WatchLifecycleEvent) else event.trigger_id
 
 
 def _unused(**_: Any) -> str:
@@ -99,15 +120,36 @@ def build_watch_tools() -> list[StructuredTool]:
             "Activate the exact pending preview after explicit user confirmation.",
             DraftInput,
         ),
-        ("watch_list", "List watches owned by this chat session.", EmptyInput),
+        ("watch_cancel_preview", "Cancel the pending watch preview without saving it.", DraftInput),
+        (
+            "watch_list",
+            "List bounded runtime summaries owned by this chat session. Defaults to active.",
+            ListInput,
+        ),
         ("watch_inspect", "Inspect one watch and delivery state in this session.", WatchIdInput),
         ("watch_pause", "Pause one watch in this session.", WatchIdInput),
         ("watch_resume", "Resume one watch in this session.", WatchIdInput),
-        ("watch_delete", "Delete one watch in this session.", WatchIdInput),
+        (
+            "watch_delete_preview",
+            "Preview deletion of one exact watch; does not delete it.",
+            WatchIdInput,
+        ),
+        ("watch_delete_confirm", "Confirm the exact pending deletion preview.", WatchIdInput),
         (
             "watch_inbox",
             "List deterministic watch alerts and Telegram delivery status.",
             LimitInput,
+        ),
+        ("watch_event", "Inspect one stored lifecycle event or trigger by event ID.", EventInput),
+        (
+            "watch_delivery_status",
+            "Read stored Telegram delivery status for one event ID.",
+            EventInput,
+        ),
+        (
+            "watch_investigate",
+            "Read one stored condition trigger before a user-requested evidence investigation.",
+            EventInput,
         ),
     ]
     return [
@@ -245,6 +287,8 @@ def execute_watch_tool(
     raw_arguments: dict[str, Any],
     game_states: list[dict[str, Any]],
     details: list[dict[str, Any]],
+    *,
+    expected_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     if name == "watch_preview":
         preview_input = PreviewInput.model_validate(raw_arguments)
@@ -261,46 +305,106 @@ def execute_watch_tool(
             delivery=DeliveryPolicy(channels=frozenset(channels)),
             replaces_watch_id=preview_input.replaces_watch_id,
         )
-        return {"status": "preview", "draft_id": preview.draft_id, "preview": preview.text}
+        return {
+            "status": "preview",
+            "draft_id": preview.draft_id,
+            "fingerprint": preview.fingerprint,
+            "preview": preview.text,
+        }
     if name == "watch_confirm":
         draft_input = DraftInput.model_validate(raw_arguments)
-        rule = service.confirm(session_id, draft_input.draft_id)
-        return {"status": "active", "watch_id": rule.watch_id}
+        rule = service.confirm(
+            session_id,
+            draft_input.draft_id,
+            expected_fingerprint=expected_fingerprint,
+        )
+        return {
+            "status": "saved",
+            "runtime_state": "awaiting_first_poll",
+            "watch_id": rule.watch_id,
+        }
+    if name == "watch_cancel_preview":
+        draft_input = DraftInput.model_validate(raw_arguments)
+        if not service.cancel_preview(session_id, draft_input.draft_id):
+            raise KeyError("preview not found for this session")
+        return {"status": "cancelled", "draft_id": draft_input.draft_id}
     if name == "watch_list":
-        EmptyInput.model_validate(raw_arguments)
+        listing = ListInput.model_validate(raw_arguments)
+        summaries = service.list_runtime(session_id, listing.status)
+        if listing.status == "all":
+            summaries.sort(key=lambda item: item.desired_status != "active")
         return {
             "watches": [
-                {"watch_id": rule.watch_id, "status": rule.status, "game": rule.game.label}
-                for rule in service.list_watches(session_id)
-            ]
+                summary.model_dump(mode="json")
+                for summary in summaries[listing.cursor : listing.cursor + listing.limit]
+            ],
+            "next_cursor": listing.cursor + listing.limit
+            if len(summaries) > listing.cursor + listing.limit
+            else None,
         }
     if name == "watch_inbox":
         limit_input = LimitInput.model_validate(raw_arguments)
-
-        def delivery_status(trigger_id: str) -> object:
-            item = service.repository.outbox_for_trigger(trigger_id)
-            return item.status if item else "not_requested"
-
+        events = service.events(session_id, min(200, limit_input.cursor + limit_input.limit))
         return {
-            "alerts": [
+            "events": [
                 {
-                    "trigger_id": trigger.trigger_id,
-                    "watch_id": trigger.watch_id,
-                    "triggered_at": trigger.triggered_at,
-                    "message": trigger.message,
-                    "telegram": delivery_status(trigger.trigger_id),
+                    "event_id": _event_id(event),
+                    "event_kind": getattr(event, "kind", None) or "condition_trigger",
+                    "watch_id": event.watch_id,
+                    "game": event.game.label,
+                    "occurred_at": event.occurred_at
+                    if hasattr(event, "occurred_at")
+                    else event.triggered_at,
+                    "runtime_state": getattr(event, "runtime_state", None),
+                    "message": event.message,
+                    "delivery_status": service.delivery_status(session_id, _event_id(event)),
                 }
-                for trigger in service.inbox(session_id, limit_input.limit)
-            ]
+                for event in events[limit_input.cursor : limit_input.cursor + limit_input.limit]
+            ],
+            "next_cursor": limit_input.cursor + limit_input.limit
+            if len(events) > limit_input.cursor + limit_input.limit
+            else None,
+        }
+    if name in {"watch_event", "watch_delivery_status", "watch_investigate"}:
+        event_id = EventInput.model_validate(raw_arguments).event_id
+        if name == "watch_delivery_status":
+            return {
+                "event_id": event_id,
+                "delivery_status": service.delivery_status(session_id, event_id),
+            }
+        event = service.event(session_id, event_id)
+        if name == "watch_investigate" and not isinstance(event, WatchTrigger):
+            raise ValueError("Only a stored condition trigger can be investigated.")
+        return {
+            "event": event.model_dump(mode="json", exclude={"session_id", "fingerprint"}),
+            "delivery_status": service.delivery_status(session_id, event_id),
         }
     watch_input = WatchIdInput.model_validate(raw_arguments)
     if name == "watch_inspect":
-        return service.inspect(session_id, watch_input.watch_id).model_dump(mode="json")
+        return {
+            "rule": service.inspect(session_id, watch_input.watch_id).model_dump(
+                mode="json", exclude={"session_id"}
+            ),
+            "runtime": service.runtime(session_id, watch_input.watch_id).model_dump(mode="json"),
+        }
+    if name == "watch_delete_preview":
+        rule = service.inspect(session_id, watch_input.watch_id)
+        return {
+            "status": "delete_preview",
+            "watch_id": rule.watch_id,
+            "game": rule.game.label,
+            "version": service.version(rule),
+            "consequences": ("Stops future polling and removes retained watch history."),
+        }
+    if name == "watch_delete_confirm":
+        raise ValueError("Deletion requires a session-bound preview and exact confirmation.")
     action = {
         "watch_pause": service.pause,
         "watch_resume": service.resume,
-        "watch_delete": service.delete,
     }[name]
     if not action(session_id, watch_input.watch_id):
         raise KeyError("watch not found in this session")
-    return {"status": name.removeprefix("watch_"), "watch_id": watch_input.watch_id}
+    return {
+        "status": "paused" if name == "watch_pause" else "resumed",
+        "watch_id": watch_input.watch_id,
+    }

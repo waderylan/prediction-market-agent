@@ -40,7 +40,32 @@ No test requires a particular game to be open.
 | `unit/test_watch_engine.py` | Versioned schemas, confirmation, point thresholds, scoring correlation, stale/out-of-order evidence, leases, restart recovery, SQLite/Firestore parity, outbox retry, Telegram failures, OIDC, Secret Manager |
 | `integration/test_watch_cli.py` | Local Codex preview, confirm, inspect, and lifecycle workflow through the shared SQLite service |
 | `integration/test_watch_endpoint.py` | Dedicated Scheduler OIDC boundary and the public `/chat` contract |
+| `integration/test_watch_chat.py` | `/chat` preview/confirm, runtime reads, session isolation, replay, pause/resume, versioned delete, and opt-in chat-to-runner-to-Telegram lifecycle |
 | `live/test_telegram_live.py` | Opt-in real Telegram send (passes with configured credentials); clean skip without them |
+
+The 16B local flow uses recorded exact game and market MCP result shapes and a scripted model so
+the host command order is repeatable. The opt-in case sends the resulting activation event to the
+configured Telegram recipient, then reads runtime state and inbox through `/chat` before revising,
+pausing, resuming, and deleting the watch. It is run with:
+
+```powershell
+uv run --env-file .env pytest tests/integration/test_watch_chat.py::test_chat_runner_telegram_lifecycle_live -q
+```
+
+Real model selection is a separate opt-in evaluation against the local Codex gateway:
+
+```powershell
+$env:RUN_LIVE_WATCH_AGENT = "1"
+$env:OPENAI_BASE_URL = "http://127.0.0.1:8091/v1"
+$env:OPENAI_API_KEY = "local-codex-placeholder"
+$env:OPENAI_MODEL = "gpt-5.6-sol"
+uv run pytest tests/integration/test_watch_chat.py -k real_model_watch -q
+Remove-Item Env:RUN_LIVE_WATCH_AGENT
+```
+
+The gateway must be running first with `uv run python scripts/codex_gateway.py`. This evaluates
+tool choice through LangGraph and `/chat`. Direct `$sports-information` prompts exercise a
+different Codex-to-CLI path; Telegram has no inbound management command path.
 
 The sports suite specifically verifies:
 
