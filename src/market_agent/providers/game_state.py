@@ -65,11 +65,12 @@ PlayEventKind = Literal[
 NOT_STARTED_LIFECYCLES = {"scheduled", "pregame"}
 
 DISCOVERY_USAGE = (
-    "Discovery is a lightweight scoreboard snapshot for choosing a game. Copy game_ref unchanged "
-    "into sports_state_get_game_state for current situation fields or "
-    "sports_state_get_box_score for line scoring and team/player game statistics. Scheduled and "
-    "pregame state placeholders are returned as null. Live discovery and detail are separate "
-    "observations and may drift. game_ref is scoped to the requested timezone."
+    "Choose one game, then copy its entire game_ref exactly into a detail tool. "
+    "Treat it as opaque: "
+    "do not shorten, decode, retype, or reconstruct it. If invalid_game_ref occurs, run "
+    "sports_state_find_games again and use the new value. Discovery is a lightweight scoreboard "
+    "snapshot. Live discovery and detail are separate observations and may drift. game_ref is "
+    "scoped to the requested timezone."
 )
 DETAIL_USAGE = (
     "Detail is the authoritative normalized sporting-state snapshot for this game reference. "

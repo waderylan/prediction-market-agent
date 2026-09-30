@@ -31,7 +31,20 @@ Query = Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=
 Timezone = Annotated[str, Field(strict=True, min_length=1, max_length=100, pattern=r"\S")]
 Limit = Annotated[int, Field(strict=True, ge=1, le=10)]
 Compact = Annotated[bool, Field(strict=True)]
-GameRef = Annotated[str, Field(strict=True, min_length=1, max_length=2048, pattern=r"\S")]
+GameRef = Annotated[
+    str,
+    Field(
+        strict=True,
+        min_length=1,
+        max_length=2048,
+        pattern=r"\S",
+        description=(
+            "Copy the entire game_ref exactly from sports_state_find_games. It is opaque: do not "
+            "shorten, decode, retype, or reconstruct it. If invalid_game_ref occurs, rediscover "
+            "the game and use the new value."
+        ),
+    ),
+]
 PlayerId = Annotated[str, Field(strict=True, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$")]
 PlayId = Annotated[str, Field(strict=True, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$")]
 PlayLimit = Annotated[int, Field(strict=True, ge=1, le=50)]
