@@ -36,17 +36,18 @@
 | 12. Optional sports-research snapshot ledger | Deferred until after deployment |
 | 13. Failure handling and verification | Complete locally |
 | 14. Base Cloud Run deployment and acceptance | Required; not started |
-| 14A. Cloud watch automation and final submission acceptance | Blocked on Milestones 14 and 16B |
+| 14A. Cloud watch automation and final submission acceptance | Blocked on Milestones 14, 16B, and 16C |
 | 15. Event-aware natural-language watches | Complete locally; cloud acceptance pending Milestone 14A |
 | 16. External watch alerts | Complete locally; cloud acceptance pending Milestone 14A |
 | 16A. Watch activation acknowledgements and operational visibility | Complete locally; `/chat` and live Cloud Run acceptance deferred |
 | 16B. Conversational watch operations and agent acceptance | Planned after Milestone 16A |
+| 16C. Inbound Telegram watch status and help | Planned after Milestone 16B; local first |
 | 17. Polymarket US migration evaluation | Optional after deployment |
 
 - Remaining execution order: Milestone 14 establishes the live base service; Milestone 16A proves
-  local watch runtime and notification behavior; Milestone 16B proves the local agent surface; and
-  Milestone 14A adds watch infrastructure to the accepted Cloud Run service and finalizes the
-  submission.
+  local watch runtime and notification behavior; Milestone 16B proves the local agent surface;
+  Milestone 16C adds local Telegram status and help commands; and Milestone 14A adds watch
+  infrastructure and the Telegram webhook to the accepted Cloud Run service before final submission.
 
 ## 2. Fixed Decisions
 
@@ -1621,8 +1622,8 @@ only because it has already been implemented.
 
 #### Execution Gate
 
-- Start only after Milestone 14 has an accepted live base revision and Milestones 16A and 16B pass
-  their local lifecycle, notification, and conversational-agent exit criteria.
+- Start only after Milestone 14 has an accepted live base revision and Milestones 16A, 16B, and 16C
+  pass their local lifecycle, notification, conversational-agent, and Telegram-command exit criteria.
 - Treat this as a deployment submilestone, not as the place to redesign watch rules, agent prompts,
   runtime states, event wording, polling arithmetic, or delivery semantics.
 
@@ -1631,8 +1632,9 @@ only because it has already been implemented.
 - Extend the proven Cloud Run agent with durable, automatic watch operation.
 - Use Firestore as the deployed watch repository, authenticated Cloud Scheduler as the polling
   clock, and the configured Telegram bot as the live external delivery channel.
-- Preserve `/chat` as the only user-management surface. Cloud Scheduler and the internal polling
-  endpoint are infrastructure; Telegram remains outbound and does not become a command interface.
+- Preserve `/chat` as the only surface for creating or changing watches. Cloud Scheduler and the
+  internal polling endpoint are infrastructure; the same Telegram bot accepts only read-only
+  `/help` and `/status` commands after Milestone 16C. No second app or service is deployed.
 - Remove the user's need to run or supervise a foreground process. A confirmed deployed watch must
   continue polling after the chat request completes and across Cloud Run instance replacement.
 - Preserve exactly the watch schemas, runtime transitions, lifecycle events, notification policy,
@@ -1656,6 +1658,10 @@ only because it has already been implemented.
   transport proves code behavior but not deployed delivery.
 - **No daemon or resident runner:** Cloud Run requests perform bounded claim, poll, persist, and
   delivery work. Do not launch `run_watches.py` inside the web container.
+- **One inbound route on the existing service:** switch the locally accepted Telegram command
+  handler from `getUpdates` to a bounded webhook route on the same Cloud Run service. Validate the
+  configured Telegram webhook secret and allowed chat before any watch read. Telegram webhooks and
+  `getUpdates` must not consume the same bot's updates at the same time.
 - **Atomic and idempotent recovery:** Firestore transactions, leases, fingerprints, and outbox state
   must tolerate Scheduler retries, request overlap, instance termination, revision replacement, and
   delivery retry without duplicate logical events or messages.
@@ -1700,6 +1706,8 @@ only because it has already been implemented.
   request timeout, Scheduler retry policy, and one-minute job.
 - Configure the real Telegram secret and destination, validate them without logging values, and
   preserve inbox-only behavior when external delivery is deliberately disabled.
+- Configure the Telegram webhook and command menu on the existing bot, verify the secret header,
+  allowed chat, and chat-to-session binding, and disable local `getUpdates` for the deployed bot.
 - Add deployment enable/disable and rollback procedures that pause new claims safely, retain watch
   history, drain or preserve outbox records, and avoid duplicate delivery after re-enable.
 - Add dashboards or bounded log queries for Scheduler invocations, claimed watches, source readiness,
@@ -1728,6 +1736,9 @@ only because it has already been implemented.
 - Live Telegram acceptance creates a uniquely labeled opted-in watch, receives the correct
   monitoring lifecycle message, verifies its inbox and delivery record, and confirms that missing
   or invalid Telegram configuration does not disable watch polling or stored events.
+- Inbound Telegram acceptance sends `/help`, `/status`, and `/status <watch_id>` through the real
+  bot to the existing Cloud Run service; verifies Firestore-backed answers and rejects unauthorized
+  chats, invalid webhook secrets, and duplicate updates without affecting polling or `/chat`.
 - Agent acceptance repeats the Milestone 16B create, confirm, list, inspect, inbox, pause, resume,
   revise, delete, and trigger-investigation flows against Firestore on the live `/chat` URL.
 - Base regression reruns Milestone 14 no-tool, MCP routing, memory, and partial-failure probes while
@@ -1740,8 +1751,8 @@ only because it has already been implemented.
 - Rewrite final README, watch explanation, deployment instructions, architecture diagrams, testing
   report, and assignment alignment in present tense as one deployed system.
 - Describe `/chat` management, automatic Scheduler polling, Firestore durability, lifecycle inbox,
-  and Telegram delivery as one continuous workflow. Do not frame cloud watches as an add-on or
-  narrate the order in which milestones were built.
+  Telegram delivery, and Telegram status/help replies as one continuous workflow. Do not frame
+  cloud watches as an add-on or narrate the order in which milestones were built.
 - Include exact setup, disable, rollback, secret-rotation, status-inspection, and cost commands only
   after they have been executed successfully against the accepted project.
 - State limitations honestly: instance-local conversation memory, session IDs are not
@@ -1757,6 +1768,8 @@ only because it has already been implemented.
   survive instance and revision replacement, and expose truthful runtime health.
 - One real first-poll lifecycle event and one real condition trigger reach the configured Telegram
   recipient exactly once and remain available in the authoritative inbox.
+- The same Telegram bot answers read-only help and watch-status commands through the deployed
+  service, using Firestore runtime summaries without starting a new poll or exposing other sessions.
 - Failures in sources, Firestore, Scheduler authentication, or Telegram are bounded, observable,
   recoverable where appropriate, and do not create false monitoring claims or break ordinary chat.
 - Deployed agent, watch, memory, MCP, documentation, security, cost, and submission acceptance all
@@ -1766,7 +1779,7 @@ only because it has already been implemented.
 
 #### Current State
 
-- **Status:** Not started; blocked on live Milestone 14 acceptance and local Milestones 16A/16B.
+- **Status:** Not started; blocked on live Milestone 14 acceptance and local Milestones 16A/16B/16C.
 - Firestore, Scheduler, OIDC, and Telegram behavior currently have local or controlled-substitute
   coverage only; no production watch claim is permitted.
 
@@ -2575,9 +2588,10 @@ only because it has already been implemented.
 - Keep asynchronous behavior honest. `/chat` confirms synchronous commands and reads durable state;
   it does not remain open waiting for a poll and cannot claim monitoring before the runner records
   usable evidence.
-- Keep Telegram outbound-only. The agent can enable or disable the allowlisted delivery policy for
-  a watch, but it never reads Telegram messages, accepts chat IDs, exposes destination details, or
-  treats Telegram delivery as proof that monitoring is healthy.
+- Keep Telegram outbound-only in this milestone; Milestone 16C separately adds read-only status and
+  help commands. The agent can enable or disable the allowlisted delivery policy for a watch, but
+  it never reads Telegram messages, accepts chat IDs, exposes destination details, or treats
+  Telegram delivery as proof that monitoring is healthy.
 
 #### Decisions Locked by This Plan
 
@@ -2773,6 +2787,176 @@ only because it has already been implemented.
 - Defer proactive unread-event presentation if it creates noise. Preserve the inbox and on-demand
   status path rather than coupling asynchronous delivery to an HTTP response.
 
+### Milestone 16C: Inbound Telegram Watch Status and Help
+
+#### Execution Gate
+
+- Start after Milestone 16B accepts the shared watch-status wording and the local `/chat` operation
+  contract. Complete the local command path before Milestone 14A configures its cloud webhook.
+- This milestone does not depend on a live Cloud Run service. Milestone 14A owns deployment and
+  real webhook acceptance against Firestore.
+
+#### Product Boundary
+
+- Let the existing Telegram bot answer questions about saved watches in the same chat where it
+  sends opted-in lifecycle and condition alerts. Provide `/help` and read-only `/status` commands.
+- Keep `/chat` and the local CLI as the places to create, revise, pause, resume, and delete watches.
+  Telegram does not become a general agent conversation or watch-management surface.
+- Reuse `WatchService` and its typed `WatchRuntimeSummary` for status. Do not add a second status
+  service, repository, bot, hosted app, model call, MCP request, or provider refresh.
+- Local operation uses the existing `scripts/run_watches.py` foreground process, existing SQLite
+  database, and existing `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` configuration. No local HTTP
+  server, public URL, tunnel, or additional always-running process is required.
+
+#### Telegram Command Contract
+
+| Message | Reply |
+|---|---|
+| `/help` | Short explanation of `/status`, `/status <watch_id>`, status meanings, and where watch changes are made. |
+| `/start` | The same help text; no registration or mutation. |
+| `/status` | Bounded list of watches in the configured session, active first, with watch ID, matchup, concise condition, desired state, runtime state, last successful check, and next due time. |
+| `/status <watch_id>` | One watch's stored runtime summary, including source readiness, last attempt/success, observation time, next due time, and latest delivery state when present. |
+| Unknown command or invalid watch ID | Brief usage guidance without revealing another watch or session. |
+
+- Say `saved` or `awaiting_first_poll` until a usable poll records monitoring evidence. Distinguish
+  `monitoring`, `degraded`, `awaiting_sources`, `paused`, and `terminal`; show timestamps and stale
+  evidence plainly. A running process or successful Telegram send is not proof of healthy monitoring.
+- `/status` reads persisted data only. It does not poll a game, call an MCP server, ask the model,
+  revise a watch, or wait for a future update. Keep replies short enough for one Telegram message;
+  limit list size and explain how to inspect a specific watch when there are more results.
+- Keep session IDs, database paths, bot credentials, Telegram identifiers, and raw provider payloads
+  out of replies. The watch ID in existing alerts is the handle for `/status <watch_id>`.
+
+#### Decisions Locked by This Plan
+
+- **One trusted chat:** accept commands only from the already configured `TELEGRAM_CHAT_ID`, in a
+  private chat with the bot. Ignore all other chats, groups, forwarded commands, unsupported update
+  types, and non-text messages without reading watch data. Do not interpret message text as an
+  authorization credential.
+- **One explicit session binding:** configure the watch session associated with that chat outside
+  source control, for example as `TELEGRAM_WATCH_SESSION_ID` in the ignored local `.env`. Use that
+  binding for all `WatchService` reads; never accept a session ID from the Telegram message. Watches
+  created under another session remain outside this bot's status view. Session IDs are routing keys,
+  not authentication; the chat allowlist is the access boundary for this single-user scope.
+- **One local runner:** add a bounded `getUpdates` loop alongside the existing once-per-minute
+  coordinator and outbound delivery loop in `run_watches.py`. Use the same bot token and database;
+  keep exactly one runner consuming that bot's updates. The two loops must stop cleanly together.
+- **No local webhook:** Telegram long polling is an outbound HTTPS connection from the local
+  runner. A configured Telegram webhook prevents `getUpdates` from receiving updates, so local
+  startup must detect or clearly report that conflict. When Cloud Run later enables its webhook,
+  stop the local inbound loop for that bot.
+- **Bounded and independent:** apply short request deadlines, backoff, message-length limits, and
+  concise sanitized errors. Telegram receive/reply failures must not stop watch evaluation or
+  outbound alert delivery; watch-source failures must not block stored status replies.
+- **Read-only duplicate handling:** track Telegram `update_id` progress across local restarts so
+  ordinary redelivery does not flood replies. A reply with an uncertain Telegram send result may
+  be repeated; do not claim exactly-once message delivery. Never create a watch event or mutate a
+  rule in response to an inbound command.
+- **One future cloud service:** Milestone 14A replaces local `getUpdates` with a Telegram webhook
+  route on the already deployed Cloud Run agent. The route verifies Telegram's configured secret
+  header and the allowed chat, then calls the same deterministic command handler and Firestore-
+  backed service. It is an inbound route, not a second hosted interface for users.
+
+#### Local Workflow
+
+1. Configure the existing bot token and allowed chat ID plus the bound watch session in the
+   ignored `.env`. Create watches under that same session through the CLI or local `/chat` flow.
+2. Start one `uv run --env-file .env python scripts/run_watches.py --db artifacts/watches.db`
+   process. It checks due watches, delivers queued alerts, and receives Telegram commands while
+   the terminal and computer remain running.
+3. Send `/help` or `/status` to the existing bot. The command handler validates the chat and
+   parses the allowlisted command without invoking LangGraph or the polling coordinator.
+4. Read the SQLite-backed `WatchService` summary for the bound session and send a concise reply
+   using the existing Telegram send boundary. The stored timestamps make old evidence visible.
+5. Stopping the foreground process stops both watch checks and Telegram replies. Saved rules and
+   runtime history remain in SQLite; restarting resumes from stored state.
+
+#### Work
+
+- Extract a deterministic command parser and formatter shared by local long polling and the
+  future cloud webhook. Route status reads through `WatchService`, not CLI output parsing or raw SQL
+  in the Telegram adapter.
+- Add single-chat and session-binding configuration with startup validation, secret-safe diagnostics,
+  and no silent cross-session fallback when the binding is missing or invalid.
+- Extend the existing runner with a supervised inbound loop, bounded Telegram `getUpdates` calls,
+  restart-safe update progress, controlled replies, and clean shutdown. Keep its existing poll and
+  outbound delivery cadence intact.
+- Register `/help` and `/status` in the bot command menu when configured. Keep `/start` as a help
+  alias and document that Telegram supports status reads only.
+
+#### Documentation Alignment
+
+- Audit every project document and help surface that describes watches, Telegram, setup, runtime
+  behavior, architecture, verification, or deployment. Update each relevant description as part of
+  this milestone; a working command with stale project documentation does not meet the exit gate.
+- Cover `README.md`, `docs/WATCHES_EXPLAINED.md`, `docs/WATCHES_NEXT_STEPS.md`, the watch monitoring
+  and testing documents under `docs/research/`, `docs/planning/PROJECT_PROPOSAL.md`,
+  `docs/assignment/IMPLEMENTATION_ALIGNMENT.md`, `.env.example`, the sports-information skill,
+  CLI `--help`, and every affected architecture or sequence diagram. Keep the implementation plan
+  and its status table consistent with the accepted local and pending cloud boundaries.
+- Describe one continuous user workflow: create a watch through `/chat` or the local CLI, run the
+  local foreground monitor, receive alerts from the existing bot, and send `/help` or `/status` to
+  that same bot for an on-demand stored status. Give exact local commands, required configuration,
+  the single-runner rule, the same-session binding, and the behavior when the runner is stopped.
+- State the actual command contract and examples for `/help`, `/start`, `/status`, and
+  `/status <watch_id>`. Explain that status reads stored observations, shows their timestamps and
+  source health, and does not request a fresh poll. Keep creation and mutations on `/chat` and the
+  CLI; keep Telegram identifiers, session IDs, and credentials out of product examples.
+- Show the local `getUpdates` path and outbound delivery path in diagrams as parts of the same
+  runner. Show the Cloud Run webhook on the existing service only in a clearly labeled deployment
+  plan until Milestone 14A has live acceptance; then update diagrams and setup text to the observed
+  deployed behavior.
+- Write product and operator documentation in present tense as a coherent system. Remove temporal
+  backpointers such as "previously," "now," "was changed," "new in 16C," or "the old behavior."
+  Do not append a changelog-style feature announcement or describe inbound Telegram as an add-on.
+  Preserve historical test evidence as evidence, while keeping current instructions and claims
+  aligned with behavior that has actually been verified.
+- Update the final Milestone 14A documentation pass with the same voice and include the webhook
+  secret, allowed-chat configuration, command menu, deployment enablement, and live status checks
+  only after those cloud steps have been exercised.
+
+#### Verification Plan
+
+- Parser and formatter checks cover both commands, `/start`, exact watch IDs, unknown commands,
+  extra arguments, long inputs, empty lists, multiple watches, and bounded reply lengths.
+- Status checks cover every runtime state, stale timestamps, source warnings, next-due time,
+  delivery failures, and a saved watch that has never had a usable poll. No status request may
+  increase provider, MCP, model, or polling counts.
+- Access checks cover wrong chat, group chat, mismatched session binding, guessed watch ID, and
+  malformed Telegram updates. None may reveal another session's watches or sensitive values.
+- Runner checks simulate Telegram timeouts, rate limits, malformed responses, duplicate update IDs,
+  process restart, and shutdown while confirming the once-per-minute watch loop still runs.
+- One opt-in local live check sends `/help`, `/status`, and `/status <watch_id>` to the real bot while
+  the runner is open, then confirms replies stop when the runner is closed. Milestone 14A repeats
+  the command path through the deployed webhook and Firestore.
+- Documentation review checks every relevant file and diagram against the implemented command
+  surface, local process requirements, session scope, and deployment status; product text uses
+  present-tense descriptions without temporal backpointers or unverified cloud claims.
+
+#### Exit Criteria
+
+- The existing local runner answers `/help` and `/status` from the allowed chat with no additional
+  process or locally hosted endpoint, while continuing normal monitoring and outbound alerts.
+- Status replies are bounded, read-only, session-scoped, and consistent with the same durable
+  runtime state and language shown by the CLI and `/chat`.
+- Wrong chats and guessed IDs expose no watch data; missing configuration and Telegram failures
+  produce controlled behavior without stopping the watch coordinator.
+- Local tests and an opt-in real bot check establish the command contract. Cloud webhook setup and
+  deployed acceptance remain Milestone 14A work.
+- All affected project documentation, setup examples, help text, and diagrams describe the accepted
+  local Telegram behavior in present tense and distinguish planned cloud operation accurately.
+
+#### Current State
+
+- **Status:** Planned after Milestone 16B; no inbound Telegram command handler exists yet.
+- The current runner polls watches and sends Telegram alerts. It does not call `getUpdates`, receive
+  bot messages, or reply to status/help commands.
+
+#### Pivot Point
+
+- Keep only `/help` and `/status` if richer bot interactions threaten reliable watch monitoring,
+  session isolation, or the local single-runner workflow. Leave mutations in `/chat` and the CLI.
+
 ### Milestone 17: Optional Polymarket US Migration Evaluation
 
 #### Work
@@ -2838,6 +3022,8 @@ only because it has already been implemented.
     delivery-status, inbox, and investigation behavior.
   - Session ownership, stale confirmation, mutation idempotency, ambiguous references, prompt
     injection, and ordinary-agent routing regression.
+  - Inbound Telegram help/status parsing, configured-chat and session checks, read-only runtime
+    summaries, local runner coexistence, and duplicate-update handling.
 - Container tests:
   - Non-root execution.
   - MCP subprocess startup.
@@ -2848,6 +3034,8 @@ only because it has already been implemented.
   - Base Cloud Run acceptance suite with watch automation disabled.
   - Firestore, authenticated Scheduler, real Telegram, agent-watch, restart, revision, and duplicate
     delivery acceptance on the final deployed service.
+  - Opt-in local Telegram command check, then webhook-backed help/status acceptance on the same
+    final Cloud Run service.
 
 ## 9. Scope-Priority Order
 
@@ -2861,7 +3049,8 @@ only because it has already been implemented.
   7. Truthful, deterministic, idempotent watch state and notification behavior.
   8. Session-scoped conversational watch management through validated host contracts.
   9. Working base Cloud Run deployment followed by durable automated cloud watches.
-  10. Accurate documentation and required diagrams.
+  10. Read-only Telegram status and help through the existing bot and watch service.
+  11. Accurate documentation and required diagrams.
 - Reduce these first if time is constrained:
   1. SQLite calibration summaries.
   2. SQLite sports-research snapshot ledger.
@@ -2892,6 +3081,8 @@ only because it has already been implemented.
   across instance replacement, and ordinary polling uses no model or Tavily calls.
 - The authoritative inbox retains lifecycle and condition events, while opted-in Telegram delivery
   sends each logical event at most once and exposes failures without disabling monitoring.
+- The same Telegram bot answers `/help` and `/status` for its configured chat using the stored watch
+  runtime state, first through the local runner and then through the deployed service webhook.
 - The deployed watch workflow survives Scheduler retries, overlapping requests, instance
   termination, revision replacement, source outages, and Telegram errors without false health
   claims or duplicate logical events.
