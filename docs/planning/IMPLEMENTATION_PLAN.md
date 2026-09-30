@@ -35,10 +35,18 @@
 | 11. Unified sports intelligence brief | Integrated into Milestone 10 |
 | 12. Optional sports-research snapshot ledger | Deferred until after deployment |
 | 13. Failure handling and verification | Complete locally |
-| 14. Cloud Run and submission | Required |
-| 15. Event-aware natural-language watches | Complete locally; cloud acceptance pending Milestone 14 |
-| 16. External watch alerts | Complete locally; cloud acceptance pending Milestone 14 |
+| 14. Base Cloud Run deployment and acceptance | Required; not started |
+| 14A. Cloud watch automation and final submission acceptance | Blocked on Milestones 14 and 16B |
+| 15. Event-aware natural-language watches | Complete locally; cloud acceptance pending Milestone 14A |
+| 16. External watch alerts | Complete locally; cloud acceptance pending Milestone 14A |
+| 16A. Watch activation acknowledgements and operational visibility | Planned local follow-up; `/chat` and live Cloud Telegram deferred |
+| 16B. Conversational watch operations and agent acceptance | Planned after Milestone 16A |
 | 17. Polymarket US migration evaluation | Optional after deployment |
+
+- Remaining execution order: Milestone 14 establishes the live base service; Milestone 16A proves
+  local watch runtime and notification behavior; Milestone 16B proves the local agent surface; and
+  Milestone 14A adds watch infrastructure to the accepted Cloud Run service and finalizes the
+  submission.
 
 ## 2. Fixed Decisions
 
@@ -1465,7 +1473,68 @@ only because it has already been implemented.
 - The deterministic suite and retained unit-test contracts are recorded in
   `../research/ADVERSARIAL_TESTING_REPORT.md`.
 
-### Milestone 14: Cloud Run Deployment and Submission Artifacts
+### Milestone 14: Base Cloud Run Deployment and Acceptance
+
+#### Product Boundary
+
+- Put the existing non-watch conversational agent on Cloud Run as a complete, independently
+  accepted vertical slice before provisioning any watch infrastructure.
+- Deploy FastAPI, LangGraph, the configured cloud model, session-scoped memory, and all four MCP
+  integrations behind the required public `POST /chat` contract.
+- Prove arbitrary sports-information, market, research, memory, no-tool, and partial-failure
+  behavior on the live URL. A container that starts but cannot complete real tool calls does not
+  satisfy this milestone.
+- Exclude Firestore watch state, Cloud Scheduler, the internal polling route, Telegram secrets, and
+  live watch automation. Those belong to Milestone 14A after the base service and Milestone 16B
+  agent behavior are accepted.
+- Keep unaccepted watch automation disabled in the deployed environment. The live service must not
+  imply that a saved watch will continue running until Milestone 14A passes.
+
+#### Decisions Locked by This Plan
+
+- **One base service:** deploy one Cloud Run service for the assignment agent. Do not introduce a
+  second service, worker, queue, or database merely to obtain the first live URL.
+- **Exact public contract:** preserve `POST /chat` with `{query, session_id}` and `{response}`.
+  Deployment metadata, tool traces, and internal errors stay outside that response.
+- **Cloud model only:** use the configured cloud-accessible model backend. Do not package or call
+  Ollama from Cloud Run.
+- **MCPs run for real:** include every runtime dependency needed to start the configured MCP
+  servers, perform live `tools/list`, and complete live `tools/call` operations. No deployment test
+  may substitute hard-coded tool responses.
+- **Instance-local memory is honest:** retain `--max-instances 1` for the assignment's in-memory
+  checkpointer, test same-session and cross-session behavior, and document that scale-to-zero or
+  revision replacement can erase conversations.
+- **Secrets remain external:** inject model and provider credentials at deployment time from the
+  shell or Secret Manager. Never copy `.env` into the image, build context, logs, README, or
+  committed command history.
+- **Production process contract:** bind to `0.0.0.0:$PORT`, run as a non-root user, handle SIGTERM,
+  place bounded timeouts around model and MCP work, and return controlled errors instead of
+  restarting on an ordinary upstream failure.
+- **Observable acceptance:** structured logs identify request correlation, selected source classes,
+  MCP availability, latency, and sanitized failure category without recording prompts, responses,
+  session IDs, credentials, or provider payloads.
+- **Reproducible release:** record the image digest, Cloud Run revision, region, model configuration,
+  MCP configuration, and exact smoke-test commands. Keep the previous healthy revision available
+  for rollback until acceptance passes.
+- **Cost boundary:** deploy at zero minimum instances and one maximum instance, set bounded request
+  concurrency and timeout, inspect billing after live tests, and document scale-to-zero and external
+  API costs.
+
+#### Base Deployment Workflow
+
+1. Run the complete local quality gate and build the production image from a clean source context.
+2. Run the image locally with deployment-shaped environment values and verify health, `/chat`, all
+   MCP processes, memory, shutdown, and secret absence.
+3. Enable the required Google APIs, select the project and `us-west1`, and create the image
+   repository and least-privilege runtime identity.
+4. Build and publish the immutable image, then deploy one Cloud Run revision with watch automation
+   disabled and only base-agent secrets configured.
+5. Verify the live URL with no-tool, single-source, multi-source, same-session memory,
+   cross-session isolation, malformed-request, and partial-provider-failure probes.
+6. Inspect Cloud Run logs, revision health, instance behavior, response bounds, and billing. Fix the
+   service and repeat the same acceptance set before leaving traffic on the revision.
+7. Record only observed deployment instructions and results, then prepare draft deployment
+   documentation for the accepted base revision. Milestone 14A owns final submission packaging.
 
 #### Work
 
@@ -1477,18 +1546,236 @@ only because it has already been implemented.
 - Verify same-session recall while the instance remains active.
 - Verify Polymarket-only, Kalshi-only, sports comparison, local-date discovery, research, no-tool,
   memory, and failure responses.
-- Complete README setup, run, deployment, cost, limitations, and MCP attribution sections.
-- Add all three required architecture diagrams based on the final implementation.
-- Prepare the source ZIP without `.env`, virtual environments, caches, local databases, or credentials.
+- Complete draft README setup, run, base deployment, cost, limitations, and MCP attribution sections.
+- Update all three required architecture diagrams to match the accepted base revision and label
+  automatic cloud watches as pending Milestone 14A.
+- Add a repeatable source-ZIP validation command, but defer the final ZIP until Milestone 14A so it
+  contains the accepted watch deployment rather than this intermediate base revision.
 - Leave `PROCESS_LOG.md` for Rylan Wade's accurate personal narrative and lessons learned.
+- Audit the production dependency graph, Docker build context, executable paths, MCP subprocess
+  startup, writable temporary locations, health behavior, and SIGTERM handling.
+- Add deployment configuration that disables watch automation without disabling ordinary
+  sports-information behavior or compiling a second application variant.
+- Add preflight checks for required environment variables, safe configuration summaries, MCP
+  dependency availability, and forbidden secret files in the image context.
+- Create idempotent base deployment commands or a script for API enablement, image publication,
+  Cloud Run configuration, revision inspection, traffic promotion, and rollback. Keep literal
+  credentials out of every command file.
+- Add a live acceptance harness that targets an explicit URL and session prefix, applies bounded
+  timeouts, records sanitized results, and never runs accidentally as part of the unit suite.
+- Verify live MCP discovery and invocation evidence for all four servers rather than inferring tool
+  use from final prose.
+
+#### Verification Plan
+
+- Container tests inspect the effective user, `PORT` binding, environment, image contents,
+  installed MCP runtimes, writable paths, signal shutdown, health response, and absence of local
+  secret files.
+- Deployment tests verify service identity, revision/image digest, region, min/max instances,
+  concurrency, timeout, environment names, secret references, ingress, and unauthenticated access
+  to only the assignment-required public surface.
+- Live `/chat` tests use unique session IDs and verify request validation, stable response schema,
+  same-session recall, cross-session isolation, no-tool routing, every MCP independently, a chained
+  multi-MCP query, and a broad four-server query.
+- Failure probes make one upstream or MCP source unavailable at a time and confirm the live service
+  returns a bounded partial answer without leaking internals or destabilizing later requests.
+- Log inspection confirms each acceptance request can be correlated while prompts, responses,
+  sessions, tokens, credentials, and private provider data remain absent.
+- Scale-to-zero and revision tests confirm a cold request recovers, memory limitations are described
+  honestly, the previous revision can receive traffic again, and no watch polling or Telegram
+  delivery occurs.
+- Cost inspection records actual Cloud Run and external-provider usage produced by the acceptance
+  run and confirms the configured ceilings match the README.
 
 #### Exit Criteria
 
-- The live Cloud Run URL answers arbitrary reasonable queries.
+- The live Cloud Run URL answers arbitrary reasonable non-watch queries in the supported product
+  scope.
 - Deployment uses the required request and response contract.
 - README diagrams match the code that was actually deployed.
-- Required submission files are present and secrets are absent.
-- The service remains available for grading.
+- Draft submission documentation describes only verified base behavior and contains no secrets.
+- The base service remains available until it is replaced by an accepted Milestone 14A revision.
+- The deployed image runs non-root, binds to the injected port, shuts down cleanly, contains no
+  secrets, and exposes no unaccepted watch-automation promise.
+- Logs, revision metadata, rollback, cost evidence, README instructions, and diagrams match the
+  deployment that was actually tested.
+- Milestone 14 completion authorizes Milestone 14A infrastructure work; it does not by itself claim
+  persistent watches, Scheduler polling, Firestore state, or Telegram delivery.
+
+#### Current State
+
+- **Status:** Not started; no live Cloud Run acceptance evidence is recorded.
+- Local application, container configuration, MCP integrations, memory, and failure tests provide
+  inputs to deployment but do not satisfy any live exit criterion.
+
+#### Pivot Point
+
+- Reduce response breadth, container size, or optional research before weakening real MCP
+  invocation, session isolation, secret handling, or the required public contract.
+- Roll traffic back to the previous healthy revision when a deployment fails acceptance; do not
+  patch a live container or substitute localhost evidence.
+- Keep watch automation disabled until the base deployment is stable and Milestone 14A dependencies
+  are complete.
+
+### Milestone 14A: Cloud Watch Automation and Final Submission Acceptance
+
+#### Execution Gate
+
+- Start only after Milestone 14 has an accepted live base revision and Milestones 16A and 16B pass
+  their local lifecycle, notification, and conversational-agent exit criteria.
+- Treat this as a deployment submilestone, not as the place to redesign watch rules, agent prompts,
+  runtime states, event wording, polling arithmetic, or delivery semantics.
+
+#### Product Boundary
+
+- Extend the proven Cloud Run agent with durable, automatic watch operation.
+- Use Firestore as the deployed watch repository, authenticated Cloud Scheduler as the polling
+  clock, and the configured Telegram bot as the live external delivery channel.
+- Preserve `/chat` as the only user-management surface. Cloud Scheduler and the internal polling
+  endpoint are infrastructure; Telegram remains outbound and does not become a command interface.
+- Remove the user's need to run or supervise a foreground process. A confirmed deployed watch must
+  continue polling after the chat request completes and across Cloud Run instance replacement.
+- Preserve exactly the watch schemas, runtime transitions, lifecycle events, notification policy,
+  and agent behavior accepted locally.
+
+#### Decisions Locked by This Plan
+
+- **Extend the accepted service:** add watch infrastructure to the same Cloud Run service and image
+  lineage accepted in Milestone 14. Do not create an unrelated deployment with different agent or
+  watch behavior.
+- **Firestore is authoritative in cloud:** no deployed watch state, observation, event, lease,
+  trigger, or delivery record relies on the container filesystem or process memory.
+- **Scheduler is the only polling clock:** create one Cloud Scheduler job that invokes the internal
+  poll route once per minute. The coordinator applies each watch's due-time policy and returns
+  quickly when nothing is due.
+- **Private polling surface:** require Google-issued OIDC, the exact service URL audience, and a
+  dedicated least-privilege Scheduler service account. Public `/chat` access does not make the
+  polling route public.
+- **Real Telegram configuration:** load the bot token from Secret Manager and keep the destination
+  outside source control and model context. A live message is required for acceptance; a fake
+  transport proves code behavior but not deployed delivery.
+- **No daemon or resident runner:** Cloud Run requests perform bounded claim, poll, persist, and
+  delivery work. Do not launch `run_watches.py` inside the web container.
+- **Atomic and idempotent recovery:** Firestore transactions, leases, fingerprints, and outbox state
+  must tolerate Scheduler retries, request overlap, instance termination, revision replacement, and
+  delivery retry without duplicate logical events or messages.
+- **Safe enablement:** deploy schema-compatible code first, verify Firestore and private-route
+  health, then create or enable the Scheduler job and Telegram destination. Provide one switch that
+  stops new claims without deleting watches or history.
+- **Base service remains protected:** watch failures, Firestore outages, Scheduler authentication
+  errors, and Telegram failures must not break ordinary `/chat` sports-information requests.
+- **Cloud truth is observable:** expose sanitized poll counters and classifications in logs and
+  durable watch status while keeping session IDs, destinations, tokens, prompts, provider payloads,
+  and private Firestore data out of logs.
+- **Cost remains bounded:** retain scale-to-zero where compatible, one maximum instance for
+  assignment memory, bounded poll work, grouped observations, no-token polling, and zero Tavily use
+  on the polling path. Measure the cost effect of one-minute Scheduler traffic.
+
+#### Production Watch Flow
+
+1. A user creates and confirms a watch through the accepted `/chat` agent flow.
+2. The application service commits the rule and `awaiting_first_poll` runtime state to Firestore and
+   returns immediately; it does not wait for Scheduler.
+3. Cloud Scheduler sends an authenticated request to the private polling route once per minute.
+4. The coordinator transactionally claims due watches, groups shared evidence, invokes the existing
+   MCP tools, persists observations, and evaluates deterministic conditions.
+5. The first usable poll records the appropriate lifecycle event and Telegram outbox item; later
+   polls record only real state transitions or condition triggers.
+6. The delivery worker claims due outbox records, sends Telegram, and records sent, retry, or
+   terminal failure without changing the underlying watch event.
+7. `/chat` list, inspect, and inbox requests read Firestore runtime truth and delivery status. They
+   never infer monitoring from Scheduler existence or Telegram success.
+8. Instance replacement, Scheduler retry, or deployment of a new revision resumes from Firestore
+   leases and state without duplicate activation or trigger messages.
+
+#### Work
+
+- Provision Firestore in the selected project and region, required indexes, the Cloud Run runtime
+  identity, the Scheduler identity, Secret Manager entries, and minimum IAM grants.
+- Configure production repository selection and fail startup or watch operations clearly when
+  required cloud configuration is incomplete; never fall back silently to SQLite.
+- Deploy schema-compatible Firestore readers/writers and verify migration behavior with existing
+  documents before enabling automatic polling.
+- Configure and verify the authenticated internal polling route, audience, service-account identity,
+  request timeout, Scheduler retry policy, and one-minute job.
+- Configure the real Telegram secret and destination, validate them without logging values, and
+  preserve inbox-only behavior when external delivery is deliberately disabled.
+- Add deployment enable/disable and rollback procedures that pause new claims safely, retain watch
+  history, drain or preserve outbox records, and avoid duplicate delivery after re-enable.
+- Add dashboards or bounded log queries for Scheduler invocations, claimed watches, source readiness,
+  lifecycle events, triggers, delivery results, retry exhaustion, latency, and sanitized errors.
+- Update deployment scripts, environment templates, architecture diagrams, operator commands, cost
+  guidance, incident steps, and grading evidence from actual cloud resources.
+- Run the complete final quality gate and build the submission ZIP from the accepted revision,
+  excluding `.env`, credentials, caches, virtual environments, local databases, test artifacts, and
+  machine-specific files.
+- Complete the final README, diagrams, cost disclosure, live URL instructions, limitations, MCP
+  attribution, and submission checklist. Leave `PROCESS_LOG.md` content to Rylan Wade and validate
+  only its presence and required structure.
+
+#### Verification Plan
+
+- IAM tests prove the Scheduler identity can invoke only the intended service route, unauthenticated
+  requests fail, wrong audience and wrong identity fail, and the runtime identity has only required
+  Firestore and secret access.
+- Firestore acceptance creates, reads, revises, pauses, resumes, lists, inspects, and deletes test
+  watches through application services while preserving session isolation and schema meaning.
+- Scheduler acceptance covers no-due, not-yet-active, due, multiple grouped watches, delayed game,
+  partial source failure, total source failure, terminal state, and bounded request timeout cases.
+- Idempotency acceptance repeats the same Scheduler request, overlaps two requests, expires a lease,
+  terminates an instance mid-cycle, deploys a replacement revision, and proves one logical event
+  and one Telegram message per fingerprint.
+- Live Telegram acceptance creates a uniquely labeled opted-in watch, receives the correct
+  monitoring lifecycle message, verifies its inbox and delivery record, and confirms that missing
+  or invalid Telegram configuration does not disable watch polling or stored events.
+- Agent acceptance repeats the Milestone 16B create, confirm, list, inspect, inbox, pause, resume,
+  revise, delete, and trigger-investigation flows against Firestore on the live `/chat` URL.
+- Base regression reruns Milestone 14 no-tool, MCP routing, memory, and partial-failure probes while
+  Scheduler traffic is active.
+- Cost and operations acceptance records Scheduler, Cloud Run, Firestore, Secret Manager, Telegram,
+  model, MCP, and Tavily behavior; ordinary polling must still use zero model and Tavily calls.
+
+#### Documentation Alignment
+
+- Rewrite final README, watch explanation, deployment instructions, architecture diagrams, testing
+  report, and assignment alignment in present tense as one deployed system.
+- Describe `/chat` management, automatic Scheduler polling, Firestore durability, lifecycle inbox,
+  and Telegram delivery as one continuous workflow. Do not frame cloud watches as an add-on or
+  narrate the order in which milestones were built.
+- Include exact setup, disable, rollback, secret-rotation, status-inspection, and cost commands only
+  after they have been executed successfully against the accepted project.
+- State limitations honestly: instance-local conversation memory, session IDs are not
+  authentication, one configured Telegram recipient, polling latency, provider freshness, and
+  temporal correlation does not prove causation.
+
+#### Exit Criteria
+
+- The already accepted base `/chat` service remains healthy with Scheduler traffic active.
+- A user can manage the complete watch lifecycle through `/chat` without starting a local runner or
+  knowing about Firestore, Scheduler, leases, outbox records, or Cloud Run revisions.
+- Confirmed watches persist in Firestore, poll automatically through authenticated Scheduler calls,
+  survive instance and revision replacement, and expose truthful runtime health.
+- One real first-poll lifecycle event and one real condition trigger reach the configured Telegram
+  recipient exactly once and remain available in the authoritative inbox.
+- Failures in sources, Firestore, Scheduler authentication, or Telegram are bounded, observable,
+  recoverable where appropriate, and do not create false monitoring claims or break ordinary chat.
+- Deployed agent, watch, memory, MCP, documentation, security, cost, and submission acceptance all
+  pass against the same live revision left available for grading.
+- The final source ZIP, README, three diagrams, live URL, and Rylan Wade-authored process log are
+  present, internally consistent, free of secrets, and ready for Brightspace submission.
+
+#### Current State
+
+- **Status:** Not started; blocked on live Milestone 14 acceptance and local Milestones 16A/16B.
+- Firestore, Scheduler, OIDC, and Telegram behavior currently have local or controlled-substitute
+  coverage only; no production watch claim is permitted.
+
+#### Pivot Point
+
+- Disable Scheduler claims or Telegram projection before weakening Firestore authority,
+  authentication, event idempotency, secret handling, or the base `/chat` service.
+- Reduce polling scope or message detail before moving deterministic watch evaluation into the
+  model or relying on Cloud Run process memory.
 
 ### Milestone 15: Event-Aware Natural-Language Watches
 
@@ -1692,7 +1979,7 @@ only because it has already been implemented.
 
 #### Current State
 
-- **Status:** Complete locally; cloud acceptance pending Milestone 14.
+- **Status:** Complete locally; cloud watch acceptance pending Milestone 14A.
 - LangGraph exposes validated preview, confirmation, lifecycle, inbox, and investigation flows.
   SQLite, the Firestore adapter, deterministic coordinator, authenticated scheduler endpoint,
   bounded CLI, foreground runner, and replay fixture share one versioned schema and evaluator.
@@ -1805,7 +2092,7 @@ only because it has already been implemented.
 
 #### Current State
 
-- **Status:** Complete locally; cloud acceptance pending Milestone 14.
+- **Status:** Complete locally; cloud watch acceptance pending Milestone 14A.
 - The transactional SQLite/Firestore outbox, bounded Telegram adapter, retry classifier, inbox
   delivery status, Secret Manager boundary, fake transport end-to-end replay, and opt-in live smoke
   test are implemented. Fake delivery and live delivery to the configured chat are verified locally.
@@ -1815,6 +2102,674 @@ only because it has already been implemented.
 - Keep the in-product inbox as the complete fallback when Telegram is unavailable.
 - Disable external delivery before weakening idempotency, secret handling, or trigger evidence.
 - Add another free channel only after Telegram delivery and recovery behavior are measured.
+
+### Milestone 16A: Watch Activation Acknowledgements and Operational Visibility
+
+#### Product Boundary
+
+- Make the watch lifecycle observable without confusing a saved rule with a running monitor.
+- Treat the primary product outcome as confidence: Rylan Wade and a grader can determine that a
+  specific watch is actually collecting evidence, not merely present in a database.
+- A confirmation response proves only that a validated rule is durable. A monitoring-started event
+  proves that a runner claimed the due rule, collected and stored usable evidence, and established
+  the baseline needed for at least one configured condition.
+- Record watch lifecycle events in the authoritative in-product inbox and project them to Telegram
+  only when that watch explicitly enables Telegram delivery.
+- Expose concise runtime health through the local CLI and shared SQLite/Firestore repository
+  contracts. Do not add a separate status service, notification script, or MCP server.
+- Keep every lifecycle event and status projection independent of its initiating interface so a
+  Milestone 16B can consume the same contracts without changing runner or notification
+  behavior. Do not implement or revise the `/chat` watch tools in this milestone.
+- Keep acknowledgement, status, and delivery deterministic. This milestone adds no model call,
+  Tavily call, provider request, or polling interval beyond the work already required by the watch.
+
+#### Product Experience
+
+- **Trust, control, and simplicity are co-equal goals.** The product must say whether a watch is
+  saved, waiting, monitoring, degraded, paused, or terminal; let the owner inspect and manage it;
+  and avoid requiring an ordinary user to understand runners, polling, databases, Scheduler, or
+  deployment.
+- **This milestone is local-first.** Rylan Wade deliberately owns the foreground runner and uses
+  CLI commands to create, inspect, and manage watches. Telegram provides outbound lifecycle and
+  condition notifications. This produces direct sanity checks and grading evidence before any
+  conversational endpoint depends on the behavior.
+- **The later user experience begins and ends at `/chat`.** The eventual user creates, lists,
+  inspects, pauses, resumes, revises, and deletes watches through conversation. Telegram remains an
+  outbound notification channel, not a second management interface. That integration is explicitly
+  outside this milestone and belongs to Milestone 16B.
+- **Target cloud operation is automatic.** In the deployed product, authenticated Cloud Scheduler
+  polling replaces the manually managed foreground runner. Final cloud integration must preserve
+  the state transitions and messages proven locally.
+- **One-minute polling sets the responsiveness expectation.** Timely delivery after each completed
+  poll matters, but low-latency or real-time alerting is not a product claim. Do not sacrifice clear
+  state, correctness, or delivery idempotency to imply sub-minute speed.
+
+#### Decisions Locked by This Plan
+
+- **One product promise applies to every control surface.** Creating a watch means the system has
+  accepted responsibility for tracking its lifecycle and reporting whether that responsibility is
+  currently fulfilled. The local CLI establishes that contract. Milestone 16B and Cloud Run work
+  must reuse it rather than introduce weaker meanings or a separate state machine.
+- **Creation and activation are separate moments.** The initial experience returns an immediate
+  CLI receipt when the rule is saved. A later lifecycle event confirms that evidence-backed
+  monitoring has started. Milestone 16B must preserve the same separation and must
+  not compress those moments into one success claim unless activation has actually occurred.
+- **Status is visible without reading infrastructure.** Telegram supplies outbound lifecycle and
+  condition notices. The local operator obtains the same facts through bounded CLI list and inspect
+  commands. Database inspection and log reading are diagnostic fallbacks, not product workflows.
+- **The notification boundary is the first usable poll, not confirmation.** `watch_cli.py` persists
+  the rule in an `awaiting_first_poll` runtime state. It must not send a
+  monitoring-started Telegram message. The local foreground runner or authenticated Cloud
+  Scheduler invocation creates that message only after the coordinator completes the first usable
+  observation cycle for the due watch.
+- **Process startup is not evidence of monitoring.** Printing `runner=started`, opening a database,
+  or accepting an authenticated Scheduler request does not qualify. The coordinator must claim the
+  exact rule, persist its observation, and determine condition readiness before it can announce
+  that monitoring started.
+- **The existing activation window remains authoritative.** A watch confirmed well before its
+  activation window stays `awaiting_first_poll`; it does not send an early acknowledgement merely
+  because a runner is open. The first eligible check remains fifteen minutes before scheduled
+  start, with the existing five-minute pregame/delay and one-minute active cadence.
+- **Usability is evaluated from typed condition requirements.** A price-move condition is usable
+  when at least one pinned market has a nonterminal, non-stale price observation. Cross-platform
+  divergence requires usable observations from both referenced platforms. Lifecycle conditions
+  require an available sports-state observation. Scoring and no-tracked-scoring relationships
+  require available sports state and play evidence in addition to the applicable price evidence.
+- **Healthy, degraded, and unavailable starts remain distinct.** If every configured condition has
+  its required evidence, runtime becomes `monitoring`. If at least one condition is usable while
+  another configured source or condition is unavailable, runtime becomes `degraded` and the start
+  event names the missing coverage. If no condition is usable, runtime becomes `awaiting_sources`,
+  no success notification is created, and ordinary polling retries on the existing cadence.
+- **Terminal evidence cannot create a false start.** A game that is already final or cancelled and
+  whose pinned contracts are terminal moves through terminal handling without a
+  monitoring-started notification. A terminal watch cannot be resumed or assigned a new activation
+  epoch.
+- **The baseline is not a movement trigger.** The first usable observation establishes the starting
+  point for later comparisons. It can create a lifecycle acknowledgement, but it cannot by itself
+  satisfy a price-move or divergence condition that requires earlier evidence.
+- **Lifecycle events are first-class records, not fabricated triggers.** Add a typed watch event
+  envelope with discriminated kinds for waiting, started, started-degraded, degraded, interrupted,
+  recovered, resumed, updated, completed, and `condition_triggered`. Do not create fake price
+  deltas, reserved condition IDs, or synthetic provider evidence merely to reuse `WatchTrigger`.
+- **The inbox remains authoritative.** Persist the lifecycle event before external delivery and
+  expose it beside condition alerts in chronological inbox results. Telegram remains a projection
+  of the stored event. Missing or failed Telegram delivery cannot erase the event or change runtime
+  state.
+- **One activation epoch produces at most one start event.** Initial confirmation creates the first
+  epoch. A successful resume creates a new epoch labeled `monitoring_resumed`; a confirmed material
+  revision creates a new epoch labeled `monitoring_updated`. Runner restarts, delivery retries,
+  concurrent claims, Cloud Run instance replacement, and repeated identical observations do not
+  create another start event for the same epoch.
+- **Activation state is durable and storage-neutral.** Store activation epoch, runtime state,
+  first-success time, last-attempt time, last-success time, next due time, source readiness, and
+  acknowledgement fingerprint in SQLite or Firestore through the shared repository interface.
+  Process memory may cache these values but is never authoritative.
+- **Event and outbox creation are atomic.** The transition to `monitoring` or `degraded`, insertion
+  of the lifecycle event, and insertion of an opted-in Telegram outbox record occur in one
+  repository transaction. A crash cannot leave a delivered start message without a durable event,
+  or a durable monitoring state without its intended outbox record.
+- **The existing delivery worker sends the event in the same cycle.** `run_watches.py` and the Cloud
+  polling endpoint already run the delivery worker after coordinator polling. A newly created
+  lifecycle outbox item is eligible immediately, uses the same leases and retry classifier as a
+  condition alert, and makes zero model or Tavily calls.
+- **Messages describe evidence and a code-owned execution origin.** A start message includes the
+  exact matchup, watched outcomes and platforms, rule summary, effective cadence, source readiness,
+  start time in the game's timezone, watch ID, and whether the poll came from the local foreground
+  runner or authenticated Scheduler endpoint. The runner and endpoint pass that typed origin to
+  the coordinator; the model and watch payload cannot choose it. A message names Cloud Run only
+  when Cloud Run's injected service/revision metadata is present, so a locally invoked endpoint
+  cannot impersonate deployed acceptance.
+- **Runtime health is separate from desired rule status.** `WatchStatus.ACTIVE` continues to mean
+  that the owner wants the rule enabled. Runtime state separately reports
+  `awaiting_first_poll`, `awaiting_sources`, `monitoring`, `degraded`, or `terminal`. This prevents
+  an active database row from being presented as proof that a runner is healthy.
+- **Local management commands are returned at confirmation, not embedded in cloud Telegram.** A
+  local CLI confirmation returns the exact runner, active-list, and inspect commands for its
+  database and session. Telegram includes the watch ID but does not expose the session ID,
+  filesystem path, machine-specific shell command, or instructions for a chat capability that has
+  not been implemented. Milestone 16B may add provider-neutral management guidance.
+- **Active-list output is operational, not a rule dump.** Add a status filter and concise projection
+  containing watch ID, matchup, condition summary, desired status, runtime state, monitoring start,
+  last attempt, last successful poll, next due time, source readiness, and delivery state. Full
+  `inspect` remains available for the complete versioned rule.
+- **The same semantics apply locally and in Cloud Run.** The local second command is
+  `run_watches.py`; the cloud equivalent is the first authenticated Scheduler invocation that
+  claims the due watch. Both paths call the same coordinator and repository transition. No cloud-
+  only shortcut may announce monitoring before evidence collection.
+- **Current data survives the schema change.** SQLite migration must preserve existing rules,
+  observations, triggers, outbox state, and delivery history. Firestore readers accept records
+  written before this milestone and initialize absent runtime fields conservatively as
+  `awaiting_first_poll` without resending historical start notices unless the rule begins a new
+  activation epoch.
+- **Session and secret boundaries do not change.** Session IDs remain unauthenticated routing keys
+  and never appear in Telegram messages. Tokens and recipient IDs remain outside rules, events,
+  prompts, MCP results, logs, and command output.
+
+#### Notification Behavior Contract
+
+- Event creation is independent of delivery. Every asynchronous watch event is stored in the
+  authoritative inbox before any Telegram attempt. Telegram opt-in controls projection, not whether
+  the event exists or what state transition occurred.
+- Command acknowledgements are synchronous receipts, not external notifications. Save, pause, and
+  delete return a CLI receipt and do not send Telegram messages merely to echo the operator's own
+  action.
+- State-transition notifications are edge-triggered. Repeated polls in the same state update health
+  timestamps but do not repeat a message. Recovery is sent only after a corresponding waiting,
+  degraded, or interrupted episode.
+- Each lifecycle event has one semantic payload and channel-specific rendering. Telegram uses a
+  bounded plain-text renderer. CLI list/inspect use concise and full status projections. Later
+  `/chat` work reads the same typed event and runtime fields; it does not reconstruct state from
+  message text.
+
+| Situation | Durable event and runtime effect | Telegram policy |
+|---|---|---|
+| Rule saved before any poll | No asynchronous lifecycle event; runtime is `awaiting_first_poll` | No message |
+| First eligible poll has no usable condition | `monitoring_waiting_for_sources`; runtime is `awaiting_sources` | Send one warning for the waiting episode |
+| First eligible poll has complete coverage | `monitoring_started`; runtime is `monitoring` | Send once for the activation epoch |
+| First eligible poll has partial but usable coverage | `monitoring_started_degraded`; runtime is `degraded` | Send once and name missing coverage |
+| A running watch loses some required coverage | `monitoring_degraded`; runtime is `degraded` | Send once for the degradation episode |
+| A running watch loses all usable coverage | `monitoring_interrupted`; runtime is `awaiting_sources` | Send one operational warning |
+| Coverage returns after waiting, degradation, or interruption | `monitoring_recovered`; runtime returns to `monitoring` or remains explicitly `degraded` | Send once and identify restored and still-missing coverage |
+| A watch condition becomes true | Existing `condition_triggered` event and trigger evidence remain authoritative | Send the existing deterministic alert |
+| Operator pauses a watch | Synchronous receipt; desired state becomes `paused`; no future polls are due | No echo message |
+| Operator resumes a watch | Synchronous saved receipt; new activation epoch waits for usable evidence | Send `monitoring_resumed` only after a usable poll |
+| Operator materially revises a watch | Synchronous saved receipt; new activation epoch waits for usable evidence | Send `monitoring_updated` only after a usable poll |
+| Game and contracts reach a supported terminal state | `monitoring_completed`; runtime is `terminal` and no more polls are due | Send one completion message with the stop reason |
+| Telegram delivery fails | Delivery record becomes retryable or terminal without changing watch runtime | Retry by policy; terminal failure remains visible in inbox and CLI because Telegram cannot report its own failure |
+| Operator deletes a watch | Synchronous receipt; cancel unclaimed deliveries and apply retention policy | No echo message |
+
+- Waiting, degraded, interrupted, recovered, resumed, updated, completed, and condition messages use
+  distinct event kinds and stable fingerprints. They are never encoded as fake price triggers.
+- A notification contains the watch ID, matchup, watched outcome and platform, concise rule summary,
+  runtime state, source readiness, event time, effective cadence, and a plain statement of what will
+  happen next. Condition alerts retain their before/after evidence and non-causation notice.
+- Messages do not contain session IDs, database paths, shell commands, Telegram identifiers, secret
+  values, provider payloads, or deployment claims that the execution origin cannot prove.
+
+#### Deferred Interaction Trial
+
+- The local acceptance baseline is a saved CLI receipt followed by a Telegram monitoring-started
+  message after the first usable poll. It proves the path from durable rule through runner,
+  evidence, lifecycle event, outbox, and Telegram.
+- Whether the Milestone 16B `/chat` experience also projects activation into conversation history
+  is an interaction decision that requires a working chat prototype. Defer that comparison instead
+  of building endpoint behavior here.
+- The Milestone 16B trial may change channel presentation. It must not change the durable event vocabulary,
+  runtime states, notification timing, on-demand status data, or exactly-once semantics defined in
+  this milestone.
+
+#### Lifecycle Event Contract
+
+- Introduce a versioned `WatchLifecycleEvent` containing:
+  - event ID, event kind, watch ID, session scope, activation epoch, and stable fingerprint;
+  - exact game identity and bounded market/outcome labels;
+  - deterministic condition summary and effective polling cadence;
+  - runtime state and source-readiness entries with sanitized warnings;
+  - persisted observation IDs that established readiness;
+  - event time and game-local display time;
+  - one deterministic message under the existing 1,500-character Telegram ceiling.
+- Generalize inbox and outbox records around a typed watch-event envelope while preserving the
+  complete `WatchTrigger` evidence contract for condition alerts. Existing trigger IDs and
+  fingerprints remain valid; migration does not relabel old price alerts as lifecycle events.
+- Use a fingerprint derived from watch ID, activation epoch, lifecycle-event kind, and baseline
+  observation identity. Do not use timestamps alone as idempotency keys.
+- Retain lifecycle events with alert history for 30 days. Keep the current rule and latest runtime
+  state until deletion so active-list and inspect remain useful after event retention cleanup.
+
+#### Local and Cloud Workflow
+
+1. Preview and explicit confirmation persist the rule and activation epoch with runtime
+   `awaiting_first_poll`.
+2. The confirmation response says that the watch is saved but monitoring has not yet been proven.
+   Local CLI output includes exact commands to start the runner, list active watches, and inspect
+   the new watch.
+3. A local runner or authenticated Scheduler call claims the watch when it is due and collects the
+   existing bounded MCP evidence.
+4. The coordinator persists the observation and calculates typed readiness for each condition.
+5. No usable condition leaves runtime at `awaiting_sources` and creates one waiting event for that
+   episode. At least one usable condition creates a healthy or degraded lifecycle event exactly
+   once for the activation epoch.
+6. The repository atomically records runtime state, the inbox event, its evidence links, and an
+   opted-in Telegram outbox record.
+7. The existing delivery worker attempts the Telegram projection in the same runner or Scheduler
+   cycle and records sent, retry, or terminal failure without changing the inbox event.
+8. Later polls update last-attempt, last-success, next-due, and source-readiness fields without
+   repeating the current state event. A real state transition creates the corresponding edge event;
+   condition triggers continue through their existing evaluator.
+
+#### Local CLI Surface and Future Interface Contract
+
+- Extend `watch_cli.py --operation list` with
+  `--status active|paused|terminal|all`, defaulting to `all` for backward compatibility.
+- Return a concise runtime projection by default and retain a typed full `inspect` operation.
+- After local confirmation, return commands in this shape with values safely quoted from the
+  invocation rather than model-generated:
+
+  ```powershell
+  uv run --env-file .env python scripts/run_watches.py --db <database>
+  uv run --env-file .env python scripts/watch_cli.py --db <database> --operation list --session-id <session> --status active
+  uv run --env-file .env python scripts/watch_cli.py --db <database> --operation inspect --session-id <session> --watch-id <watch>
+  ```
+
+- Do not change LangGraph watch tools, `/chat` request handling, or conversation copy in this
+  milestone. Define `WatchRuntimeSummary` and event-query results as typed application contracts so
+  Milestone 16B can expose them without importing CLI formatting or parsing Telegram
+  text.
+- Milestone 16B must support natural-language list and inspect requests from the
+  same session, but that routing and response behavior require separate endpoint acceptance tests.
+- Telegram messages remain outbound and provide the watch ID and concise state. Local evaluator
+  receipts contain the commands needed to manage that watch; Telegram never contains machine-local
+  paths or shell commands.
+- Foreground runner output adds bounded counts for lifecycle events and awaiting/degraded watches;
+  it does not print session IDs, Telegram destinations, or full provider data.
+
+#### Work
+
+- Add typed runtime-state, source-readiness, lifecycle-event, generalized inbox, and generalized
+  outbox models with an explicit schema-migration policy.
+- Extend the repository interface and both storage adapters with activation-epoch management,
+  runtime updates, atomic lifecycle event/outbox insertion, event retrieval, and status-filtered
+  watch summaries.
+- Add a forward-only SQLite migration that preserves the current developer database and a
+  backward-compatible Firestore read path for documents lacking the new fields.
+- Add condition-aware readiness evaluation beside coordinator scheduling. Reuse validated
+  `WatchObservation` fields; do not interpret provider prose or duplicate evaluator arithmetic.
+- Update confirmation, revision, pause, resume, terminal, and deletion flows to maintain activation
+  epochs and runtime state consistently.
+- Generalize `DeliveryWorker` lookup from trigger-only messages to the typed event envelope while
+  preserving retry, lease, error, and provider-message behavior.
+- Add concise CLI status filtering and confirmation receipts. Add a typed, interface-neutral runtime
+  summary that Milestone 16B LangGraph watch tools can consume without changing this milestone's endpoint
+  code.
+- Add deterministic waiting/start/degradation/interruption/recovery/resume/update/completion message
+  formatting and document exactly which evidence established each transition.
+- Defer chat-specific message-policy comparison and conversation copy to Milestone 16B, where a
+  working endpoint can exercise the interaction. This milestone freezes event semantics, not
+  future chat presentation.
+- Revise the local runner, Cloud endpoint result counters, product documentation, architecture
+  diagrams, test map, and repository skill to present one coherent watch lifecycle.
+
+#### Milestone 14A Boundary
+
+- Keep lifecycle, repository, outbox, Scheduler-handler, and delivery contracts portable to Cloud
+  Run, but do not configure or claim deployed watch operation in this milestone.
+- Local acceptance uses the real configured Telegram recipient to prove end-to-end delivery.
+  Firestore, Cloud endpoint, and delivery behavior use controlled substitutes and parity tests.
+- Milestone 14A exclusively owns production Firestore configuration, authenticated Cloud Scheduler,
+  Cloud Run secrets and environment, the real deployed Telegram destination, and live end-to-end
+  watch acceptance.
+
+#### Documentation Alignment
+
+- Rewrite documentation for behavior that actually exists in present tense. Revise the existing
+  watch narrative in place; do not append a feature announcement, changelog, migration story, or
+  separate "activation acknowledgement" add-on section.
+- Remove temporal backpointers from final-state documentation, including phrases such as "new,"
+  "now," "previously," "was changed," "after Milestone 16A," "this follow-up adds," and "the old
+  behavior." State the product contract directly: confirmation saves a watch, runtime state shows
+  whether evidence collection operates, and the first usable poll records and delivers a lifecycle
+  event.
+- Present watches as an integrated Market Lens workflow rather than an optional layer attached to
+  the product. Assignment-mapping text may distinguish rubric requirements from additional product
+  scope, but product, setup, architecture, and operator documentation describe one system.
+- Keep current instructions accurate: foreground-runner and direct CLI commands form the local
+  evaluation/operator path. Do not document conversational watch management as implemented during
+  this milestone.
+- Preserve a surface-neutral product explanation and schema contract so Milestone 16B
+  can rewrite the final journey as chat-first and automatic without historical backpointers or
+  describing lifecycle visibility as an add-on.
+- Update `README.md` in place:
+  - introduce saved, awaiting, monitoring, degraded, paused, and terminal states in the main product
+    workflow;
+  - make local confirmation, first-poll acknowledgement, condition alerts, inbox, CLI status, and
+    Telegram one continuous evaluator journey;
+  - document the exact local confirm, runner, active-list, inspect, pause, resume, and inbox
+    commands;
+  - explain that the runner command proves only process startup until a usable poll records runtime
+    health;
+  - update the system and deployment diagrams with durable runtime state, lifecycle events, the
+    generalized inbox/outbox, local foreground polling, authenticated Scheduler polling, and
+    same-cycle Telegram delivery;
+  - label `/chat` watch management and automatic Cloud operation as later integration work rather
+    than claiming either has passed acceptance;
+  - include cost and failure semantics for lifecycle events without implying extra model, Tavily,
+    or provider calls;
+  - state cloud behavior only from deployed acceptance evidence.
+- Update `docs/WATCHES_EXPLAINED.md` in place:
+  - make the save-versus-monitor distinction part of the basic explanation before runner details;
+  - show the confirmation receipt, first usable poll, start message, active-list command, ordinary
+    trigger, and terminal transition in one end-to-end example;
+  - explain healthy, degraded, and awaiting-source states in plain language;
+  - distinguish a runner heartbeat from evidence-backed monitoring without introducing milestone
+    terminology.
+- Update `docs/research/WATCH_MONITORING_AND_ALERTS.md` as the canonical technical contract:
+  - define runtime-state, source-readiness, activation-epoch, lifecycle-event, generalized inbox,
+    and generalized outbox schemas;
+  - specify atomicity, fingerprints, delivery leases, retention, SQLite/Firestore parity, typed
+    execution origin, Cloud Run metadata, and migration safety;
+  - document exact readiness rules for every condition, the no-success-message boundary during
+    total evidence failure, and the single waiting warning for that episode;
+  - include the final local and Cloud sequence diagrams.
+- Update `docs/planning/PROJECT_PROPOSAL.md` so the target-product and workflow sections treat
+  lifecycle visibility as a normal part of creating and operating a watch. Distinguish verified
+  local behavior from planned chat and cloud integration without presenting the feature as an
+  optional add-on.
+- Update `docs/assignment/IMPLEMENTATION_ALIGNMENT.md` so repository deliverables and submission
+  checks name runtime health, lifecycle inbox events, and Scheduler-delivered acknowledgement where
+  relevant. Keep the assignment's required core contract distinct without calling the product
+  behavior an add-on.
+- Update `docs/research/TESTING.md` and
+  `docs/research/ADVERSARIAL_TESTING_REPORT.md` with the verified readiness, idempotency, migration,
+  local/Cloud parity, and delivery failure cases. Record only commands and results that were
+  actually observed.
+- Update `.agents/skills/sports-information/SKILL.md` so its local create, confirm, list, inspect,
+  resume, and inbox workflows use runtime health correctly. This local Codex workflow does not imply
+  that the deployed `/chat` endpoint already supports the same operations.
+- Update CLI `--help` text and command examples from the same canonical command shapes returned by
+  confirmation. Keep session IDs out of Telegram, logs, screenshots, and generic documentation
+  examples.
+- Update documentation regression tests to reject stale add-on framing, temporal backpointers,
+  trigger-only inbox/outbox claims, confirmation-as-monitoring claims, and diagrams that omit
+  runtime state or the first-poll boundary.
+- Leave `PROCESS_LOG.md` to Rylan Wade's personal authorship. Documentation work records technical
+  behavior and verification without inventing personal prompts, lessons, or reflection.
+
+#### Verification Plan
+
+- Confirmation tests prove that persistence alone creates no lifecycle event, outbox item, or
+  Telegram attempt and returns an `awaiting_first_poll` receipt.
+- Coordinator tests cover every condition's readiness requirements, healthy and degraded starts,
+  initial source waiting, later degradation, total interruption, recovery, terminal-first evidence,
+  baseline non-triggering behavior, and supported completion.
+- Idempotency tests run repeated polls, two concurrent runners, lease expiry, process restart, and
+  Cloud Run instance replacement against one activation epoch and produce one logical event per
+  state-transition episode.
+- Resume and revision tests produce one correctly labeled new event after usable evidence while
+  pause, repeated resume, and terminal watches cannot create spurious epochs.
+- SQLite migration tests start from a copy of the pre-milestone schema with rules, observations,
+  triggers, and sent/retry outbox records and prove that every record remains readable and retains
+  its meaning.
+- SQLite/Firestore parity tests compare runtime transitions, atomic event/outbox writes, event
+  ordering, retention, delivery state, and filtered active-list projections.
+- Delivery tests cover inbox-only watches, Telegram success, missing configuration, timeout,
+  disconnect, `429`, `5xx`, malformed response, authorization failure, blocked recipient, retry
+  exhaustion, and secret redaction for lifecycle messages.
+- CLI tests execute the returned runner/list/inspect command shapes against paths containing spaces,
+  verify `--status` filtering, and ensure concise output does not expose session IDs outside the
+  explicit local command receipt.
+- Interface-boundary tests prove runtime summaries and lifecycle event queries contain no CLI-only
+  formatting and that this milestone does not change `/chat` schemas, routing, or watch-tool
+  behavior.
+- Cloud endpoint tests prove an authenticated no-due invocation sends nothing, a first usable due
+  invocation creates and attempts one message through a controlled delivery adapter, and a retried
+  Scheduler request does not duplicate it.
+- Replay and instrumentation tests continue to prove zero model calls and zero Tavily calls for
+  acknowledgement, ordinary polling, retries, and status inspection.
+- One opt-in live run confirms a newly activated watch produces one real Telegram start message,
+  appears in the active-list command, survives runner restart without another message, and later
+  produces ordinary alerts without changing their semantics. This live milestone run is local.
+- Milestone 14A separately repeats the activation path through the deployed Scheduler and real
+  Telegram configuration before the project claims cloud delivery.
+
+#### Exit Criteria
+
+- Local confirmation clearly distinguishes saved configuration from verified monitoring and
+  returns the appropriate runner, list, and inspect commands.
+- The first usable local or Cloud poll creates one durable healthy/degraded lifecycle event and, for
+  a Telegram-enabled watch, one logical external message.
+- No start message is created by confirmation, runner startup, an idle poll, total source failure,
+  terminal-first evidence, retry, restart, concurrency, or instance replacement.
+- Active-list and inspect show desired status, actual runtime state, source readiness, last success,
+  next due time, and delivery state from durable storage without requiring `/chat` changes.
+- Existing local data upgrades without destructive reset, and SQLite and Firestore satisfy the
+  same lifecycle and idempotency contract.
+- Condition evaluation, alert formatting, inbox authority, Telegram retry behavior, zero-model
+  polling, and the public assignment `/chat` contract remain unchanged.
+- Local milestone completion requires quality gates, deterministic replay, controlled delivery
+  tests, one opt-in live local Telegram activation, and clear CLI status evidence.
+- Milestone 14A additionally requires automatic Cloud Scheduler operation, real Cloud Run Telegram
+  configuration, and deployed end-to-end acceptance. Until then, documentation must describe
+  Telegram-on-Cloud-Run setup as pending final deployment work.
+
+#### Current State
+
+- **Status:** Planned follow-up to Milestones 15 and 16; not implemented.
+- Confirmation currently persists an `active` rule, but the product does not distinguish
+  awaiting-first-poll from verified monitoring and does not create a lifecycle acknowledgement.
+- The local runner and Cloud endpoint already call the delivery worker immediately after polling,
+  which provides the intended same-cycle delivery boundary once durable lifecycle events exist.
+- The current CLI can list full rules but has no runtime-health projection or status filter.
+
+#### Pivot Point
+
+- If generalizing the inbox/outbox would risk current trigger history, add a backward-compatible
+  typed lifecycle-event store and shared delivery lookup before attempting a destructive table
+  rename. Do not encode lifecycle acknowledgements as fake price triggers.
+- If a source cannot establish complete readiness, send an explicitly degraded acknowledgement
+  only when at least one configured condition is genuinely evaluable. Never improve apparent UX by
+  claiming healthy monitoring during total evidence failure.
+- Reduce message detail or CLI presentation before weakening durable idempotency, inbox authority,
+  source readiness, session secrecy, or local/cloud semantic parity.
+
+### Milestone 16B: Conversational Watch Operations and Agent Acceptance
+
+#### Execution Gate
+
+- Start after Milestone 16A has accepted runtime states, lifecycle events, interface-neutral
+  summaries, inbox behavior, and local Telegram notifications.
+- Complete locally against SQLite and the foreground runner. Do not require Firestore, Cloud
+  Scheduler, deployed Telegram configuration, or a live Cloud Run service; those belong to
+  Milestone 14A.
+
+#### Product Boundary
+
+- Make the complete watch lifecycle usable through the existing `POST /chat` agent without making
+  users understand CLI commands, runner processes, database paths, polling leases, or outbox state.
+- Cover create, preview, confirm, cancel, list, filter, inspect, revise, pause, resume, delete, inbox,
+  delivery status, lifecycle explanation, and trigger investigation through natural language.
+- Use the typed watch application service, `WatchRuntimeSummary`, and lifecycle-event queries from
+  Milestones 15-16A. The agent is a conversational control surface over those contracts; it is not
+  a second repository, scheduler, evaluator, formatter, or delivery worker.
+- Keep asynchronous behavior honest. `/chat` confirms synchronous commands and reads durable state;
+  it does not remain open waiting for a poll and cannot claim monitoring before the runner records
+  usable evidence.
+- Keep Telegram outbound-only. The agent can enable or disable the allowlisted delivery policy for
+  a watch, but it never reads Telegram messages, accepts chat IDs, exposes destination details, or
+  treats Telegram delivery as proof that monitoring is healthy.
+
+#### Decisions Locked by This Plan
+
+- **Host functions are authoritative:** expose a small set of typed LangGraph tools backed by the
+  existing watch application service. Tools accept semantic watch inputs and identifiers, not SQL,
+  filesystem paths, provider payloads, session IDs chosen by the model, or preformatted messages.
+- **The request owns the session:** derive watch ownership from the validated `/chat` request and
+  inject it into host calls. Ignore and reject any model-generated attempt to select another
+  session. Session IDs remain routing keys, not authentication.
+- **Two-phase destructive intent:** create, material revision, and delete require a bounded preview
+  followed by explicit confirmation in the same session. Pause and resume may execute from an
+  explicit command because they are reversible, but vague language produces a confirmation prompt
+  instead of mutation.
+- **Confirmation is version-bound:** a confirmation references the exact preview fingerprint and
+  rule version. Replayed, stale, cross-session, already-consumed, or text-only confirmations cannot
+  create or mutate a watch.
+- **The agent never compiles executable prose:** the model proposes typed intent; host validation,
+  exact game/contract identity, allowlisted conditions, cadence policy, versioning, and semantic
+  checks decide whether a rule is valid.
+- **Saved is not monitoring:** creation, revision, and resume responses say `saved` and
+  `awaiting_first_poll`. Only a durable lifecycle event permits `monitoring`, `degraded`,
+  `awaiting_sources`, or `terminal` language.
+- **Status reads do not poll:** list, inspect, inbox, and delivery-status requests read durable state
+  and display last-attempt, last-success, next-due, source readiness, and observation time. They do
+  not trigger provider calls merely to make status look fresher.
+- **Natural references are memory-assisted, not guessed:** same-session phrases such as "that
+  Yankees watch," "the second one," or "pause it" may resolve from checkpointed watch summaries.
+  Multiple plausible matches require a short choice; the agent never selects by hidden list order.
+- **Conversation memory is not watch storage:** checkpoints may retain pending previews and recent
+  references, but durable watch state, ownership, versions, events, and deliveries come from the
+  repository. Lost conversation memory cannot delete or silently recreate a watch.
+- **Read paths are bounded:** list results use concise summaries, default to active watches, support
+  explicit status filters and pagination, and avoid loading full rules or event history until the
+  user selects one watch.
+- **Inbox semantics stay unified:** condition triggers and lifecycle events appear in chronological
+  order with event kind, watch ID, matchup, runtime state, evidence time, and delivery state. The
+  agent never fabricates an alert from logs or Telegram history.
+- **Investigations are explicit and bounded:** only a user request about a stored trigger may invoke
+  fresh MCP evidence or Tavily. Runtime status, lifecycle explanation, ordinary inbox reads, and
+  delivery troubleshooting make zero model-selected provider refreshes beyond the current chat
+  turn's synthesis.
+- **Tool failure is not watch failure:** a malformed agent tool call, unavailable repository, or
+  formatter error returns a controlled response and does not mutate the rule. The agent distinguishes
+  application-command failure from a stored watch runtime problem.
+- **No hidden retries for mutations:** transport retries reuse idempotency keys and return the
+  existing result. The agent does not silently issue a second create, resume, revision, or delete
+  after an uncertain response.
+- **Notification presentation remains channel-correct:** `/chat` returns command receipts and
+  on-demand inbox/status views; Telegram pushes opted-in asynchronous lifecycle and condition
+  events. The HTTP response never promises a future push through the already-completed chat turn.
+- **Ordinary agent behavior remains intact:** watch routing must not hijack normal sports questions,
+  game briefs, market comparisons, research, no-tool knowledge, or unrelated conversation.
+
+#### Conversational Operation Contract
+
+| User intent | Agent action | Required result |
+|---|---|---|
+| "Watch the Yankees price and alert me if it moves 4%" | Resolve exact game and contract, compile, validate, and preview | No persistence; show rule, cadence, delivery choice, ambiguity, and confirmation request |
+| "Confirm" | Consume the matching preview fingerprint | Persist once; return watch ID, `saved`, and `awaiting_first_poll` |
+| "Cancel that" before confirmation | Discard the pending preview | No rule or event is created |
+| "What are you watching?" | List session-owned summaries | Show active watches first with runtime state, freshness, next due time, and concise condition |
+| "Is the Yankees watch running?" | Resolve and inspect one watch | Explain desired status separately from observed runtime health and delivery status |
+| "Change it to 6%" | Build a versioned revision preview | Preserve the current rule until explicit confirmation |
+| "Pause that watch" | Resolve one watch and pause idempotently | Return paused receipt; no future poll is due |
+| "Resume it" | Create one new activation epoch | Return saved/awaiting receipt; monitoring is announced only after usable evidence |
+| "Delete it" | Preview the destructive target and consequences | Delete only after exact confirmation; report retention/cancel behavior |
+| "Show my alerts" | Query the unified inbox | Return bounded lifecycle and condition events in chronological order |
+| "Why did this alert fire?" | Load stored trigger evidence; optionally run bounded investigation | Separate deterministic trigger facts, refreshed evidence, uncertainty, and model synthesis |
+| "Did Telegram send it?" | Read delivery state | Report sent, retry scheduled, or terminal failure without querying Telegram as authority |
+| Ambiguous watch reference | Return bounded candidates | Make no mutation until the user selects one |
+| Repository or tool unavailable | Return a controlled incomplete result | Make no unsupported claim about saved state, runtime health, or delivery |
+
+#### Agent Workflow
+
+1. Classify the turn as ordinary information, watch command, watch status, inbox, or trigger
+   investigation without forcing watch tools on unrelated prompts.
+2. Resolve remembered context only within the request session, then use bounded list/inspect calls
+   when a natural watch reference needs grounding.
+3. For creation or revision, resolve exact game and market identities through existing MCP tools,
+   construct typed intent, and let the host validator produce either stable errors or a preview.
+4. Store only the bounded preview fingerprint and display data in conversation state. Persist
+   nothing until exact confirmation.
+5. Execute a confirmed application command with an idempotency key derived outside model prose and
+   render the typed result using state-specific language.
+6. For reads, retrieve the minimum durable summary, event page, rule version, or trigger evidence
+   required by the question and preserve provider timestamps and missing-source warnings.
+7. Return a concise direct answer. Include next actions only when they are actually available on the
+   current surface; never return local shell commands from `/chat`.
+
+#### Work
+
+- Define bounded LangGraph tool schemas and result types for preview, confirm, cancel-preview, list,
+  inspect, revise-preview, pause, resume, delete-preview, delete-confirm, inbox, event inspection,
+  delivery status, and trigger investigation.
+- Route every tool through the shared watch application service and request-derived session context.
+  Add no direct repository, Telegram, provider-client, or coordinator access to model-callable code.
+- Extend graph state with versioned pending actions, consumed confirmation fingerprints, selected
+  watch references, pagination cursors, and bounded recent summaries using the framework
+  checkpointer rather than a custom global dictionary.
+- Add deterministic result formatters for saved, awaiting, monitoring, degraded, paused, terminal,
+  waiting-for-sources, delivery failure, ambiguity, validation failure, stale confirmation, and
+  repository failure responses.
+- Update the routing prompt and tool descriptions with explicit negative cases so ordinary sports
+  questions and "watch" used as a verb outside monitoring do not enter mutation flows.
+- Add host-side authorization checks, version checks, idempotency keys, pagination limits, event
+  bounds, investigation budgets, and secret-field exclusion independent of model behavior.
+- Integrate lifecycle events into inbox and status responses without changing the event store or
+  notification policy accepted in Milestone 16A.
+- Prototype whether unread lifecycle events should be summarized on the next watch-related turn or
+  shown only when requested. Select one behavior from observed interaction tests; do not attempt an
+  asynchronous push through `/chat`.
+- Preserve existing public request and response schemas, ordinary sports-agent routing, MCP budgets,
+  memory behavior, and failure handling.
+
+#### Documentation Alignment
+
+- Rewrite the README and watch explanation as one conversational workflow: describe, preview,
+  confirm, await monitoring, receive Telegram events, ask status, manage the watch, and investigate
+  an alert.
+- Document natural-language examples for every operation and state without exposing internal tool
+  names, CLI commands, session IDs, database paths, or milestone history in the product narrative.
+- Keep a separate local evaluator section for the foreground runner and CLI; explain that these test
+  the same application contracts but are not required by the eventual user.
+- Update architecture and sequence diagrams so LangGraph performs intent and presentation, host
+  tools enforce commands, the repository owns truth, the runner owns polling, and Telegram projects
+  stored events.
+- Update the repository skill and testing docs with the accepted behavior while clearly separating
+  direct Codex verification from the application `/chat` path.
+- Leave cloud automation described as pending Milestone 14A until deployed acceptance exists. The
+  final Milestone 14A documentation rewrite presents the accepted cloud system without temporal
+  backpointers or add-on framing.
+
+#### Verification Plan
+
+- Scripted-model graph tests assert exact tool selection, argument shapes, call order, result
+  rendering, and non-use of watch tools for ordinary prompts.
+- Real-model evals cover paraphrases and multi-turn flows for every operation in the conversational
+  contract, including vague confirmations, corrections, cancellations, pronouns, multiple watches,
+  stale previews, and a lost checkpoint.
+- Mutation tests prove create, revision, resume, pause, and delete are session-scoped, version-bound,
+  idempotent, and safe under repeated HTTP requests and final-model failure after tool success.
+- State-language tests cover every runtime and delivery state and reject responses that equate
+  `active` with monitoring, runner startup with monitoring, Telegram success with monitoring, or a
+  stale timestamp with current health.
+- Memory tests prove same-session preview confirmation and natural references work while
+  cross-session attempts cannot view, confirm, mutate, or infer another session's watches.
+- Inbox tests mix waiting, start, degradation, recovery, trigger, completion, and delivery-failure
+  events; verify pagination, ordering, concise summaries, and exact drill-down evidence.
+- Investigation tests prove only stored triggers unlock bounded refresh/research, preserve original
+  evidence, mark later observations separately, and never rewrite the trigger explanation.
+- Failure tests inject repository unavailability, malformed typed results, MCP failures during
+  compilation, model failure before and after mutation, and Telegram delivery failure without
+  duplicate commands or unsupported success claims.
+- Prompt-injection tests place hostile text in provider fields, event labels, and tool errors and
+  prove it remains quoted data that cannot choose tools, sessions, watch IDs, destinations, or
+  mutation arguments.
+- Regression tests rerun the existing no-tool, sports-only, market-only, multi-MCP, research,
+  memory, budget, and public-schema suites with watch tools enabled.
+- One local end-to-end run creates a real watch through `/chat`, confirms it, starts the separately
+  managed foreground runner, receives the Telegram activation event, reads status and inbox through
+  `/chat`, revises and resumes it, then pauses and deletes it without using the CLI for management.
+
+#### Exit Criteria
+
+- Every operation in the conversational contract works through the local `/chat` endpoint with no
+  CLI command required for user management.
+- Agent language always distinguishes accepted configuration, desired status, observed runtime
+  health, event evidence, and delivery result.
+- The agent consumes the exact Milestone 16A summaries and events without duplicating runtime logic,
+  parsing presentation text, or creating a second notification policy.
+- Confirmation, ownership, versioning, idempotency, ambiguity, memory isolation, pagination, and
+  failure behavior pass adversarial tests.
+- Ordinary sports-information and assignment-required agent behavior remain unchanged with watch
+  tools enabled.
+- The local end-to-end run proves `/chat` management, external foreground polling, inbox authority,
+  and real Telegram delivery as one coherent workflow.
+- Milestone 14A can deploy these accepted contracts without designing new agent or watch behavior.
+
+#### Current State
+
+- **Status:** Planned after Milestone 16A.
+- Milestone 15 already provides basic LangGraph preview, confirmation, lifecycle, inbox, and
+  investigation flows. Those flows do not satisfy this milestone until they consume the complete
+  runtime-health, lifecycle-event, notification, and interface-boundary contracts from Milestone
+  16A and pass the expanded operation matrix.
+
+#### Pivot Point
+
+- Reduce conversational shortcuts or response detail before weakening host validation, explicit
+  confirmation, session isolation, durable-state authority, or truthful runtime language.
+- Keep a complex operation CLI-only until its typed host contract is safe; do not let the model
+  bypass the application service to achieve surface completeness.
+- Defer proactive unread-event presentation if it creates noise. Preserve the inbox and on-demand
+  status path rather than coupling asynchronous delivery to an HTTP response.
 
 ### Milestone 17: Optional Polymarket US Migration Evaluation
 
@@ -1876,6 +2831,11 @@ only because it has already been implemented.
   - Exact identity resolution and confirmation before persistence.
   - Zero-token deterministic polling, edge-triggered evaluation, cooldowns, and idempotent retries.
   - SQLite/Firestore replay parity and LangGraph/headless-Codex semantic parity.
+  - Runtime-state, source-readiness, lifecycle-event, inbox, and Telegram notification transitions.
+  - Full conversational create, confirm, cancel, list, inspect, revise, pause, resume, delete,
+    delivery-status, inbox, and investigation behavior.
+  - Session ownership, stale confirmation, mutation idempotency, ambiguous references, prompt
+    injection, and ordinary-agent routing regression.
 - Container tests:
   - Non-root execution.
   - MCP subprocess startup.
@@ -1883,7 +2843,9 @@ only because it has already been implemented.
   - Graceful shutdown.
 - Live tests:
   - Small, opt-in provider and real-MCP smoke suite across supported leagues.
-  - Deployed Cloud Run acceptance suite.
+  - Base Cloud Run acceptance suite with watch automation disabled.
+  - Firestore, authenticated Scheduler, real Telegram, agent-watch, restart, revision, and duplicate
+    delivery acceptance on the final deployed service.
 
 ## 9. Scope-Priority Order
 
@@ -1894,8 +2856,10 @@ only because it has already been implemented.
   4. Framework-native, session-scoped memory.
   5. Multi-step reasoning and bounded tool use.
   6. Graceful failure handling.
-  7. Working Cloud Run deployment.
-  8. Accurate documentation and required diagrams.
+  7. Truthful, deterministic, idempotent watch state and notification behavior.
+  8. Session-scoped conversational watch management through validated host contracts.
+  9. Working base Cloud Run deployment followed by durable automated cloud watches.
+  10. Accurate documentation and required diagrams.
 - Reduce these first if time is constrained:
   1. SQLite calibration summaries.
   2. SQLite sports-research snapshot ledger.
@@ -1918,5 +2882,16 @@ only because it has already been implemented.
 - Research and tool use remain bounded.
 - Memory works across at least two turns under the same `session_id` and remains isolated between sessions.
 - The service handles required failure cases without crashing.
+- A user can create, confirm, list, inspect, revise, pause, resume, delete, and investigate watches
+  through `/chat` without using local operator commands.
+- Saved, awaiting, monitoring, degraded, paused, and terminal states remain distinct and are backed
+  by durable evidence rather than agent wording, process startup, or Telegram delivery.
+- Cloud Scheduler polls confirmed watches automatically, Firestore preserves operational state
+  across instance replacement, and ordinary polling uses no model or Tavily calls.
+- The authoritative inbox retains lifecycle and condition events, while opted-in Telegram delivery
+  sends each logical event at most once and exposes failures without disabling monitoring.
+- The deployed watch workflow survives Scheduler retries, overlapping requests, instance
+  termination, revision replacement, source outages, and Telegram errors without false health
+  claims or duplicate logical events.
 - Automated and manual verification results are documented.
 - Cloud Run, README, diagrams, source ZIP, and Rylan Wade's personal process log are ready for submission.
