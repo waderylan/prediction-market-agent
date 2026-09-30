@@ -26,13 +26,13 @@ flowchart LR
     G --> V[Pydantic + semantic validator]
     V --> X[Exact preview + confirmation]
     X --> R[Watch service]
-    R --> DB[(SQLite local / Firestore Cloud Run)]
-    CS[Cloud Scheduler + Google OIDC] --> E[POST /internal/watches/poll]
+    R --> DB[(SQLite local / Firestore adapter)]
+    CS[Cloud Scheduler + Google OIDC, planned] -.-> E[POST /internal/watches/poll]
     LR[Foreground local runner] --> CO[Deterministic coordinator]
     E --> CO
     CO --> M
-    CO --> DB
-    DB --> I[In-product inbox]
+    CO -->|observation, readiness, runtime transition| DB
+    DB --> I[Unified lifecycle and condition inbox]
     DB --> O[Transactional outbox]
     O --> TG[Telegram Bot API]
 ```
@@ -76,6 +76,14 @@ to four exact `MarketIdentity` records, discriminated typed conditions, lifecycl
 policy, and allowlisted delivery channels. Thresholds are decimal probability points: `0.08`
 means eight points.
 
+Confirmation stores a `WatchRuntimeSummary` separately from desired `WatchStatus`. Runtime states
+are `awaiting_first_poll`, `awaiting_sources`, `monitoring`, `degraded`, and `terminal`. Its durable
+fields include activation epoch and kind, first and last usable poll, last attempted poll, next
+due time, typed source readiness, acknowledgement fingerprint, and delivery status. A successful
+resume or material revision advances the epoch and returns to `awaiting_first_poll`; an already
+terminal watch cannot resume. The local list command filters desired status and returns concise
+runtime summaries; inspect returns the full rule plus runtime data.
+
 `WatchObservation` keeps these clocks distinct:
 
 | Clock | Meaning |
@@ -89,8 +97,23 @@ means eight points.
 It also carries provider observation IDs, cache flags, source status, lifecycle, normalized prices,
 bounded scoring plays, and bounded recent plays for alert context. `WatchTrigger` contains bounded
 deltas, correlated events, recent plays, lifecycle changes, source warnings, evidence IDs, a
-stable SHA-256 fingerprint, and a deterministic message under 1,500 characters. `OutboxItem` tracks one logical Telegram projection through pending,
+stable SHA-256 fingerprint, and a deterministic message under 1,500 characters. A versioned
+`WatchLifecycleEvent` records event kind, watch/session scope, activation epoch, fingerprint, exact
+game and bounded market labels, condition summary, cadence, runtime state, source readiness,
+observation ID, event time, game-local time, and a bounded deterministic message. The unified
+inbox returns lifecycle events and condition triggers in time order. `OutboxItem` tracks one logical Telegram projection through pending,
 leased, retry, sent, and terminal-failure states. Schema versions other than 1 fail safely.
+
+Readiness is condition-aware. A price move with `any` cause requires one usable nonterminal,
+nonstale pinned quote. A scoring or no-tracked-scoring relationship also requires available game
+state and scoring-play evidence. Cross-platform divergence requires usable quotes from both
+platforms. A lifecycle condition requires available game state. Complete required coverage gives
+`monitoring`; partial usable coverage gives `degraded`; no usable condition gives
+`awaiting_sources` and one `monitoring_waiting_for_sources` warning for that waiting episode. A
+runner startup or saved rule does not establish monitoring. The first usable poll creates one
+`monitoring_started` or `monitoring_started_degraded` event for its epoch and cannot
+create a movement or divergence trigger from the baseline alone. Later degradation,
+interruption, recovery, resume, update, and completion create events only on state transitions.
 
 ## Deterministic polling and trigger semantics
 
@@ -113,7 +136,8 @@ lifecycle transition. Unique storage constraints suppress duplicate logical trig
 restarts and concurrent requests.
 
 Ordinary observations remain for seven days. Evidence linked to a trigger remains with that
-trigger for 30 days. Watch definitions remain until session-scoped deletion. Cleanup is explicit in
+trigger for 30 days. Lifecycle events remain for 30 days. Watch definitions and current runtime
+remain until session-scoped deletion. Cleanup is explicit in
 both repositories instead of relying on Firestore TTL billing.
 
 ## Token and provider-cost controls
@@ -134,16 +158,53 @@ the relevant evidence, not relative to the real-world event.
 ## SQLite and Firestore
 
 SQLite is the complete local implementation. Immediate write transactions, foreign keys, WAL,
-bounded leases, unique fingerprints, and a trigger/outbox transaction cover restart and concurrent
+bounded leases, unique fingerprints, and event/outbox transactions cover restart and concurrent
 runner behavior. `scripts/run_watches.py` is an explicit foreground process; stopping it stops
 polling while preserving rules. A failed cycle prints `state=error` and the runner retries on the
 next cycle; expired leases release any claimed work.
 
 Firestore implements the same repository interface. Transaction callbacks claim watches and
-outbox records and atomically commit trigger, fingerprint, evidence, and delivery records. The
+outbox records and atomically commit lifecycle state, event, and opted-in outbox records. The
 adapter stores versioned model JSON while keeping query and lease fields indexed at the document
 level. A controlled in-memory substitute verifies transaction and restart behavior locally.
-Cloud Run persistence and real Firestore behavior remain unverified until deployment.
+SQLite migrates an existing database by adding runtime data and a lifecycle-event table, then
+rebuilds the existing outbox without its trigger-only foreign key while copying every delivery
+record. Firestore reads pre-runtime documents conservatively as epoch zero and
+`awaiting_first_poll`; it does not send historical start messages for those records. Both adapters
+keep the event, runtime state, and opted-in outbox in one transaction. Event fingerprints include
+watch ID, activation epoch, transition sequence, kind, and observation ID. Repeated polls in one
+state update timestamps without another event. Cloud Run persistence and real Firestore behavior
+remain unverified until deployment.
+
+```mermaid
+sequenceDiagram
+    participant CLI as Local CLI
+    participant DB as SQLite
+    participant Runner as Foreground runner
+    participant MCP as MCP evidence
+    participant TG as Telegram
+    CLI->>DB: Confirm rule, awaiting_first_poll
+    Runner->>DB: Claim due watch
+    Runner->>MCP: Collect bounded game and market evidence
+    MCP-->>Runner: Typed observation
+    Runner->>DB: Atomic runtime + lifecycle event + optional outbox
+    Runner->>TG: Deliver queued event in same cycle
+    CLI->>DB: List or inspect runtime and delivery state
+```
+
+```mermaid
+sequenceDiagram
+    participant Scheduler as Cloud Scheduler (planned)
+    participant Endpoint as Authenticated poll route
+    participant DB as Firestore adapter
+    participant MCP as MCP evidence
+    Scheduler->>Endpoint: OIDC poll request
+    Endpoint->>DB: Claim due watch
+    Endpoint->>MCP: Collect evidence
+    MCP-->>Endpoint: Typed observation
+    Endpoint->>DB: Atomic runtime + event + optional outbox
+    Endpoint-->>Scheduler: Bounded counters
+```
 
 ## Cloud Run scheduler and OIDC
 
@@ -165,12 +226,20 @@ Telegram is the only external channel. Inbox delivery is mandatory and authorita
 explicitly add `telegram`; no model, chat request, rule, fixture, or API response accepts a chat ID.
 The deployment owns one configured recipient.
 
-The trigger and one outbox record commit atomically. A 30-second lease prevents two workers from
+Each lifecycle event or condition trigger and its opted-in outbox record commit atomically. A
+30-second lease prevents two workers from
 claiming the same logical message. HTTPS uses 5-second connection/pool and 10-second read/write
 timeouts. Telegram `429` responses honor bounded `retry_after`; timeouts, disconnects, malformed
 success bodies, and `5xx` responses use bounded exponential retry. Persistent client,
 authorization, and blocked-recipient errors become terminal and visible beside the inbox alert.
-Missing configuration schedules inbox-first fallback and never disables the watch.
+Missing configuration schedules an inbox-first retry and reaches a visible terminal failure after
+five attempts. It never disables the watch.
+
+Lifecycle messages include watch ID, matchup, watched outcome and platform, condition summary,
+cadence, runtime state, source readiness, event time in the game's timezone, and an execution
+origin supplied by the runner or endpoint. A locally invoked endpoint says "authenticated polling
+endpoint"; only injected Cloud Run service and revision metadata permits a Cloud Run label.
+Telegram contains no session ID, local path, command, token, destination, or raw provider payload.
 
 Telegram's [Bot API](https://core.telegram.org/bots/api) permits messages longer than this product
 uses; Market Lens enforces its own 1,500-character ceiling. The alert is plain language: league
@@ -200,15 +269,14 @@ The Secret Manager boundary follows the official
 
 The deterministic fixture `tests/fixtures/watch/yankees_scoring_replay.json` contains synchronized
 market and scoring evidence. The foreground replay command reports two observations, zero baseline
-triggers, one exact eight-point boundary trigger, one inbox alert, one fake Telegram projection,
+triggers, one start event, one exact eight-point boundary trigger, and two fake Telegram projections,
 zero model calls, and zero Tavily calls.
 
-Five consecutive credential-free replay runs on the local Windows development environment report
-104-118 ms for three coordinator polls, with a 108 ms median. Each run retains two unique
-observations, creates one threshold trigger, creates zero triggers on the duplicate poll, and
-projects one fake Telegram delivery. The fixture's quote clock precedes its deterministic trigger
-clock by two seconds. These numbers measure local evaluation and SQLite work; they do not estimate
-provider, network, Cloud Run, or real-world event latency.
+One credential-free replay run on the local Windows development environment reported 153 ms for
+three coordinator polls. It retained two unique observations, created one start event and one
+threshold trigger, created zero triggers on the duplicate poll, and projected both messages through
+the fake Telegram transport. The fixture's quote clock precedes its deterministic trigger clock
+by two seconds. This measures local evaluation and SQLite work only.
 
 The complete non-live repository suite passes, with live tests skipped unless enabled. Ruff lint,
 Ruff formatting, strict mypy over `src`, JavaScript syntax checking, and `git diff --check` pass.
@@ -217,8 +285,8 @@ Tests protect confirmation before persistence, session scope, schema rejection, 
 scoring and no-tracked-scoring windows, stale and out-of-order quotes, shared observations, restart
 recovery, SQLite leases, duplicate fingerprints, Firestore transactions through a fake, OIDC and
 Secret Manager substitutes, Telegram timeout/disconnect/429/5xx/malformed/auth/blocked behavior,
-retry leasing, and inbox fallback. The opt-in live Telegram smoke test passes with configured
-credentials and skips without them. A live SQLite runner against an in-progress MLB game polls
+retry leasing, and inbox fallback. The opt-in first-poll activation test reached the configured
+Telegram recipient using recorded evidence. A live SQLite runner against an in-progress MLB game polls
 the real MCP servers and delivers alerts to the configured Telegram chat.
 
 A fresh headless Codex gateway session exercises the LangGraph conversation against the configured

@@ -18,7 +18,7 @@ def test_cli_preview_confirm_inspect_and_lifecycle(tmp_path: Path) -> None:
             Path(__file__).parents[1] / "fixtures" / "watch" / "yankees_scoring_replay.json"
         ).read_text(encoding="utf-8")
     )
-    cli = WatchCli(str(tmp_path / "watches.db"))
+    cli = WatchCli(str(tmp_path / "watch data" / "watches.db"))
     preview = cli.execute(
         {
             "operation": "preview",
@@ -45,6 +45,15 @@ def test_cli_preview_confirm_inspect_and_lifecycle(tmp_path: Path) -> None:
             "draft_id": preview["draft_id"],
         }
     )
+    assert confirmed["runtime_state"] == "awaiting_first_poll"
+    assert "watch data" in confirmed["runner_command"]
+    assert '"' in confirmed["runner_command"]
+    assert "--status active" in confirmed["list_command"]
+    assert confirmed["watch_id"] in confirmed["inspect_command"]
+    listed = cli.execute({"operation": "list", "session_id": "codex-session", "status": "active"})
+    assert len(listed["watches"]) == 1
+    assert listed["watches"][0]["runtime_state"] == "awaiting_first_poll"
+    assert cli.execute({"operation": "list", "session_id": "other-session"}) == {"watches": []}
     inspected = cli.execute(
         {
             "operation": "inspect",
@@ -53,6 +62,7 @@ def test_cli_preview_confirm_inspect_and_lifecycle(tmp_path: Path) -> None:
         }
     )
     assert inspected["watch"]["conditions"][0]["threshold"] == "0.08"
+    assert inspected["runtime"]["runtime_state"] == "awaiting_first_poll"
     assert (
         cli.execute(
             {

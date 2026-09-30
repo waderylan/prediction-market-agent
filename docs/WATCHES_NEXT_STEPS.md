@@ -1,6 +1,6 @@
 # Watches: next steps toward production
 
-This doc lists what the watch add-on needs before it is reliable enough for production use. For how
+This doc lists what watches need before production use. For how
 watches work, see [WATCHES_EXPLAINED.md](WATCHES_EXPLAINED.md).
 
 ## Where the flakiness comes from
@@ -23,13 +23,13 @@ The items below are ordered by priority.
 
 ## 0. Assignment first
 
-Watches are an add-on and earn no rubric credit. The graded deliverables come first.
+Watch functionality goes beyond the assignment rubric. The live core service and submitted
+deliverables remain required.
 
 - **Deploy the core agent to Cloud Run.** The live URL is required; a localhost-only submission
   scores zero.
-- **Keep watches out of the graded deployment** unless they are solid. Add a
-  `WATCHES_ENABLED=false` setting so the graded service runs only the core agent and four MCP
-  servers.
+- **Accept the base service first.** Deploy with automatic watch polling disabled until the
+  local conversational watch flow and cloud infrastructure pass their separate gates.
 - **Write `PROCESS_LOG.md`** in Rylan Wade's own voice. It is 10% of the assignment score.
 - **Merge the feature branch** into `main` after review.
 
@@ -53,10 +53,10 @@ These address the flakiness directly.
 
 ## 2. Make the runner production-grade
 
-- **Keep MCP sessions alive.** Hold long-lived MCP sessions inside the runner, or call the provider
-  clients directly on the polling path. MCP remains the boundary for the conversational agent.
-- **Run as a managed service.** Replace the foreground terminal runner with a Cloud Run job or an
-  always-on worker with health checks and automatic restarts.
+- **Reduce MCP process startup.** Reuse bounded MCP sessions where the authenticated polling
+  request can do so safely. The same MCP tools remain the watch evidence boundary.
+- **Run automatic checks through Scheduler.** The planned Cloud Run service uses a private OIDC
+  polling route and Firestore leases. No foreground process is needed in the deployed service.
 - **Use a long-running worker for sub-minute alerts.** Cloud Scheduler cannot fire more often than
   once per minute. A persistent worker pairs naturally with streaming prices.
 - **Add a heartbeat.** If no check completes within about three minutes, send a Telegram message
@@ -85,9 +85,11 @@ These address the flakiness directly.
 
 ## Recommended order
 
-1. Section 0: deploy the core agent, write the process log, and keep watches disabled in the graded
-   service.
-2. Stream prices and require moves to persist across two checks. Together these remove most
+1. Accept the base Cloud Run service, complete local conversational watch operations, then add
+   Firestore, authenticated Scheduler, and Telegram to the accepted service. Keep automatic polling
+   disabled until the cloud watch acceptance run passes.
+2. Complete the process log in Rylan Wade's own voice and package the accepted revision.
+3. Stream prices and require moves to persist across two checks. Together these remove most
    observed false alerts and the missing-timestamp problem.
-3. Heartbeat, managed runner, and persistent MCP sessions.
-4. Alert quality and product scope.
+4. Heartbeat, persistent MCP sessions, and any later sub-minute worker.
+5. Alert quality and product scope.

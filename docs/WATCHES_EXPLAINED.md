@@ -9,12 +9,12 @@ A watch is a saved rule, like:
 
 > Text me if the Padres win chance moves 2+ points within 2 minutes.
 
-Once it's saved, a background program checks the game and the markets every minute. When the rule
-matches, it sends you an alert.
+Saving the rule returns a receipt with `awaiting_first_poll`. That means the rule is stored, but a
+check has not proved monitoring yet. The foreground runner checks it when due. After the first
+usable check, the inbox records `monitoring_started` or `monitoring_started_degraded` and Telegram
+sends a copy if you opted in. Later matching conditions create ordinary alerts.
 
-Watches are an **add-on**. The core project is the chat agent that answers questions about a game
-using four MCP servers (see section 3). Watches reuse that agent and those MCP servers, but the core
-works exactly the same without them.
+The watch uses the same four MCP evidence servers as the game research agent (see section 3).
 
 That's the whole feature. Everything below is detail about how each piece works and why it's built
 that way.
@@ -25,37 +25,36 @@ The feature splits into four jobs. Each is handled by a different piece:
 
 | Job | Who does it | Uses an AI model? |
 |---|---|---|
-| 1. You describe the rule in plain English | The LangGraph agent (`POST /chat`), **or** Codex / Claude Code with the `sports-information` skill | Yes |
-| 2. The confirmed rule is saved | The database: SQLite (`artifacts/watches.db`) locally, Firestore in the cloud | No |
-| 3. Every minute, the game and markets get checked | The runner: `scripts/run_watches.py` locally, Cloud Scheduler in the cloud | No |
-| 4. You get told | The inbox (always) and Telegram (optional copy) | No |
+| 1. You describe the rule | Codex with the `sports-information` skill or the local CLI | Yes for language |
+| 2. The confirmed rule is saved | SQLite (`artifacts/watches.db`) locally | No |
+| 3. Due game and market evidence is checked | `scripts/run_watches.py` locally | No |
+| 4. You see lifecycle and condition events | Unified inbox; optional Telegram copy | No |
 
 **The AI is only used in step 1.** Steps 2 through 4 are plain Python. The model helps figure out
 what you want. It never decides whether an alert fires.
 
 ```mermaid
 flowchart LR
-    U[You] --> FRONT[Step 1: /chat agent or Codex skill]
+    U[You] --> FRONT[Step 1: Codex skill or local CLI]
     FRONT --> MCP[Sports and market MCP tools]
-    FRONT -->|you confirm| DB[(Step 2: SQLite or Firestore)]
+    FRONT -->|you confirm| DB[(Step 2: SQLite rule and runtime)]
     RUNNER[Step 3: runner, every 60s] --> DB
     RUNNER --> MCP
-    RUNNER -->|rule matched| INBOX[Step 4: inbox]
+    RUNNER -->|first usable poll and later transitions| INBOX[Step 4: inbox]
     INBOX --> TELEGRAM[Telegram copy]
 ```
 
 ### 2.1 The LangGraph agent (the assignment's chatbot on Cloud Run)
 
-This is the chatbot that answers `POST /chat`. It answers ordinary questions without touching
-watch code. For watches, it has eight extra tools it can call:
+The chatbot answers `POST /chat` and has eight basic watch tools:
 
 ```text
 watch_preview   watch_confirm   watch_list      watch_inspect
 watch_pause     watch_resume    watch_delete    watch_inbox
 ```
 
-You say "watch the Padres game for a 2-point move." The agent uses the MCP tools to find the exact
-game and markets, shows you a preview, and saves the rule after you confirm.
+Complete conversational watch management and runtime-health presentation remain planned work.
+The local CLI and repository skill provide the verified management and status workflow.
 
 It does **not** do the watching. The chat request ends as soon as the rule is saved.
 
@@ -68,8 +67,8 @@ the same `artifacts/watches.db`.
 
 It also doesn't do the watching.
 
-**The `/chat` agent and the skill are two front doors to the same system.** The `/chat` agent is
-what the assignment grades. The skill is a convenient local path for a developer.
+The local CLI and skill are the evaluator path for lifecycle visibility. The assignment grades
+the separate `/chat` agent and its MCP behavior.
 
 ### 2.3 The runner (the piece that actually watches)
 
@@ -78,37 +77,38 @@ runner:
 
 - **Locally:** `scripts/run_watches.py`, running in a terminal. If that terminal is closed, nothing
   gets checked. The saved watches stay in the database and resume when you start it again.
-- **In the cloud:** Cloud Scheduler calls `POST /internal/watches/poll` on the Cloud Run service
+- **Planned cloud operation:** Cloud Scheduler calls `POST /internal/watches/poll` on Cloud Run
   every minute. Each call does one check-and-send pass, then returns.
 
 Each time it wakes up, the runner:
 
 1. Loads the watches that are due from the database.
 2. Calls the MCP tools for the current game state, recent plays, and Kalshi / Polymarket prices.
-3. Compares them to earlier prices with plain math.
-4. If a rule matches, saves an alert to the inbox and queues a Telegram message.
+3. Stores the observation and decides which configured conditions have usable evidence.
+4. Records a lifecycle event on the first usable check or a real state transition. Later rule
+   matches create condition alerts. Each event is saved before optional Telegram delivery.
 5. Sends any queued Telegram messages.
 
 ### 2.4 Telegram
 
 Telegram is only a delivery channel: the thing that makes your phone buzz. It has no logic. When a
-rule matches, the alert is saved to the inbox first, and then a copy goes to one Telegram chat
+lifecycle changes or a rule matches, the event is saved to the inbox first; a copy goes to one Telegram chat
 through a bot. If Telegram is down or not set up, the alert is still in the inbox.
 
-### 2.5 One real alert, end to end
+### 2.5 One watch, end to end
 
 ```text
-You (in Codex)  --skill-->  watch_cli.py  --saves-->  watches.db
+You (in Codex)  --skill-->  watch_cli.py  --saves awaiting_first_poll--> watches.db
                                                           |
 run_watches.py (terminal, every 60s) <--reads-------------+
       |--MCP--> ESPN score and plays, Kalshi price, Polymarket price
-      |--math--> "moved 2+ pts in 2 min?" -> yes
-      |--saves--> inbox
-      +--sends--> Telegram bot --> your phone
+      |--first usable poll--> monitoring_started --> inbox --> Telegram bot
+      |--later condition match--> condition_triggered --> inbox --> Telegram bot
+      +--terminal game and contracts--> monitoring_completed --> inbox
 ```
 
-In the cloud version, `/chat` replaces Codex, Firestore replaces `watches.db`, and Cloud Scheduler
-replaces the terminal. Everything else is the same code.
+The planned cloud integration uses Firestore and authenticated Cloud Scheduler polling. The same
+runtime and event contracts apply there.
 
 ## 3. Background: the base project
 
@@ -388,7 +388,8 @@ Neither value ever appears in prompts, rules, MCP results, API responses, test f
 committed files.
 
 If Telegram isn't configured, the watch keeps running and alerts still land in the inbox. The
-Telegram job waits in a retryable `telegram_not_configured` state.
+Telegram delivery retries up to five attempts, then reports a terminal failure in the inbox and
+CLI while the watch keeps monitoring.
 
 ### 6.3 Why there's a queue (the "outbox")
 
@@ -431,7 +432,7 @@ Requests time out after 5 seconds to connect and 10 seconds to read or write.
 | Garbled success response | Retry |
 | Bad token or persistent client error | Give up |
 | You blocked the bot | Give up |
-| Telegram not configured | Retry later; the inbox still has the alert |
+| Telegram not configured | Retry up to five attempts; the inbox keeps the event and then reports terminal failure |
 
 Temporary failures give up after five attempts (`retry_exhausted`). Error records keep a short
 category, never the token or raw URL.
@@ -444,14 +445,15 @@ category, never the token or raw URL.
 uv run python main.py
 ```
 
-`POST /chat` handles both normal questions and watch management. For a browser UI instead:
+`POST /chat` handles ordinary questions and basic watch tools. Complete conversational watch
+management and runtime status are planned. For a browser UI:
 
 ```powershell
 uv run python scripts/run_chat_ui.py
 ```
 
-Open `http://127.0.0.1:3000`. The watch panel shows previews, confirmation, watch status, and the
-inbox, using the same backend.
+Open `http://127.0.0.1:3000`. The watch panel shows previews and basic watch data. Use the CLI
+below to inspect evidence-backed runtime status.
 
 ### 7.2 Start the runner in a second terminal
 
@@ -460,6 +462,7 @@ uv run --env-file .env python scripts/run_watches.py --db artifacts/watches.db
 ```
 
 - Keep **exactly one** runner open per database file.
+- `runner=started` means the process opened. It is not proof that a watch collected evidence.
 - `state=idle` means nothing was due on that check. It's not an error; the next line should say
   `claimed=1` once a watch is due.
 - Closing it stops checking. Saved watches stay on disk.
@@ -470,13 +473,22 @@ uv run --env-file .env python scripts/run_watches.py --db artifacts/watches.db
 ### 7.3 Look at watches and alerts
 
 ```powershell
-uv run --env-file .env python scripts/watch_cli.py --operation list --session-id demo-session
-uv run --env-file .env python scripts/watch_cli.py --operation inbox --session-id demo-session --limit 10
-uv run --env-file .env python scripts/watch_cli.py --operation inspect --session-id demo-session --watch-id <watch-id>
+uv run --env-file .env python scripts/watch_cli.py --db artifacts/watches.db --operation list --session-id demo-session --status active
+uv run --env-file .env python scripts/watch_cli.py --db artifacts/watches.db --operation inspect --session-id demo-session --watch-id <watch-id>
+uv run --env-file .env python scripts/watch_cli.py --db artifacts/watches.db --operation inbox --session-id demo-session --limit 10
+uv run --env-file .env python scripts/watch_cli.py --db artifacts/watches.db --operation pause --session-id demo-session --watch-id <watch-id>
+uv run --env-file .env python scripts/watch_cli.py --db artifacts/watches.db --operation resume --session-id demo-session --watch-id <watch-id>
 ```
 
 The CLI also takes JSON lines on standard input for preview and confirm. Keep the same CLI process
 open between the two, because drafts only live in memory.
+
+Confirmation returns the watch ID, `awaiting_first_poll`, and exact runner, active-list, and
+inspect commands for that database. The first due poll records an observation and shows
+`monitoring` when every required source is usable, `degraded` when at least one condition is
+evaluable with missing coverage, or `awaiting_sources` when no condition is evaluable. A waiting
+episode produces one inbox warning. Telegram receives the same lifecycle event only for an
+opted-in watch. The inbox retains ordinary condition alerts alongside lifecycle events.
 
 ### 7.4 Offline demo
 
@@ -484,9 +496,9 @@ open between the two, because drafts only live in memory.
 uv run python scripts/run_watches.py --replay tests/fixtures/watch/yankees_scoring_replay.json
 ```
 
-Replays a saved game with a temporary database and a fake Telegram. It shows an exact 8-point
-match, the saved evidence, the inbox alert, duplicate suppression, and delivery, with no network or
-credentials.
+Replays a saved game with a temporary database and a fake Telegram. It shows a first-poll start
+event, an exact 8-point later condition alert, duplicate suppression, and two fake deliveries,
+with no network or credentials.
 
 ## 8. Where the code lives
 
@@ -494,7 +506,8 @@ credentials.
 |---|---|
 | `src/market_agent/agent.py` | The LangGraph loop, watch instructions, and watch-tool routing |
 | `src/market_agent/app.py` | `/chat` and the authenticated `/internal/watches/poll` route |
-| `src/market_agent/watch/models.py` | Rule, snapshot, alert, and outbox schemas (all version 1) |
+| `src/market_agent/watch/models.py` | Rule, observation, runtime, lifecycle, trigger, and outbox schemas |
+| `src/market_agent/watch/lifecycle.py` | Typed readiness, transitions, and lifecycle messages |
 | `src/market_agent/watch/chat_tools.py` | The tools the model can call, plus exact-identity checks |
 | `src/market_agent/watch/service.py` | Drafts, previews, confirmation, ownership, and management |
 | `src/market_agent/watch/coordinator.py` | Claiming, MCP fetching, play filtering, check pace, stopping |
@@ -526,6 +539,8 @@ credentials.
 - Creating and confirming watches through the Codex skill and `watch_cli.py`.
 - The SQLite runner polling a live MLB game through the real MCP servers.
 - Real Telegram delivery: the opt-in live smoke test passed and real alerts arrived on a phone.
+- A first-poll lifecycle event reached the configured Telegram recipient using recorded game
+  evidence; SQLite and Firestore adapter parity passed in controlled tests.
 
 **Proven with automated tests and fakes:**
 
@@ -542,4 +557,4 @@ credentials.
 
 None of the cloud pieces above are claimed as working live.
 
-[WATCHES_NEXT_STEPS.md](WATCHES_NEXT_STEPS.md) lists what the add-on needs before production use.
+[WATCHES_NEXT_STEPS.md](WATCHES_NEXT_STEPS.md) lists what watches need before production use.

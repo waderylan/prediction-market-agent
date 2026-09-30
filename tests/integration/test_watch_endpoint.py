@@ -34,9 +34,10 @@ class FakeCoordinator:
     calls = 0
     owner = ""
 
-    async def poll(self, *, owner):
+    async def poll(self, *, owner, origin="foreground"):
         self.calls += 1
         self.owner = owner
+        assert origin == "scheduler"
         return PollResult(claimed_watches=2, observation_groups=1, created_triggers=1)
 
 
@@ -66,6 +67,9 @@ def test_scheduler_endpoint_requires_verified_oidc_and_preserves_chat_contract()
         "duplicate_triggers": 0,
         "source_warnings": 0,
         "delivery_attempts": 1,
+        "lifecycle_events": 0,
+        "awaiting_sources": 0,
+        "degraded_watches": 0,
         "model_calls": 0,
         "tavily_calls": 0,
     }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 from collections import defaultdict
 from collections.abc import Callable
@@ -20,8 +21,10 @@ from market_agent.agent import _validate_tool_result, mcp_tools_for_servers
 from market_agent.mcp.common import MarketDetail
 from market_agent.providers.game_state import FootballPlayContext, GamePlay, GameState, PlayByPlay
 from market_agent.watch.evaluator import build_trigger, evaluate_condition
+from market_agent.watch.lifecycle import make_event, target_state, transition_kind
 from market_agent.watch.models import (
     LifecycleCondition,
+    LifecycleEventKind,
     PollResult,
     PriceMoveCondition,
     QuoteObservation,
@@ -29,6 +32,7 @@ from market_agent.watch.models import (
     SourceStatus,
     WatchObservation,
     WatchRule,
+    WatchRuntimeState,
     WatchStatus,
 )
 from market_agent.watch.repository import WatchRepository
@@ -409,6 +413,22 @@ class MCPWatchEvidenceProvider:
             recent_plays=recent_plays,
             sports_status=sports_status,
             sports_warning=sports_warning,
+            state_status=(
+                SourceStatus.STALE
+                if state and sports_status == SourceStatus.STALE
+                else SourceStatus.AVAILABLE
+                if state
+                else SourceStatus.MISSING
+            ),
+            play_status=(
+                SourceStatus.STALE
+                if plays and sports_status == SourceStatus.STALE
+                else SourceStatus.AVAILABLE
+                if plays and not missing_play_clock
+                else SourceStatus.MALFORMED
+                if plays
+                else SourceStatus.MISSING
+            ),
         )
 
 
@@ -450,13 +470,19 @@ class WatchCoordinator:
             sports_warning="All required evidence sources were unavailable.",
         )
 
-    async def poll(self, *, owner: str, now: datetime | None = None) -> PollResult:
+    async def poll(
+        self,
+        *,
+        owner: str,
+        now: datetime | None = None,
+        origin: Literal["foreground", "scheduler"] = "foreground",
+    ) -> PollResult:
         observed_at = (now or datetime.now(UTC)).astimezone(UTC)
         rules = self.repository.claim_due(owner, observed_at)
         grouped: dict[tuple[object, ...], list[WatchRule]] = defaultdict(list)
         for rule in rules:
             grouped[self._group_key(rule)].append(rule)
-        created = duplicates = warnings = 0
+        created = duplicates = warnings = lifecycle_events = waiting = degraded = 0
         compatible_groups = list(grouped.values())
         representatives = [compatible[0] for compatible in compatible_groups]
         try:
@@ -487,12 +513,103 @@ class WatchCoordinator:
             if observation.sports_warning:
                 warnings += 1
             for rule in compatible:
+                runtime = self.repository.runtime(rule.watch_id, rule.session_id)
+                if runtime is None:
+                    continue
                 history = self.repository.recent_observations(
                     rule.watch_id, observed_at - timedelta(hours=2)
                 )
+                comparison_history = [] if runtime.first_success_at is None else history
                 self.repository.add_observation(rule.watch_id, observation)
+                state, readiness = target_state(rule, observation)
+                current_terminal = (
+                    observation.lifecycle in {"final", "cancelled"}
+                    and len(observation.quotes) == len(rule.markets)
+                    and all(quote.contract_terminal for quote in observation.quotes)
+                    and (observation.state_status or observation.sports_status)
+                    == SourceStatus.AVAILABLE
+                )
+                previous_terminal = bool(
+                    history
+                    and history[-1].lifecycle in {"final", "cancelled"}
+                    and len(history[-1].quotes) == len(rule.markets)
+                    and all(quote.contract_terminal for quote in history[-1].quotes)
+                )
+                terminal = current_terminal and previous_terminal
+                if terminal:
+                    state = WatchRuntimeState.TERMINAL
+                elif current_terminal and runtime.first_success_at is None:
+                    # A watch first seen after the event ended has no monitoring baseline.
+                    # Retain the scheduled final check without announcing a false start.
+                    state = WatchRuntimeState.AWAITING_SOURCES
+                first_success = runtime.first_success_at is None and state in {
+                    WatchRuntimeState.MONITORING,
+                    WatchRuntimeState.DEGRADED,
+                }
+                next_due = None if terminal else self._next_due(observation, observed_at)
+                updated = runtime.model_copy(
+                    update={
+                        "runtime_state": state,
+                        "source_readiness": readiness,
+                        "last_attempt_at": observed_at,
+                        "last_success_at": observed_at
+                        if state in {WatchRuntimeState.MONITORING, WatchRuntimeState.DEGRADED}
+                        else runtime.last_success_at,
+                        "first_success_at": observed_at
+                        if first_success
+                        else runtime.first_success_at,
+                        "next_due_at": next_due,
+                    }
+                )
+                kind = transition_kind(runtime, state, terminal=terminal)
+                if current_terminal and runtime.first_success_at is None and not terminal:
+                    kind = None
+                if runtime.activation_epoch == 0 and kind in {
+                    LifecycleEventKind.STARTED,
+                    LifecycleEventKind.STARTED_DEGRADED,
+                    LifecycleEventKind.WAITING,
+                }:
+                    kind = None
+                if kind:
+                    updated = updated.model_copy(
+                        update={
+                            "transition_sequence": runtime.transition_sequence + 1,
+                        }
+                    )
+                execution_source = "local foreground runner"
+                if origin == "scheduler":
+                    execution_source = (
+                        "Cloud Run Scheduler"
+                        if os.getenv("K_SERVICE") and os.getenv("K_REVISION")
+                        else "authenticated polling endpoint"
+                    )
+                event = (
+                    make_event(rule, updated, kind, observation, observed_at, execution_source)
+                    if kind
+                    else None
+                )
+                if event and kind in {
+                    LifecycleEventKind.STARTED,
+                    LifecycleEventKind.STARTED_DEGRADED,
+                    LifecycleEventKind.RESUMED,
+                    LifecycleEventKind.UPDATED,
+                }:
+                    updated = updated.model_copy(
+                        update={
+                            "acknowledgement_fingerprint": event.fingerprint,
+                        }
+                    )
+                persisted = self.repository.record_runtime(rule, owner, updated, event)
+                if not persisted:
+                    continue
+                if event:
+                    lifecycle_events += 1
+                waiting += state == WatchRuntimeState.AWAITING_SOURCES
+                degraded += state == WatchRuntimeState.DEGRADED
                 for condition in rule.conditions:
-                    result = evaluate_condition(condition, observation, history)
+                    if not comparison_history and condition.kind != "lifecycle_change":
+                        continue
+                    result = evaluate_condition(condition, observation, comparison_history)
                     warnings += len(result.warnings)
                     armed, fired_at = self.repository.condition_state(
                         rule.watch_id, condition.condition_id
@@ -528,18 +645,7 @@ class WatchCoordinator:
                     self.repository.set_condition_state(
                         rule.watch_id, condition.condition_id, False, observed_at
                     )
-                current_terminal = (
-                    observation.lifecycle in {"final", "cancelled"}
-                    and len(observation.quotes) == len(rule.markets)
-                    and all(quote.contract_terminal for quote in observation.quotes)
-                )
-                previous_terminal = bool(
-                    history
-                    and history[-1].lifecycle in {"final", "cancelled"}
-                    and len(history[-1].quotes) == len(rule.markets)
-                    and all(quote.contract_terminal for quote in history[-1].quotes)
-                )
-                if previous_terminal and current_terminal:
+                if terminal:
                     self.repository.set_status(rule.watch_id, rule.session_id, WatchStatus.TERMINAL)
                 else:
                     cadence_observation = observation
@@ -557,4 +663,7 @@ class WatchCoordinator:
             created_triggers=created,
             duplicate_triggers=duplicates,
             source_warnings=warnings,
+            lifecycle_events=lifecycle_events,
+            awaiting_sources=waiting,
+            degraded_watches=degraded,
         )

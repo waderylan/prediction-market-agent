@@ -39,7 +39,7 @@
 | 14A. Cloud watch automation and final submission acceptance | Blocked on Milestones 14 and 16B |
 | 15. Event-aware natural-language watches | Complete locally; cloud acceptance pending Milestone 14A |
 | 16. External watch alerts | Complete locally; cloud acceptance pending Milestone 14A |
-| 16A. Watch activation acknowledgements and operational visibility | Planned local follow-up; `/chat` and live Cloud Telegram deferred |
+| 16A. Watch activation acknowledgements and operational visibility | Complete locally; `/chat` and live Cloud Run acceptance deferred |
 | 16B. Conversational watch operations and agent acceptance | Planned after Milestone 16A |
 | 17. Polymarket US migration evaluation | Optional after deployment |
 
@@ -2533,12 +2533,14 @@ only because it has already been implemented.
 
 #### Current State
 
-- **Status:** Planned follow-up to Milestones 15 and 16; not implemented.
-- Confirmation currently persists an `active` rule, but the product does not distinguish
-  awaiting-first-poll from verified monitoring and does not create a lifecycle acknowledgement.
-- The local runner and Cloud endpoint already call the delivery worker immediately after polling,
-  which provides the intended same-cycle delivery boundary once durable lifecycle events exist.
-- The current CLI can list full rules but has no runtime-health projection or status filter.
+- **Status:** Complete locally. SQLite and the controlled Firestore adapter persist runtime
+  summaries, lifecycle events, and opted-in outbox records through the shared repository contract.
+- Confirmation returns `awaiting_first_poll` and the exact local runner, active-list, and inspect
+  commands. A first usable poll creates the start event; waiting, degradation, interruption,
+  recovery, resume, update, and completion use deterministic state transitions.
+- The local first-poll activation path delivered a real Telegram notice using recorded game
+  evidence. Firestore, the Scheduler endpoint, and Cloud Run remain under controlled or pending
+  cloud acceptance; Milestone 14A owns the deployed end-to-end proof.
 
 #### Pivot Point
 

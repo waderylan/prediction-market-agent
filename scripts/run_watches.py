@@ -64,7 +64,8 @@ async def run(database: str, once: bool) -> None:
                 f"state={state} claimed={result.claimed_watches} "
                 f"groups={result.observation_groups} "
                 f"triggers={result.created_triggers} warnings={result.source_warnings} "
-                f"deliveries={attempts}",
+                f"lifecycle={result.lifecycle_events} awaiting={result.awaiting_sources} "
+                f"degraded={result.degraded_watches} deliveries={attempts}",
                 flush=True,
             )
         if once:

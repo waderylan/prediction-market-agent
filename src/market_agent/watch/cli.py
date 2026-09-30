@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from market_agent.watch.models import (
     MarketIdentity,
     WatchCondition,
     WatchRule,
+    WatchTrigger,
 )
 from market_agent.watch.repository import SQLiteWatchRepository
 from market_agent.watch.service import WatchService
@@ -24,6 +26,7 @@ class WatchCli:
     def __init__(self, database: str, *, telegram_configured: bool = False) -> None:
         path = Path(database)
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.database = str(path)
         self.service = WatchService(
             SQLiteWatchRepository(path), telegram_configured=telegram_configured
         )
@@ -56,7 +59,41 @@ class WatchCli:
             return {"draft_id": preview.draft_id, "preview": preview.text}
         if operation == "confirm":
             rule = self.service.confirm(session_id, str(request["draft_id"]))
-            return {"watch_id": rule.watch_id, "status": rule.status}
+
+            def command(*arguments: str) -> str:
+                return subprocess.list2cmdline(
+                    ["uv", "run", "--env-file", ".env", "python", *arguments]
+                )
+
+            return {
+                "watch_id": rule.watch_id,
+                "status": rule.status,
+                "runtime_state": "awaiting_first_poll",
+                "receipt": "Saved. Monitoring begins only after the first usable poll.",
+                "runner_command": command("scripts/run_watches.py", "--db", self.database),
+                "list_command": command(
+                    "scripts/watch_cli.py",
+                    "--db",
+                    self.database,
+                    "--operation",
+                    "list",
+                    "--session-id",
+                    session_id,
+                    "--status",
+                    "active",
+                ),
+                "inspect_command": command(
+                    "scripts/watch_cli.py",
+                    "--db",
+                    self.database,
+                    "--operation",
+                    "inspect",
+                    "--session-id",
+                    session_id,
+                    "--watch-id",
+                    rule.watch_id,
+                ),
+            }
         watch_id = str(request.get("watch_id", ""))
         if operation in {"inspect", "pause", "resume", "delete"} and not re.fullmatch(
             r"watch_[a-f0-9]{32}", watch_id
@@ -65,32 +102,43 @@ class WatchCli:
         if operation == "list":
             return {
                 "watches": [
-                    rule.model_dump(mode="json") for rule in self.service.list_watches(session_id)
+                    summary.model_dump(mode="json")
+                    for summary in self.service.list_runtime(
+                        session_id, str(request.get("status", "all"))
+                    )
                 ]
             }
         if operation == "inspect":
             rule = self.service.inspect(session_id, watch_id)
-            return {"watch": rule.model_dump(mode="json")}
+            return {
+                "watch": rule.model_dump(mode="json"),
+                "runtime": self.service.runtime(session_id, watch_id).model_dump(mode="json"),
+            }
         if operation == "inbox":
             limit = int(request.get("limit", 20))
             if not 1 <= limit <= 50:
                 raise ValueError("limit must be between 1 and 50")
-            triggers = self.service.inbox(session_id, limit)
+            events = self.service.events(session_id, limit)
             return {
                 "alerts": [
                     {
-                        **trigger.model_dump(mode="json"),
+                        **event.model_dump(mode="json"),
+                        "kind": "condition_triggered"
+                        if isinstance(event, WatchTrigger)
+                        else event.kind.value,
                         "delivery": (
                             item.model_dump(mode="json")
                             if (
                                 item := self.service.repository.outbox_for_trigger(
-                                    trigger.trigger_id
+                                    event.trigger_id
+                                    if isinstance(event, WatchTrigger)
+                                    else event.event_id
                                 )
                             )
                             else {"status": "inbox_only"}
                         ),
                     }
-                    for trigger in triggers
+                    for event in events
                 ]
             }
         action = {

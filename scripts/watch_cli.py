@@ -29,6 +29,12 @@ def main() -> None:
     parser.add_argument("--session-id")
     parser.add_argument("--watch-id")
     parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument(
+        "--status",
+        choices=("active", "paused", "terminal", "all"),
+        default="all",
+        help="Filter list by desired watch status",
+    )
     args = parser.parse_args()
     cli = WatchCli(
         args.db,
@@ -47,6 +53,8 @@ def main() -> None:
             request["watch_id"] = args.watch_id
         if args.operation == "inbox":
             request["limit"] = args.limit
+        if args.operation == "list":
+            request["status"] = args.status
         emit(cli, request)
         return
     for line in sys.stdin:

@@ -94,3 +94,22 @@ def test_manifest_has_four_unique_python_servers_and_optional_tavily_key():
     environment = read(".env.example")
     assert "ESPN" not in environment and "MLB" not in environment
     assert "TAVILY_API_KEY=" in environment
+
+
+def test_watch_docs_distinguish_saved_rule_from_evidence_backed_monitoring():
+    readme = read("README.md")
+    explained = read("docs/WATCHES_EXPLAINED.md")
+    technical = read("docs/research/WATCH_MONITORING_AND_ALERTS.md")
+    proposal = read("docs/planning/PROJECT_PROPOSAL.md")
+    alignment = read("docs/assignment/IMPLEMENTATION_ALIGNMENT.md")
+    for document in (readme, explained, technical):
+        assert "awaiting_first_poll" in document
+        assert "monitoring_started" in document
+        assert "awaiting_sources" in document
+        assert "lifecycle" in document.lower() and "inbox" in document.lower()
+        assert "Telegram" in document
+    assert "## Add-on: watches" not in readme
+    assert "Watches are an **add-on**" not in explained
+    assert "optional add-on" not in proposal
+    assert "runtime health" in alignment
+    assert "Cloud Run" in technical and "unverified until deployment" in technical

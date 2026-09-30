@@ -103,3 +103,17 @@ recall, cross-session isolation, and MCP discovery. The public-provider smoke su
 because provider availability and current event inventory are not deterministic. Passing fixture
 tests establishes local failure behavior and data contracts; it does not claim that every external
 provider is currently available.
+
+## Milestone 16A local watch acceptance
+
+The watch lifecycle suite covers SQLite and Firestore persistence, first usable polls, unavailable
+sources, degraded and recovered states, terminal handling, activation epochs, idempotent events,
+delivery retries, and evidence retention. A valid game reference test checks that lifecycle event
+times use the game's IANA timezone. The full non-live suite passed with 430 tests and 18 opt-in live
+tests deselected. Ruff lint and formatting, strict mypy, and `git diff --check` passed.
+
+A local foreground runner also checked a live Cubs at Padres game with a pinned Polymarket contract.
+It recorded one evidence-backed `monitoring_started` event, marked its Telegram outbox item sent,
+and exposed the same event through CLI inspect and inbox. The test watch was paused after that check.
+This verifies one local provider-to-Telegram path; Cloud Run, Scheduler, and Firestore production
+acceptance remain part of Milestone 14A.

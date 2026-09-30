@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from langchain_core.messages import ToolMessage
@@ -41,8 +42,10 @@ from market_agent.watch.models import (
     PriceMoveCondition,
     ScoringPlay,
     SourceStatus,
+    WatchLifecycleEvent,
     WatchObservation,
     WatchRule,
+    WatchRuntimeState,
     WatchStatus,
 )
 from market_agent.watch.repository import FirestoreWatchRepository, SQLiteWatchRepository
@@ -681,6 +684,349 @@ class FakeFirestore:
         return found[:limit]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["sqlite", "firestore"])
+async def test_first_usable_poll_records_one_lifecycle_event_and_delivery(
+    tmp_path: Path, backend: str
+) -> None:
+    repository = (
+        SQLiteWatchRepository(tmp_path / "watches.db")
+        if backend == "sqlite"
+        else FirestoreWatchRepository(FakeFirestore())
+    )
+    watched = rule(telegram=True)
+    watched = watched.model_copy(
+        update={"game": watched.game.model_copy(update={"game_ref": encode_game_ref(REFERENCE_LA)})}
+    )
+    _, _, observations = replay()
+    first = observations[0]
+    repository.save_rule(watched, due_at=first.retrieved_at)
+    initial = repository.runtime(watched.watch_id, watched.session_id)
+    assert initial is not None and initial.runtime_state == WatchRuntimeState.AWAITING_FIRST_POLL
+    assert repository.list_events(watched.session_id) == []
+    assert repository.claim_outbox("early", first.retrieved_at) == []
+
+    class Evidence:
+        async def observe(self, current: WatchRule, now: datetime) -> WatchObservation:
+            return first
+
+    coordinator = WatchCoordinator(repository, Evidence())
+    result = await coordinator.poll(owner="foreground-test", now=first.retrieved_at)
+    assert result.lifecycle_events == 1 and result.created_triggers == 0
+    events = repository.list_events(watched.session_id)
+    assert len(events) == 1 and isinstance(events[0], WatchLifecycleEvent)
+    assert events[0].kind.value == "monitoring_started"
+    assert (
+        events[0].game_local_time
+        == first.retrieved_at.astimezone(ZoneInfo("America/Los_Angeles")).isoformat()
+    )
+    assert "session-a" not in events[0].message
+    assert repository.runtime(watched.watch_id, watched.session_id).runtime_state == (
+        WatchRuntimeState.MONITORING
+    )
+    transport = FakeTransport(TransportResponse(200, {"ok": True, "result": {"message_id": 42}}))
+    worker = DeliveryWorker(
+        repository,
+        TelegramDelivery(
+            SecretStr("test-token"),
+            SecretStr("test-chat"),
+            transport,
+        ),
+    )
+    assert await worker.run_once("delivery", first.retrieved_at) == 1
+    assert transport.calls == 1
+    assert repository.outbox_for_trigger(events[0].event_id).status == OutboxStatus.SENT
+    coordinator_result = await coordinator.poll(owner="foreground-test", now=first.retrieved_at)
+    assert coordinator_result.lifecycle_events == 0
+    assert len(repository.list_events(watched.session_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_unusable_first_poll_waits_once_then_starts_after_usable_evidence(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteWatchRepository(tmp_path / "watches.db")
+    watched = rule(telegram=False)
+    _, _, observations = replay()
+    start = observations[0].retrieved_at
+    unavailable = observations[0].model_copy(
+        update={
+            "observation_id": "obs_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "quotes": [],
+            "sports_status": SourceStatus.MISSING,
+            "state_status": SourceStatus.MISSING,
+            "play_status": SourceStatus.MISSING,
+        }
+    )
+    repository.save_rule(watched, due_at=start)
+
+    class Evidence:
+        calls = 0
+
+        async def observe(self, current: WatchRule, now: datetime) -> WatchObservation:
+            self.calls += 1
+            return unavailable if self.calls < 3 else observations[0]
+
+    coordinator = WatchCoordinator(repository, Evidence())
+    assert (await coordinator.poll(owner="foreground-test", now=start)).awaiting_sources == 1
+    assert (
+        await coordinator.poll(owner="foreground-test", now=start + timedelta(minutes=5))
+    ).lifecycle_events == 0
+    assert [e.kind.value for e in repository.list_events(watched.session_id)] == [
+        "monitoring_waiting_for_sources"
+    ]
+    assert (
+        await coordinator.poll(owner="foreground-test", now=start + timedelta(minutes=10))
+    ).lifecycle_events == 1
+    assert [e.kind.value for e in repository.list_events(watched.session_id)] == [
+        "monitoring_started",
+        "monitoring_waiting_for_sources",
+    ]
+    assert repository.runtime(watched.watch_id, watched.session_id).first_success_at is not None
+
+
+@pytest.mark.asyncio
+async def test_degradation_interruption_recovery_and_resume_are_edge_events(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteWatchRepository(tmp_path / "watches.db")
+    watched = rule().model_copy(
+        update={
+            "conditions": [
+                condition(relationship="any"),
+                LifecycleCondition(
+                    condition_id="final",
+                    to_states=frozenset({"final"}),
+                ),
+            ],
+        }
+    )
+    _, _, observations = replay()
+    start = observations[0].retrieved_at
+    partial = observations[0].model_copy(
+        update={
+            "observation_id": "obs_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sports_status": SourceStatus.MISSING,
+            "state_status": SourceStatus.MISSING,
+            "play_status": SourceStatus.MISSING,
+        }
+    )
+    healthy = observations[0].model_copy(
+        update={
+            "observation_id": "obs_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        }
+    )
+    outage = observations[0].model_copy(
+        update={
+            "observation_id": "obs_cccccccccccccccccccccccccccccccc",
+            "quotes": [],
+            "sports_status": SourceStatus.MISSING,
+            "state_status": SourceStatus.MISSING,
+            "play_status": SourceStatus.MISSING,
+        }
+    )
+    restored = observations[0].model_copy(
+        update={
+            "observation_id": "obs_dddddddddddddddddddddddddddddddd",
+        }
+    )
+    sequence = [partial, healthy, outage, restored, restored]
+
+    class Evidence:
+        index = 0
+
+        async def observe(self, current: WatchRule, now: datetime) -> WatchObservation:
+            value = sequence[self.index]
+            self.index += 1
+            return value
+
+    repository.save_rule(watched, due_at=start)
+    coordinator = WatchCoordinator(repository, Evidence())
+    for index in range(4):
+        await coordinator.poll(owner="foreground-test", now=start + timedelta(minutes=index))
+    assert [e.kind.value for e in repository.list_events(watched.session_id)] == [
+        "monitoring_recovered",
+        "monitoring_interrupted",
+        "monitoring_recovered",
+        "monitoring_started_degraded",
+    ]
+    assert repository.runtime(watched.watch_id, watched.session_id).runtime_state == (
+        WatchRuntimeState.MONITORING
+    )
+    service = WatchService(repository)
+    assert service.pause(watched.session_id, watched.watch_id)
+    assert service.resume(watched.session_id, watched.watch_id)
+    pending = repository.runtime(watched.watch_id, watched.session_id)
+    assert pending.activation_epoch == 2
+    assert pending.runtime_state == WatchRuntimeState.AWAITING_FIRST_POLL
+    resumed_poll = await coordinator.poll(owner="foreground-test", now=start + timedelta(minutes=4))
+    assert resumed_poll.created_triggers == 0
+    assert repository.list_events(watched.session_id)[0].kind.value == "monitoring_resumed"
+
+
+@pytest.mark.asyncio
+async def test_terminal_first_evidence_completes_without_monitoring_start(tmp_path: Path) -> None:
+    repository = SQLiteWatchRepository(tmp_path / "watches.db")
+    watched = rule(telegram=True)
+    _, _, observations = replay()
+    start = observations[0].retrieved_at
+    terminal_quotes = [
+        quote.model_copy(update={"contract_terminal": True}) for quote in observations[0].quotes
+    ]
+    final = observations[0].model_copy(
+        update={
+            "lifecycle": "final",
+            "quotes": terminal_quotes,
+            "observation_id": "obs_ffffffffffffffffffffffffffffffff",
+        }
+    )
+
+    class Evidence:
+        async def observe(self, current: WatchRule, now: datetime) -> WatchObservation:
+            return final
+
+    repository.save_rule(watched, due_at=start)
+    coordinator = WatchCoordinator(repository, Evidence())
+    first = await coordinator.poll(owner="foreground-test", now=start)
+    assert first.lifecycle_events == 0
+    assert repository.list_events(watched.session_id) == []
+    second = await coordinator.poll(owner="foreground-test", now=start + timedelta(minutes=15))
+    assert second.lifecycle_events == 1
+    assert [event.kind.value for event in repository.list_events(watched.session_id)] == [
+        "monitoring_completed"
+    ]
+    assert repository.runtime(watched.watch_id, watched.session_id).runtime_state == (
+        WatchRuntimeState.TERMINAL
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["sqlite", "firestore"])
+async def test_lifecycle_baseline_evidence_survives_seven_day_cleanup(
+    tmp_path: Path,
+    backend: str,
+) -> None:
+    repository = (
+        SQLiteWatchRepository(tmp_path / "watches.db")
+        if backend == "sqlite"
+        else FirestoreWatchRepository(FakeFirestore())
+    )
+    watched = rule()
+    _, _, observations = replay()
+    first = observations[0]
+
+    class Evidence:
+        async def observe(self, current: WatchRule, now: datetime) -> WatchObservation:
+            return first
+
+    repository.save_rule(watched, due_at=first.retrieved_at)
+    await WatchCoordinator(repository, Evidence()).poll(
+        owner="foreground-test",
+        now=first.retrieved_at,
+    )
+    repository.cleanup(first.retrieved_at + timedelta(days=8))
+    assert [
+        observation.observation_id
+        for observation in repository.recent_observations(
+            watched.watch_id, first.retrieved_at - timedelta(seconds=1)
+        )
+    ] == [first.observation_id]
+
+
+def test_sqlite_legacy_schema_preserves_records_and_suppresses_old_activation(
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    watched = rule()
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE watches (watch_id TEXT PRIMARY KEY, session_id TEXT, status TEXT, "
+            "schema_version INTEGER, data TEXT, due_at TEXT, lease_owner TEXT, "
+            "lease_until TEXT, created_at TEXT)"
+        )
+        db.execute(
+            "INSERT INTO watches VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+            (
+                watched.watch_id,
+                watched.session_id,
+                "active",
+                1,
+                watched.model_dump_json(),
+                BASE.isoformat(),
+                BASE.isoformat(),
+            ),
+        )
+    repository = SQLiteWatchRepository(path)
+    runtime = repository.runtime(watched.watch_id, watched.session_id)
+    assert runtime is not None and runtime.activation_epoch == 0
+    assert repository.get_rule(watched.watch_id, watched.session_id) == watched
+
+
+def test_sqlite_migration_keeps_old_trigger_and_outbox(tmp_path: Path) -> None:
+    import sqlite3
+
+    path = tmp_path / "legacy-outbox.db"
+    watched = rule(telegram=True)
+    _, _, observations = replay()
+    trigger = build_trigger(
+        watched, evaluate_condition(condition(), observations[1], observations[:1]), BASE
+    )
+    with sqlite3.connect(path) as db:
+        db.executescript("""
+            CREATE TABLE watches (watch_id TEXT PRIMARY KEY, session_id TEXT, status TEXT,
+              schema_version INTEGER, data TEXT, due_at TEXT, lease_owner TEXT,
+              lease_until TEXT, created_at TEXT);
+            CREATE TABLE triggers (trigger_id TEXT PRIMARY KEY, fingerprint TEXT UNIQUE,
+              watch_id TEXT, session_id TEXT, triggered_at TEXT, data TEXT,
+              FOREIGN KEY(watch_id) REFERENCES watches(watch_id) ON DELETE CASCADE);
+            CREATE TABLE outbox (outbox_id TEXT PRIMARY KEY, trigger_id TEXT NOT NULL,
+              watch_id TEXT NOT NULL, channel TEXT NOT NULL, status TEXT NOT NULL,
+              attempts INTEGER NOT NULL, available_at TEXT NOT NULL, lease_owner TEXT,
+              lease_until TEXT, provider_message_id TEXT, error_class TEXT,
+              UNIQUE(trigger_id, channel),
+              FOREIGN KEY(trigger_id) REFERENCES triggers(trigger_id) ON DELETE CASCADE);
+        """)
+        db.execute(
+            "INSERT INTO watches VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+            (
+                watched.watch_id,
+                watched.session_id,
+                "active",
+                1,
+                watched.model_dump_json(),
+                BASE.isoformat(),
+                BASE.isoformat(),
+            ),
+        )
+        db.execute(
+            "INSERT INTO triggers VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                trigger.trigger_id,
+                trigger.fingerprint,
+                trigger.watch_id,
+                trigger.session_id,
+                BASE.isoformat(),
+                trigger.model_dump_json(),
+            ),
+        )
+        db.execute(
+            "INSERT INTO outbox VALUES (?, ?, ?, 'telegram', 'sent', 1, ?, NULL, NULL, '42', NULL)",
+            (
+                "outbox_legacy",
+                trigger.trigger_id,
+                watched.watch_id,
+                BASE.isoformat(),
+            ),
+        )
+    repository = SQLiteWatchRepository(path)
+    assert repository.trigger_by_id(trigger.trigger_id) == trigger
+    item = repository.outbox_for_trigger(trigger.trigger_id)
+    assert item is not None and item.status == OutboxStatus.SENT
+    assert item.provider_message_id == "42"
+
+
 def test_firestore_fake_uses_atomic_rule_trigger_and_outbox_contract() -> None:
     store = FakeFirestore()
     repository = FirestoreWatchRepository(store)
@@ -707,6 +1053,12 @@ def test_firestore_fake_uses_atomic_rule_trigger_and_outbox_contract() -> None:
     )
     assert repository.record_trigger(revised, trigger)
     assert not repository.record_trigger(revised, trigger)
+    repository.add_observation(watched.watch_id, observations[1])
+    evidence = store.data["watch_observations"][
+        f"{watched.watch_id}:{observations[1].observation_id}"
+    ]
+    assert evidence["trigger_evidence"] is True
+    assert trigger.trigger_id in evidence["trigger_ids"]
     outbox = repository.outbox_for_trigger(trigger.trigger_id)
     assert outbox is not None
     claimed = repository.claim_outbox("delivery", BASE)
@@ -838,15 +1190,16 @@ async def test_missing_telegram_configuration_remains_bounded_and_inbox_first(
     )
     repository.record_trigger(watched, trigger)
     worker = DeliveryWorker(repository, None)
-    for attempt in range(25):
+    for attempt in range(5):
         assert (
             await worker.run_once(f"delivery-{attempt}", BASE + timedelta(minutes=15 * attempt))
             == 1
         )
     item = repository.outbox_for_trigger(trigger.trigger_id)
     assert item is not None
-    assert item.status == OutboxStatus.RETRY
-    assert item.attempts == 20
+    assert item.status == OutboxStatus.FAILED
+    assert item.attempts == 5
+    assert await worker.run_once("late", BASE + timedelta(days=1)) == 0
     assert repository.list_triggers("session-a") == [trigger]
 
 

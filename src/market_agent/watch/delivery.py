@@ -9,7 +9,7 @@ from typing import Any, Protocol
 import httpx
 from pydantic import SecretStr
 
-from market_agent.watch.models import OutboxItem, OutboxStatus, WatchTrigger
+from market_agent.watch.models import OutboxItem, OutboxStatus, WatchEvent
 from market_agent.watch.repository import WatchRepository
 
 
@@ -70,10 +70,10 @@ class TelegramDelivery:
         self._chat_id = chat_id
         self._transport = transport or HttpxTelegramTransport()
 
-    async def deliver(self, trigger: WatchTrigger) -> str:
-        if len(trigger.message) > 1500:
+    async def deliver(self, event: WatchEvent) -> str:
+        if len(event.message) > 1500:
             raise TelegramTerminalError("message_too_long")
-        response = await self._transport.send(self._token, self._chat_id, trigger.message)
+        response = await self._transport.send(self._token, self._chat_id, event.message)
         payload = response.payload
         if response.status_code == 429:
             retry = None
@@ -126,27 +126,28 @@ class DeliveryWorker:
         return len(items)
 
     async def _deliver_item(self, item: OutboxItem, owner: str, now: datetime) -> None:
-        trigger = self.repository.trigger_by_id(item.trigger_id)
-        if trigger is None:
+        event = self.repository.event_by_id(item.trigger_id)
+        if event is None:
             self.repository.finish_outbox(
                 item.outbox_id,
                 owner,
                 OutboxStatus.FAILED,
                 available_at=now,
-                error_class="missing_trigger",
+                error_class="missing_event",
             )
             return
         if self.telegram is None:
+            terminal = item.attempts >= self.max_attempts
             self.repository.finish_outbox(
                 item.outbox_id,
                 owner,
-                OutboxStatus.RETRY,
-                available_at=now + timedelta(minutes=15),
-                error_class="telegram_not_configured",
+                OutboxStatus.FAILED if terminal else OutboxStatus.RETRY,
+                available_at=now if terminal else now + timedelta(minutes=15),
+                error_class="retry_exhausted" if terminal else "telegram_not_configured",
             )
             return
         try:
-            message_id = await self.telegram.deliver(trigger)
+            message_id = await self.telegram.deliver(event)
         except TelegramTerminalError as error:
             self.repository.finish_outbox(
                 item.outbox_id,

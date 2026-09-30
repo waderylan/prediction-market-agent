@@ -19,8 +19,8 @@ API usage, deployment status, costs, and architecture diagrams remain in the rep
 | Required endpoint | `POST /chat` accepts `query` and `session_id` and returns one `response` string. |
 | Cloud deployment | The Docker image is designed for Google Cloud Run. A live URL remains required for submission. |
 | Testing | Unit, integration, stdio, bounded live-provider, and optional real-model suites cover the application and MCP boundaries. |
-| Add-on: event-aware watches (beyond requirements) | LangGraph compiles exact confirmed rules; a no-model coordinator evaluates shared MCP observations into a persistent inbox. |
-| Add-on: external alerts (beyond requirements) | A transactional outbox projects explicitly opted-in triggers to one configured Telegram chat; live delivery is verified from the local runner. |
+| Watches (beyond requirements) | The local CLI saves confirmed rules; a no-model coordinator stores typed runtime health, lifecycle events, and condition triggers in a unified inbox. Complete `/chat` management remains planned. |
+| External alerts (beyond requirements) | A transactional outbox projects opted-in lifecycle events and condition triggers to one configured Telegram chat. The first-poll activation path delivered a real local Telegram notice with recorded evidence. |
 
 ## Repository deliverables
 
@@ -31,7 +31,8 @@ API usage, deployment status, costs, and architecture diagrams remain in the rep
 - `src/market_agent/mcp/`: four student-authored MCP servers and their packaged manifest.
 - `tests/`: deterministic unit and integration coverage plus opt-in live checks.
 - `src/market_agent/watch/`: versioned rule models, SQLite/Firestore repositories, deterministic
-  evaluator/coordinator, OIDC and Secret Manager boundaries, inbox, and Telegram outbox.
+  evaluator/coordinator, runtime health and lifecycle models, OIDC and Secret Manager boundaries,
+  unified inbox, and Telegram event outbox.
 - `scripts/watch_cli.py`, `scripts/run_watches.py`: bounded local Codex interface, foreground
   monitoring, and credential-free deterministic replay.
 - `Dockerfile`: non-root production image containing the application and all MCP servers.
@@ -49,6 +50,8 @@ API usage, deployment status, costs, and architecture diagrams remain in the rep
 - Deploy the image to Cloud Run with one worker and `--max-instances 1`.
 - Configure Firestore, Cloud Scheduler OIDC, Secret Manager, and the optional Telegram recipient;
   local substitutes do not establish live Google Cloud acceptance.
+- Verify a due Scheduler poll creates one evidence-backed lifecycle event and one opted-in delivery;
+  idle, repeated, and failed polls must not claim healthy monitoring.
 - Verify the public `POST /chat` endpoint with a new session and a same-session follow-up.
 - Confirm the submitted source archive excludes `.env`, credentials, caches, virtual
   environments, and local build artifacts.

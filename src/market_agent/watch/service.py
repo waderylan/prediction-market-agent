@@ -15,7 +15,9 @@ from market_agent.watch.models import (
     GameIdentity,
     MarketIdentity,
     WatchCondition,
+    WatchEvent,
     WatchRule,
+    WatchRuntimeSummary,
     WatchStatus,
     WatchTrigger,
     utc_now,
@@ -114,6 +116,15 @@ class WatchService:
     def list_watches(self, session_id: str) -> list[WatchRule]:
         return self.repository.list_rules(session_id)
 
+    def list_runtime(self, session_id: str, status: str = "all") -> list[WatchRuntimeSummary]:
+        return self.repository.list_runtime(session_id, status)
+
+    def runtime(self, session_id: str, watch_id: str) -> WatchRuntimeSummary:
+        summary = self.repository.runtime(watch_id, session_id)
+        if summary is None:
+            raise KeyError("watch not found in this session")
+        return summary
+
     def inspect(self, session_id: str, watch_id: str) -> WatchRule:
         rule = self.repository.get_rule(watch_id, session_id)
         if rule is None:
@@ -144,6 +155,9 @@ class WatchService:
 
     def inbox(self, session_id: str, limit: int = 20) -> list[WatchTrigger]:
         return self.repository.list_triggers(session_id, limit)
+
+    def events(self, session_id: str, limit: int = 20) -> list[WatchEvent]:
+        return self.repository.list_events(session_id, limit)
 
     def _rule_from_draft(self, draft: WatchDraft, confirmed_at: datetime) -> WatchRule:
         watch_id = draft.replaces_watch_id or f"watch_{uuid4().hex}"

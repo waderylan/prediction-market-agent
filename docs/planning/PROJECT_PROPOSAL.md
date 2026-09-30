@@ -24,15 +24,18 @@ context. It routes narrow questions to the minimum useful source set and can bui
 brief from exact-game state, both market platforms, and bounded web evidence. Independent calls in
 one reasoning step run concurrently after required identifiers are established.
 
-As an optional add-on to the core research agent, the same conversation creates event-aware
-watches. LangGraph resolves an exact game and
+Market Lens also supports event-aware watches. The local Codex skill resolves an exact game and
 full-game-winner contracts through those MCP tools, compiles one versioned rule, presents a precise
 preview, and activates it only after confirmation. The host coordinator shares observations across
 compatible rules and deterministically evaluates probability-point movement, scoring-event and
 no-tracked-scoring-event windows, lifecycle changes, cross-platform divergence, cooldown, and
 re-arm state. SQLite is the local store and Firestore is the Cloud Run store behind one repository
-interface. The in-product inbox is authoritative; explicitly opted-in watches also project stored
-triggers to one deployment-owned Telegram chat through a transactional outbox.
+interface. Confirmation stores an `awaiting_first_poll` runtime state. A due poll records source
+readiness and produces a lifecycle event only after real evidence establishes monitoring, degraded
+coverage, or waiting for sources. The in-product inbox stores lifecycle events and condition
+triggers; explicitly opted-in watches project those events to one configured Telegram chat through
+a transactional outbox. Complete `/chat` watch management and automatic cloud polling remain
+planned integration work.
 
 The sports-state MCP separately finds a supported game by team, league, one local calendar day,
 and timezone, then reads current state, a box score, a compact player directory, or one player's

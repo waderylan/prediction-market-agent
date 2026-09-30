@@ -94,8 +94,9 @@ snapshots and refresh only the sources needed by the follow-up.
   intents. A local Codex conversation does not remain active after it exits; recurring monitoring
   requires exactly one `uv run --env-file .env python scripts/run_watches.py` process in a separate
   user-owned terminal. Never start or retain the foreground runner inside a Codex session. After
-  confirmation, give the user the command and explain that the confirmed SQLite rule survives when
-  Codex exits.
+  confirmation, show the exact runner, active-list, and inspect commands returned by the CLI.
+  Explain that `awaiting_first_poll` means saved; it does not prove monitoring. The SQLite rule
+  survives when Codex exits.
 - Clarify ambiguous teams, games, doubleheaders, platforms, outcomes, probability-point thresholds,
   windows, and event relationships. A move from `0.42` to `0.50` is eight points, not a relative
   percentage increase.
@@ -110,7 +111,8 @@ snapshots and refresh only the sources needed by the follow-up.
   active rule. The CLI may read whether Telegram is configured, but never read, print, or return
   the token or chat ID.
 - Prefer safe typed CLI arguments for routine management, such as
-  `--operation list --session-id <session>` or
+  `--operation list --session-id <session> --status active`,
+  `--operation inspect --session-id <session> --watch-id <watch>`, or
   `--operation pause --session-id <session> --watch-id <watch>`. Use JSON lines for typed rule
   validation, preview, and the same-process confirmation handshake.
 - Show the returned preview verbatim enough for the user to verify game, contracts, outcomes,
@@ -125,3 +127,10 @@ snapshots and refresh only the sources needed by the follow-up.
 - Inspect alerts and delivery state through the watch CLI. For a user-requested investigation,
   retrieve only bounded exact MCP evidence. Routine polling and Telegram delivery use zero model
   calls and zero Tavily calls.
+- Interpret desired `active` separately from runtime `awaiting_first_poll`, `awaiting_sources`,
+  `monitoring`, `degraded`, or `terminal`. A first usable poll creates the monitoring notice;
+  starting the runner alone does not. List and inspect return typed source readiness, last poll,
+  next due time, and delivery state. Inbox includes lifecycle events and condition alerts.
+- Resume returns to `awaiting_first_poll` for a new activation epoch. Report a resumed monitoring
+  event only after usable evidence arrives. Telegram is outbound only and does not contain a
+  session ID or local command.

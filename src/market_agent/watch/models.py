@@ -41,6 +41,26 @@ class SourceStatus(StrEnum):
     MALFORMED = "malformed"
 
 
+class WatchRuntimeState(StrEnum):
+    AWAITING_FIRST_POLL = "awaiting_first_poll"
+    AWAITING_SOURCES = "awaiting_sources"
+    MONITORING = "monitoring"
+    DEGRADED = "degraded"
+    TERMINAL = "terminal"
+
+
+class LifecycleEventKind(StrEnum):
+    WAITING = "monitoring_waiting_for_sources"
+    STARTED = "monitoring_started"
+    STARTED_DEGRADED = "monitoring_started_degraded"
+    DEGRADED = "monitoring_degraded"
+    INTERRUPTED = "monitoring_interrupted"
+    RECOVERED = "monitoring_recovered"
+    RESUMED = "monitoring_resumed"
+    UPDATED = "monitoring_updated"
+    COMPLETED = "monitoring_completed"
+
+
 class GameIdentity(StrictModel):
     league: Literal["mlb", "nfl", "ncaa_football"]
     game_ref: Identifier
@@ -195,6 +215,8 @@ class WatchObservation(StrictModel):
     recent_plays: list[ScoringPlay] = Field(default_factory=list, max_length=20)
     sports_status: SourceStatus
     sports_warning: str | None = Field(default=None, max_length=500)
+    state_status: SourceStatus | None = None
+    play_status: SourceStatus | None = None
 
 
 class EvidenceDelta(StrictModel):
@@ -223,6 +245,54 @@ class WatchTrigger(StrictModel):
     source_warnings: list[str] = Field(default_factory=list, max_length=10)
     observation_ids: list[str] = Field(min_length=1, max_length=20)
     message: Annotated[str, Field(min_length=1, max_length=1500)]
+
+
+class SourceReadiness(StrictModel):
+    source: str
+    status: SourceStatus
+    usable: bool
+    warning: str | None = None
+
+
+class WatchRuntimeSummary(StrictModel):
+    watch_id: str
+    game: GameIdentity
+    condition_summary: str
+    desired_status: WatchStatus
+    runtime_state: WatchRuntimeState = WatchRuntimeState.AWAITING_FIRST_POLL
+    activation_epoch: int = 1
+    activation_kind: Literal["initial", "resumed", "updated"] = "initial"
+    first_success_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    next_due_at: datetime | None = None
+    source_readiness: list[SourceReadiness] = Field(default_factory=list)
+    acknowledgement_fingerprint: str | None = None
+    transition_sequence: int = 0
+    delivery_status: str = "inbox_only"
+
+
+class WatchLifecycleEvent(StrictModel):
+    schema_version: Literal[1] = 1
+    event_id: str
+    kind: LifecycleEventKind
+    watch_id: str
+    session_id: str
+    activation_epoch: int
+    fingerprint: str
+    game: GameIdentity
+    markets: list[MarketIdentity]
+    condition_summary: str
+    cadence_seconds: int
+    runtime_state: WatchRuntimeState
+    source_readiness: list[SourceReadiness]
+    observation_ids: list[str]
+    occurred_at: datetime
+    game_local_time: str
+    message: Annotated[str, Field(min_length=1, max_length=1500)]
+
+
+WatchEvent = WatchTrigger | WatchLifecycleEvent
 
 
 class OutboxStatus(StrEnum):
@@ -254,5 +324,8 @@ class PollResult(StrictModel):
     duplicate_triggers: int = 0
     source_warnings: int = 0
     delivery_attempts: int = 0
+    lifecycle_events: int = 0
+    awaiting_sources: int = 0
+    degraded_watches: int = 0
     model_calls: Literal[0] = 0
     tavily_calls: Literal[0] = 0

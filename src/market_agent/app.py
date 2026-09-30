@@ -113,7 +113,7 @@ def create_app(
         if not await asyncio.to_thread(runtime.oidc.verify, authorization):
             raise HTTPException(401, "Invalid scheduler identity")
         invocation = uuid4().hex
-        result = await runtime.coordinator.poll(owner=f"cloud-{invocation}")
+        result = await runtime.coordinator.poll(owner=f"cloud-{invocation}", origin="scheduler")
         attempts = await runtime.delivery.run_once(f"cloud-delivery-{invocation}")
         return result.model_copy(update={"delivery_attempts": attempts})
 

@@ -141,13 +141,21 @@ The watch suite additionally verifies:
   source is unavailable.
 - Compatible watches share one observation set, a separate coordinator instance resumes durable
   state, and concurrent leases prevent duplicate claims.
-- Trigger fingerprints and unique outbox records suppress duplicate logical alerts across retries.
-- The foreground replay produces one inbox alert and one fake Telegram projection with zero model
+- Trigger and lifecycle fingerprints and unique outbox records suppress duplicate logical events
+  across retries, repeated polls, and restarts.
+- Confirmation persists `awaiting_first_poll` without a start event or delivery. Condition-aware
+  readiness distinguishes complete, partial, and unavailable evidence; waiting warns once and
+  first usable evidence creates one start event. SQLite and Firestore controlled adapters agree on
+  runtime state, inbox ordering, and event delivery.
+- The foreground replay produces one start event, one condition alert, and two fake Telegram
+  projections with zero model
   calls and zero Tavily calls.
 - Alert text states each platform's move in points, lists recent plays in game-local time (MLB
   at-bats with an in-progress pitch sequence and count; NFL/NCAA plays with quarter, clock, and
   starting down and distance), and folds duplicate source notes.
 - Pause and resume move only between active and paused; a terminal watch cannot be revived.
+- SQLite migration preserves pre-runtime rules and the old outbox shape. Pre-runtime watches read
+  conservatively without sending a historical start notice.
 - Telegram timeout, disconnect, `429`, `5xx`, malformed body, authorization failure, and blocked
   recipient behavior produces bounded retry or sanitized terminal state without losing the inbox.
 - Firestore transactions, Google OIDC claims, and Secret Manager access run through controlled
@@ -161,10 +169,11 @@ uv run pytest tests/live/test_game_state_mcp_live.py tests/live/test_sports_mcp_
 Remove-Item Env:RUN_LIVE_SMOKE
 ```
 
-The Telegram smoke test is separately gated by `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`:
+Telegram transport and local first-poll activation tests are separately gated by
+`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`:
 
 ```powershell
-uv run pytest tests/live/test_telegram_live.py -q -s
+uv run --env-file .env pytest tests/live/test_telegram_live.py -q -s
 ```
 
 These are bounded public reads. Sports tests check all supported leagues, schema discovery,
@@ -209,13 +218,13 @@ The deterministic local watch replay requires no provider, model, or Telegram cr
 uv run python scripts/run_watches.py --replay tests/fixtures/watch/yankees_scoring_replay.json
 ```
 
-Its summary reports the synchronized observation count, boundary trigger decision, inbox record,
-fake Telegram projection, model calls, and Tavily calls. The command prints the complete bounded
+Its summary reports the synchronized observation count, first-poll start, boundary trigger
+decision, inbox record, fake Telegram projections, model calls, and Tavily calls. It prints the bounded
 evidence message so wording and correlation limits remain reviewable.
 
 The replay also performs a duplicate polling cycle, reports unique stored observations, and prints
-local polling elapsed time plus the fixture quote-to-trigger interval. Five consecutive local runs
-measure 104-118 ms with a 108 ms median for three polls. This is a local deterministic benchmark,
+local polling elapsed time plus the fixture quote-to-trigger interval. One local run measured
+153 ms for three polls. This is a local deterministic measurement,
 not a provider or deployment latency claim.
 
 The complete non-live suite passes on the local Windows development environment, with live tests
