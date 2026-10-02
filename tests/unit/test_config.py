@@ -37,3 +37,14 @@ def test_valid_configuration_loads(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert settings.port == 9000
     assert settings.openai_api_key.get_secret_value() == "test-openai-placeholder"
+
+
+@pytest.mark.unit
+def test_local_model_host_header_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-placeholder")
+    monkeypatch.setenv("OPENAI_HOST_HEADER", "127.0.0.1:8000")
+    assert load_settings().openai_host_header == "127.0.0.1:8000"
+    load_settings.cache_clear()
+    monkeypatch.setenv("OPENAI_HOST_HEADER", "invalid host header")
+    with pytest.raises(ConfigurationError):
+        load_settings()

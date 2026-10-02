@@ -223,6 +223,21 @@ docker run --rm -p 8080:8080 --env-file .env market-agent:local
 The multi-stage image installs locked runtime dependencies, runs as UID 10001, and includes all
 four Python MCP processes. It requires no Node runtime.
 
+For a **local Docker test through Kessel** on Docker Desktop, launch the container from `kessel run`
+so Docker inherits the key without printing it. Kessel accepts loopback Host headers, so set
+`OPENAI_HOST_HEADER` for the container's `host.docker.internal` route:
+
+```powershell
+$kessel = (Resolve-Path ..\..\kessel\.venv\Scripts\kessel.exe).Path
+& $kessel run --provider claude -- docker run --rm -p 127.0.0.1:8090:8080 `
+  -e OPENAI_API_KEY -e OPENAI_MODEL=default `
+  -e OPENAI_BASE_URL=http://host.docker.internal:8000/v1/claude `
+  -e OPENAI_HOST_HEADER=127.0.0.1:8000 market-agent:local
+```
+
+The API is then at `http://127.0.0.1:8090`. This Host override is only needed for this local
+Docker Desktop path; omit it for ordinary model endpoints and deployment.
+
 Cloud Run deployment uses one worker and `--max-instances 1` so the assignment's in-process session
 memory remains coherent within the service instance. Deployment requires an Artifact Registry
 image and runtime environment variables. The local Codex gateway and local credentials never enter

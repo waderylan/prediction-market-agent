@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5"
     llm_timeout_seconds: float = Field(default=60, ge=1, le=180)
     openai_base_url: HttpUrl = HttpUrl("https://api.openai.com/v1")
+    openai_host_header: str | None = Field(default=None, pattern=r"^[A-Za-z0-9.:-]{1,100}$")
     log_level: str = "INFO"
     port: int = Field(default=8080, ge=1, le=65535)
 

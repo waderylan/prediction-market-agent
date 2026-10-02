@@ -39,8 +39,9 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
             settings = load_settings()
             configure_logging(settings.log_level)
             # Own these clients per lifespan; SDK defaults cache pools across event loops.
-            http_client = DefaultHttpxClient()
-            http_async_client = DefaultAsyncHttpxClient()
+            headers = {"Host": settings.openai_host_header} if settings.openai_host_header else {}
+            http_client = DefaultHttpxClient(headers=headers)
+            http_async_client = DefaultAsyncHttpxClient(headers=headers)
             model = ChatOpenAI(
                 model=settings.openai_model,
                 api_key=settings.openai_api_key,

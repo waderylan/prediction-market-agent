@@ -46,10 +46,19 @@ deployment and the watch branch remain separate work.
 - A deterministic agent integration test checks that two concurrent MCP calls retain distinct
   tool-call IDs and both success results reach the model.
 
+### Docker parity — 2026-10-01
+
+- Built `market-agent:local` from the locked multi-stage Dockerfile. The runtime process reported
+  UID 10001. A second container bound and answered `/health` with `PORT=8092`.
+- Kessel's loopback-only service accepted Docker Desktop traffic through `host.docker.internal`
+  when the HTTP Host header was explicitly set to `127.0.0.1:8000`. Added optional
+  `OPENAI_HOST_HEADER` to support this local route without changing normal model endpoints.
+- In the Kessel-backed container, `/chat/inspect` answered a no-tool question; a same-session
+  follow-up recalled a code word and a different session did not; a Steelers–Browns question
+  succeeded with sports discovery and state calls; malformed `/chat` input returned HTTP 422.
+
 ## Remaining
 
 - Verify same-session memory, cross-session isolation, malformed HTTP requests, and additional
   request-specific tool routing with the real model.
-- Build and run the Docker image, inspect UID and `PORT`, and run `/chat` plus follow-up through
-  a reachable model backend.
 - Probe partial failures across MCP servers and inspect controlled outputs and traces.
