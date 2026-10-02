@@ -21,13 +21,25 @@ deployment and the watch branch remain separate work.
 - Local quality gate: 394 non-live tests passed; Ruff check and format check passed; mypy passed.
   The config test now runs outside the repository so a real ignored `.env` cannot alter its result.
 
+### Live sports and market MCP pass — 2026-10-01
+
+- Added `scripts/check_live_sports.py` to repeat exact-game checks through this repo's stdio MCP
+  server. At about 19:47 PDT, NFL Steelers at Browns, MLB Phillies at Braves, and NCAA football
+  Western Kentucky at New Mexico State were all live. For each, discovery, state, every supported
+  box-score view, player directory/detail, and play-by-play passed.
+- Local Kalshi stdio searches for Steelers, Browns, Phillies, and Braves returned structured game
+  results without malformed-response errors. Kalshi, Polymarket, and cross-league live smoke tests
+  passed (5 tests). The broader sports-state live test initially found a stale test limit: NCAA
+  FCS coverage now permits up to six bounded scoreboard requests. The assertion now matches that
+  contract, and the test passed on rerun.
+- The configured MCP tools in this Codex session still use an older NFL parser; the repo's fresh
+  stdio process passed the affected live game. Restart clients that host the old MCP process to
+  load the checked-in fix.
+
 ## Remaining
 
 - Verify same-session memory, cross-session isolation, malformed HTTP requests, and additional
   request-specific tool routing with the real model.
-- Verify local stdio MCP box-score views for the live NFL and MLB games and run bounded live
-  provider checks for NFL, NCAA football, and MLB. The configured MCP process still reports the
-  older NFL metadata error; the checked-in parser accepts the current ESPN payload.
 - Build and run the Docker image, inspect UID and `PORT`, and run `/chat` plus follow-up through
   a reachable model backend.
 - Probe partial failures across MCP servers and inspect controlled outputs and traces.

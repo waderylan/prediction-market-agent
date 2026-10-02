@@ -59,7 +59,9 @@ async def test_game_state_stdio_live_all_supported_leagues():
             assert not result.isError
             payload = result.structuredContent
             validate(payload, tools["sports_state_find_games"].outputSchema)
-            assert payload["coverage"]["scoreboard_requests"] <= 3
+            assert payload["coverage"]["scoreboard_requests"] <= (
+                6 if league == "ncaa_football" else 3
+            )
             assert len(payload["games"]) <= 2
             assert payload["discovery_mode"] == ("schedule" if query == "all" else "team")
             assert payload["compact"] is (query == "all")

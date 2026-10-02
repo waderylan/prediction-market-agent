@@ -199,6 +199,15 @@ The live checks accept empty slates and evidence sets. They validate schemas and
 behavior without assuming that a specific game or market is open. Real-model checks are separate:
 set `RUN_LIVE_AGENT=1` and run `tests/live/test_chat_live.py` with a configured model backend.
 
+For a named game, check the current stdio sports-state server and every supported box-score view:
+
+```powershell
+uv run python scripts/check_live_sports.py --game nfl:Steelers:2026-10-01 --game mlb:Phillies:2026-10-01
+```
+
+Use `--game ncaa_football:all:YYYY-MM-DD` to sample a college game on a known slate. The command
+fails on an empty slate or tool error and prints only a compact result for each selected game.
+
 ## Container and Cloud Run
 
 ```powershell
