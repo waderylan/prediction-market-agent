@@ -242,6 +242,7 @@ a:focus-visible {
 
 .action-section { padding-bottom: 20px; }
 .action-list { display: grid; gap: 5px; }
+.action-button.schedule-action { margin-top: 10px; border-color: var(--accent); }
 
 .action-button {
   display: grid;

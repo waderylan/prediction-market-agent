@@ -129,9 +129,9 @@ uv run python scripts/run_kessel_ui.py
 ```
 
 This starts SportsWatch MCP at `http://127.0.0.1:3000` and two local agents through the already-running
-Kessel gateway. In the browser, choose NFL, MLB, or NCAA football; enter a team or matchup, game
-date, and time zone; then pick a score, box score, recent plays, player stats, market, or full-brief
-action. Each action drafts a question you can edit before sending. Follow-up questions use the same
+Kessel gateway. In the browser, choose NFL, MLB, or NCAA football and a date to ask who's playing.
+Enter a team or matchup for score, box score, recent plays, player stats, market, or full-brief
+questions. Each action drafts a question you can edit before sending. Follow-up questions use the same
 conversation. The model settings select Claude Code or Codex and a model name (`default` uses
 Kessel's provider default); switching providers starts a new conversation. The trace shows MCP
 calls, arguments, outcomes, and elapsed time.

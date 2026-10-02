@@ -331,13 +331,7 @@ function showFieldError(element, message) {
   element.hidden = !message;
 }
 
-function gameContext() {
-  const matchup = matchupInput.value.trim();
-  if (!matchup) {
-    showFieldError(gameError, "Enter a team or matchup first.");
-    matchupInput.focus();
-    return null;
-  }
+function selectedDateContext() {
   const date = gameDateInput.value;
   if (!date) {
     showFieldError(gameError, "Choose the game's local date.");
@@ -354,7 +348,33 @@ function gameContext() {
   }
   showFieldError(gameError, "");
   const leagues = { nfl: "NFL", mlb: "MLB", ncaa_football: "NCAA football" };
-  return `${leagues[leagueSelect.value]} ${matchup} game on ${date} in ${timezone}`;
+  return { league: leagues[leagueSelect.value], date, timezone };
+}
+
+function gameContext() {
+  const matchup = matchupInput.value.trim();
+  if (!matchup) {
+    showFieldError(gameError, "Enter a team or matchup first.");
+    matchupInput.focus();
+    return null;
+  }
+  const context = selectedDateContext();
+  if (!context) return null;
+  return `${context.league} ${matchup} game on ${context.date} in ${context.timezone}`;
+}
+
+function draftQuestion(prompt) {
+  query.value = prompt;
+  characterCount.value = String(prompt.length);
+  query.focus();
+  query.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function useSchedulePrompt() {
+  if (busy) return;
+  const context = selectedDateContext();
+  if (!context) return;
+  draftQuestion(`Who's playing in the ${context.league} on ${context.date} in ${context.timezone}? Show the available matchups and start times.`);
 }
 
 function useGamePrompt(intent) {
@@ -368,10 +388,7 @@ function useGamePrompt(intent) {
     markets: `For the ${game}, find matching full-game winner contracts on Kalshi and Polymarket. Compare their current quotes and key settlement rules.`,
     brief: `Give me a sourced brief for the ${game}: current game state, summary box score, matching Kalshi and Polymarket winner contracts, and one focused news search.`,
   };
-  query.value = prompts[intent];
-  characterCount.value = String(query.value.length);
-  query.focus();
-  query.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  draftQuestion(prompts[intent]);
 }
 
 function usePlayerPrompt() {
@@ -385,10 +402,7 @@ function usePlayerPrompt() {
     return;
   }
   showFieldError(playerError, "");
-  query.value = `Find the ${game}. Show ${player}'s statistics from this game, not season totals.`;
-  characterCount.value = String(query.value.length);
-  query.focus();
-  query.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  draftQuestion(`Find the ${game}. Show ${player}'s statistics from this game, not season totals.`);
 }
 
 async function sendQuery(text) {
@@ -479,6 +493,7 @@ for (const action of document.querySelectorAll("[data-intent]")) {
 }
 
 document.querySelector("#player-prompt").addEventListener("click", usePlayerPrompt);
+document.querySelector("#schedule-prompt").addEventListener("click", useSchedulePrompt);
 
 function startNewConversation() {
   if (busy) return;
@@ -486,7 +501,7 @@ function startNewConversation() {
   sessionLabel.textContent = sessionId;
   sessionTag.textContent = "New session";
   messages.innerHTML =
-    '<div class="empty-state" id="empty-state"><span class="empty-kicker">READY WHEN YOU ARE</span><h3>Which game are you following?</h3><p>Enter a team or matchup on the left. Pick Score, Box score, Player stats, Recent plays, Markets, or a full brief to draft a question, then send it. You can also write your own.</p></div>';
+    '<div class="empty-state" id="empty-state"><span class="empty-kicker">READY WHEN YOU ARE</span><h3>Who\'s playing?</h3><p>Choose a league and date, then use Who\'s playing? to find a game. Enter a team when you want its score, stats, plays, markets, or a full brief.</p></div>';
   resetTrace();
   query.value = "";
   characterCount.value = "0";

@@ -31,8 +31,8 @@
           <div class="rail-scroll">
             <header class="rail-intro">
               <span class="eyebrow">GAME SETUP</span>
-              <h1>Start with a game.</h1>
-              <p>Choose a matchup once. Pick an action to draft a question, then send it.</p>
+              <h1>Find your game.</h1>
+              <p>See who's playing, or enter a team and ask about that game.</p>
             </header>
 
             <section class="control-section" aria-labelledby="matchup-title">
@@ -44,8 +44,8 @@
                   <option value="mlb">MLB</option>
                   <option value="ncaa_football">NCAA football</option>
                 </select>
-                <label for="matchup">Team or matchup</label>
-                <input id="matchup" name="matchup" type="text" maxlength="120" placeholder="Steelers at Browns" autocomplete="off" />
+                <label for="matchup">Team or matchup (optional)</label>
+                <input id="matchup" name="matchup" type="text" maxlength="120" placeholder="Enter a team or matchup" autocomplete="off" />
                 <div class="field-row">
                   <div>
                     <label for="game-date">Game date</label>
@@ -57,6 +57,7 @@
                   </div>
                 </div>
                 <p class="field-error" id="game-error" role="alert" hidden></p>
+                <button class="action-button schedule-action" id="schedule-prompt" type="button"><strong>Who's playing?</strong><span>Find games for this league and date</span></button>
               </div>
             </section>
 
@@ -120,13 +121,13 @@
           <div class="messages" id="messages" aria-live="polite" aria-label="Conversation">
             <div class="empty-state" id="empty-state">
               <span class="empty-kicker">READY WHEN YOU ARE</span>
-              <h3>Which game are you following?</h3>
-              <p>Enter a team or matchup on the left. Pick Score, Box score, Player stats, Recent plays, Markets, or a full brief to draft a question, then send it. You can also write your own.</p>
+              <h3>Who's playing?</h3>
+              <p>Choose a league and date, then use Who's playing? to find a game. Enter a team when you want its score, stats, plays, markets, or a full brief.</p>
             </div>
           </div>
           <form class="composer" id="composer">
             <label for="query">Your question</label>
-            <textarea id="query" name="query" maxlength="4000" rows="3" placeholder="What's the score of the Steelers at Browns game?" required></textarea>
+            <textarea id="query" name="query" maxlength="4000" rows="3" placeholder="Who's playing today?" required></textarea>
             <div class="composer-footer">
               <span><output id="character-count">0</output> / 4000</span>
               <span class="key-hint">Enter to send; Shift + Enter for a new line</span>
