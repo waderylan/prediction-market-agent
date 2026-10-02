@@ -1,8 +1,8 @@
-# Market Lens
+# SportsWatch MCP
 
 > Sports research that knows whether every source is talking about the same game.
 
-Market Lens turns one game into a connected, source-checked research thread. Start with the score,
+SportsWatch MCP turns one game into a connected, source-checked research thread. Start with the score,
 drill into a player or play, inspect Kalshi and Polymarket, then check the news around the game
 without rebuilding the context in every tab.
 
@@ -20,7 +20,7 @@ A research thread can move through questions like these without starting over:
 4. "Do those contracts actually settle under the same rules?"
 5. "Any lineup or injury news that changes the context?"
 
-Market Lens keeps the selected game attached to the thread. A direct question receives a direct
+SportsWatch MCP keeps the selected game attached to the thread. A direct question receives a direct
 answer. A broad request can expand into a sourced brief with game state, statistics, market
 snapshots, contract terms, and current reporting.
 
@@ -28,9 +28,9 @@ snapshots, contract terms, and current reporting.
 
 Fetching a score is straightforward. The failure-prone step is deciding whether a scoreboard
 event, two market contracts, and a news report describe the same game under the same conditions.
-Market Lens makes that decision before it writes the answer.
+SportsWatch MCP makes that decision before it writes the answer.
 
-| Research problem | Market Lens response |
+| Research problem | SportsWatch MCP response |
 |---|---|
 | Providers use different IDs and team labels | Discover the event through each provider and validate league, participants, date, and scheduled start |
 | Scores, quotes, and articles arrive at different times | Keep each observation separate and show its retrieval or quote time |
@@ -51,7 +51,7 @@ in the answer.
 - Build a sourced game brief with current state, market snapshots, injuries, lineups, weather, or
   schedule news.
 
-Market Lens is read-only. It does not place orders, access market accounts, generate an independent
+SportsWatch MCP is read-only. It does not place orders, access market accounts, generate an independent
 win probability, or make betting picks.
 
 ## System design
@@ -128,9 +128,13 @@ lifetime.
 uv run python scripts/run_kessel_ui.py
 ```
 
-This starts Market Lens at `http://127.0.0.1:3000` and two local agents through the already-running
-Kessel gateway. The runtime controls select Claude Code or Codex and a model name (`default` uses
-Kessel's provider default). The trace shows MCP calls, arguments, outcomes, and elapsed time.
+This starts SportsWatch MCP at `http://127.0.0.1:3000` and two local agents through the already-running
+Kessel gateway. In the browser, choose NFL, MLB, or NCAA football; enter a team or matchup, game
+date, and time zone; then pick a score, box score, recent plays, player stats, market, or full-brief
+action. Each action drafts a question you can edit before sending. Follow-up questions use the same
+conversation. The model settings select Claude Code or Codex and a model name (`default` uses
+Kessel's provider default); switching providers starts a new conversation. The trace shows MCP
+calls, arguments, outcomes, and elapsed time.
 Kessel injects its key into the agent processes; the browser never receives it. Pass
 `--kessel-exe PATH` if Kessel is installed elsewhere. The UI and both agent APIs bind to localhost.
 The application still owns LangGraph memory and MCP execution. Kessel is a local development
@@ -216,8 +220,8 @@ fails on an empty slate or tool error and prints only a compact result for each 
 ## Container and Cloud Run
 
 ```powershell
-docker build -t market-agent:local .
-docker run --rm -p 8080:8080 --env-file .env market-agent:local
+docker build -t sportswatch-mcp:local .
+docker run --rm -p 8080:8080 --env-file .env sportswatch-mcp:local
 ```
 
 The multi-stage image installs locked runtime dependencies, runs as UID 10001, and includes all
@@ -232,7 +236,7 @@ $kessel = (Resolve-Path ..\..\kessel\.venv\Scripts\kessel.exe).Path
 & $kessel run --provider claude -- docker run --rm -p 127.0.0.1:8090:8080 `
   -e OPENAI_API_KEY -e OPENAI_MODEL=default `
   -e OPENAI_BASE_URL=http://host.docker.internal:8000/v1/claude `
-  -e OPENAI_HOST_HEADER=127.0.0.1:8000 market-agent:local
+  -e OPENAI_HOST_HEADER=127.0.0.1:8000 sportswatch-mcp:local
 ```
 
 The API is then at `http://127.0.0.1:8090`. This Host override is only needed for this local

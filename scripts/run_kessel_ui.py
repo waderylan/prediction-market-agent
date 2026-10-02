@@ -160,7 +160,7 @@ def main() -> None:
             _wait_for_health(process, port)
         server = ThreadingHTTPServer(("127.0.0.1", args.port), KesselUiHandler)
         url = f"http://127.0.0.1:{args.port}"
-        print(f"Market Lens (Kessel) is ready at {url}")
+        print(f"SportsWatch MCP is ready at {url}")
         print("Press Ctrl+C to stop the UI and its two local agents.")
         if not args.no_browser:
             webbrowser.open(url)

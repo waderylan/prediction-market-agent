@@ -48,7 +48,7 @@ deployment and the watch branch remain separate work.
 
 ### Docker parity — 2026-10-01
 
-- Built `market-agent:local` from the locked multi-stage Dockerfile. The runtime process reported
+- Built the image now tagged `sportswatch-mcp:local` (then `market-agent:local`) from the locked multi-stage Dockerfile. The runtime process reported
   UID 10001. A second container bound and answered `/health` with `PORT=8092`.
 - Kessel's loopback-only service accepted Docker Desktop traffic through `host.docker.internal`
   when the HTTP Host header was explicitly set to `127.0.0.1:8000`. Added optional

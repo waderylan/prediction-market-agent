@@ -13,33 +13,77 @@ const effortSelect = document.querySelector("#reasoning-effort");
 const traceContent = document.querySelector("#trace-content");
 const traceState = document.querySelector("#trace-state");
 const traceSubtitle = document.querySelector("#trace-subtitle");
+const leagueSelect = document.querySelector("#league");
+const matchupInput = document.querySelector("#matchup");
+const gameDateInput = document.querySelector("#game-date");
+const timezoneInput = document.querySelector("#timezone");
+const playerInput = document.querySelector("#player-name");
+const gameError = document.querySelector("#game-error");
+const playerError = document.querySelector("#player-error");
+const sessionTag = document.querySelector("#session-tag");
 
 let busy = false;
 let sessionId = restoreSession();
 sessionLabel.textContent = sessionId;
 restoreRuntime();
+restoreGameContext();
 
 function restoreSession() {
-  const saved = sessionStorage.getItem("market-lens-session");
+  const saved = sessionStorage.getItem("sportswatch-session");
   if (saved && /^[A-Za-z0-9_-]{1,128}$/.test(saved)) return saved;
   return createSession();
 }
 
 function createSession() {
   const id = `web-${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
-  sessionStorage.setItem("market-lens-session", id);
+  sessionStorage.setItem("sportswatch-session", id);
   return id;
 }
 
 function restoreRuntime() {
-  const savedProvider = sessionStorage.getItem("market-lens-provider");
-  const savedModel = sessionStorage.getItem("market-lens-model");
-  const savedEffort = sessionStorage.getItem("market-lens-effort");
+  const savedProvider = sessionStorage.getItem("sportswatch-provider");
+  const savedModel = sessionStorage.getItem("sportswatch-model");
+  const savedEffort = sessionStorage.getItem("sportswatch-effort");
   if (["claude", "codex"].includes(savedProvider)) providerSelect.value = savedProvider;
   if (savedModel && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(savedModel)) modelSelect.value = savedModel;
   if (["low", "medium", "high", "xhigh"].includes(savedEffort)) {
     effortSelect.value = savedEffort;
   }
+}
+
+function localDateIn(timezone) {
+  try {
+    const parts = Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${value.year}-${value.month}-${value.day}`;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function restoreGameContext() {
+  const timezone = sessionStorage.getItem("sportswatch-timezone")
+    || Intl.DateTimeFormat().resolvedOptions().timeZone
+    || "America/Los_Angeles";
+  timezoneInput.value = timezone;
+  gameDateInput.value = sessionStorage.getItem("sportswatch-date") || localDateIn(timezone);
+  const league = sessionStorage.getItem("sportswatch-league");
+  if (["nfl", "mlb", "ncaa_football"].includes(league)) leagueSelect.value = league;
+  matchupInput.value = sessionStorage.getItem("sportswatch-matchup") || "";
+  playerInput.value = sessionStorage.getItem("sportswatch-player") || "";
+}
+
+function saveGameContext() {
+  sessionStorage.setItem("sportswatch-league", leagueSelect.value);
+  sessionStorage.setItem("sportswatch-matchup", matchupInput.value);
+  sessionStorage.setItem("sportswatch-date", gameDateInput.value);
+  sessionStorage.setItem("sportswatch-timezone", timezoneInput.value);
+  sessionStorage.setItem("sportswatch-player", playerInput.value);
 }
 
 function setConnection(state, label) {
@@ -50,8 +94,9 @@ function setConnection(state, label) {
 async function checkHealth() {
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
-    if (!response.ok) throw new Error("unavailable");
-    setConnection("online", "API ready");
+    const health = await response.json();
+    if (health.providers?.[providerSelect.value] !== true) throw new Error("unavailable");
+    setConnection("online", `${providerSelect.value} ready`);
   } catch {
     setConnection("offline", "API unavailable");
   }
@@ -112,7 +157,7 @@ function appendMessage(role, text, options = {}) {
     const meta = document.createElement("div");
     meta.className = "message-meta";
     const author = document.createElement("span");
-    author.textContent = options.error ? "Request failed" : "Market Lens";
+    author.textContent = options.error ? "Request failed" : "SportsWatch";
     const runtime = document.createElement("span");
     runtime.textContent = options.label ?? "Response";
     meta.append(author, runtime);
@@ -154,7 +199,7 @@ function appendSkeleton() {
   const skeleton = document.createElement("div");
   skeleton.className = "response-skeleton";
   skeleton.setAttribute("role", "status");
-  skeleton.setAttribute("aria-label", "Research request in progress");
+  skeleton.setAttribute("aria-label", "Sports question in progress");
   for (let index = 0; index < 3; index += 1) {
     const line = document.createElement("span");
     line.className = "skeleton-line";
@@ -218,7 +263,7 @@ function showTrace(activity, provider, model, effort, elapsedMs) {
     const title = document.createElement("h3");
     title.textContent = "Answered without MCP";
     const body = document.createElement("p");
-    body.textContent = "The model used conversation context and general knowledge only.";
+    body.textContent = "This answer did not call an MCP server.";
     empty.append(title, body);
     traceContent.append(empty);
     return;
@@ -278,7 +323,72 @@ function resetTrace() {
   traceState.textContent = "Idle";
   traceSubtitle.textContent = "No request yet";
   traceContent.innerHTML =
-    '<div class="trace-empty"><h3>No tool activity</h3><p>Send a question to inspect model choice and MCP calls.</p></div>';
+    '<div class="trace-empty"><h3>No calls yet</h3><p>After an answer, this panel shows the MCP tools used, their arguments, and outcomes.</p></div>';
+}
+
+function showFieldError(element, message) {
+  element.textContent = message;
+  element.hidden = !message;
+}
+
+function gameContext() {
+  const matchup = matchupInput.value.trim();
+  if (!matchup) {
+    showFieldError(gameError, "Enter a team or matchup first.");
+    matchupInput.focus();
+    return null;
+  }
+  const date = gameDateInput.value;
+  if (!date) {
+    showFieldError(gameError, "Choose the game's local date.");
+    gameDateInput.focus();
+    return null;
+  }
+  const timezone = timezoneInput.value.trim();
+  try {
+    Intl.DateTimeFormat("en-US", { timeZone: timezone });
+  } catch {
+    showFieldError(gameError, "Enter a valid IANA time zone, such as America/Los_Angeles.");
+    timezoneInput.focus();
+    return null;
+  }
+  showFieldError(gameError, "");
+  const leagues = { nfl: "NFL", mlb: "MLB", ncaa_football: "NCAA football" };
+  return `${leagues[leagueSelect.value]} ${matchup} game on ${date} in ${timezone}`;
+}
+
+function useGamePrompt(intent) {
+  if (busy) return;
+  const game = gameContext();
+  if (!game) return;
+  const prompts = {
+    score: `Find the ${game}. What is the current score and game situation? Cite the sports-state observation time.`,
+    box: `Find the ${game}. Show the summary box score, team totals, and available game leaders.`,
+    plays: `Find the ${game}. What happened in the five most recent plays?`,
+    markets: `For the ${game}, find matching full-game winner contracts on Kalshi and Polymarket. Compare their current quotes and key settlement rules.`,
+    brief: `Give me a sourced brief for the ${game}: current game state, summary box score, matching Kalshi and Polymarket winner contracts, and one focused news search.`,
+  };
+  query.value = prompts[intent];
+  characterCount.value = String(query.value.length);
+  query.focus();
+  query.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function usePlayerPrompt() {
+  if (busy) return;
+  const game = gameContext();
+  if (!game) return;
+  const player = playerInput.value.trim();
+  if (!player) {
+    showFieldError(playerError, "Enter a player's name first.");
+    playerInput.focus();
+    return;
+  }
+  showFieldError(playerError, "");
+  query.value = `Find the ${game}. Show ${player}'s statistics from this game, not season totals.`;
+  characterCount.value = String(query.value.length);
+  query.focus();
+  query.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 async function sendQuery(text) {
@@ -286,6 +396,8 @@ async function sendQuery(text) {
   busy = true;
   query.disabled = true;
   send.disabled = true;
+  newSession.disabled = true;
+  providerSelect.disabled = true;
   appendMessage("user", text.trim());
   query.value = "";
   characterCount.value = "0";
@@ -322,7 +434,8 @@ async function sendQuery(text) {
     pending.remove();
     appendMessage("assistant", data.response, { label: `${selectedProvider} / ${selectedModel} / ${selectedEffort}` });
     showTrace(data.activity, selectedProvider, selectedModel, selectedEffort, elapsed);
-    setConnection("online", "API ready");
+    setConnection("online", `${selectedProvider} ready`);
+    sessionTag.textContent = "In conversation";
   } catch (error) {
     const elapsed = performance.now() - started;
     pending.remove();
@@ -341,6 +454,8 @@ async function sendQuery(text) {
     busy = false;
     query.disabled = false;
     send.disabled = false;
+    newSession.disabled = false;
+    providerSelect.disabled = false;
     query.focus();
   }
 }
@@ -359,30 +474,48 @@ query.addEventListener("keydown", (event) => {
   }
 });
 
-for (const prompt of document.querySelectorAll("[data-prompt]")) {
-  prompt.addEventListener("click", () => {
-    query.value = prompt.dataset.prompt;
-    characterCount.value = String(query.value.length);
-    query.focus();
-  });
+for (const action of document.querySelectorAll("[data-intent]")) {
+  action.addEventListener("click", () => useGamePrompt(action.dataset.intent));
 }
 
-newSession.addEventListener("click", () => {
+document.querySelector("#player-prompt").addEventListener("click", usePlayerPrompt);
+
+function startNewConversation() {
+  if (busy) return;
   sessionId = createSession();
   sessionLabel.textContent = sessionId;
+  sessionTag.textContent = "New session";
   messages.innerHTML =
-    '<div class="empty-state" id="empty-state"><h2>Start with a market ID, ticker, or topic.</h2><p>The trace panel will show each MCP call and what came back.</p></div>';
+    '<div class="empty-state" id="empty-state"><span class="empty-kicker">READY WHEN YOU ARE</span><h3>Which game are you following?</h3><p>Enter a team or matchup on the left. Pick Score, Box score, Player stats, Recent plays, Markets, or a full brief to draft a question, then send it. You can also write your own.</p></div>';
   resetTrace();
+  query.value = "";
+  characterCount.value = "0";
   query.focus();
-});
+}
+
+newSession.addEventListener("click", startNewConversation);
+
+for (const control of [leagueSelect, matchupInput, gameDateInput, timezoneInput, playerInput]) {
+  control.addEventListener("change", saveGameContext);
+  control.addEventListener("input", () => {
+    saveGameContext();
+    if (control === playerInput) showFieldError(playerError, "");
+    else showFieldError(gameError, "");
+  });
+}
 
 for (const control of [providerSelect, modelSelect, effortSelect]) {
   control.addEventListener("change", () => {
-    sessionStorage.setItem("market-lens-provider", providerSelect.value);
-    sessionStorage.setItem("market-lens-model", modelSelect.value);
-    sessionStorage.setItem("market-lens-effort", effortSelect.value);
+    sessionStorage.setItem("sportswatch-provider", providerSelect.value);
+    sessionStorage.setItem("sportswatch-model", modelSelect.value);
+    sessionStorage.setItem("sportswatch-effort", effortSelect.value);
   });
 }
+
+providerSelect.addEventListener("change", () => {
+  startNewConversation();
+  void checkHealth();
+});
 
 void checkHealth();
 window.setInterval(checkHealth, 15000);

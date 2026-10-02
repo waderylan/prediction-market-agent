@@ -3,9 +3,9 @@ requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cross-market-agent"
+name = "sportswatch-mcp"
 version = "0.1.0"
-description = "Read-only cross-market prediction research agent"
+description = "Read-only sports information agent with MCP integrations"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

@@ -3,9 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
-    <meta name="description" content="Inspect prediction-market research and its MCP tool calls." />
-    <title>Market Lens</title>
+    <meta name="color-scheme" content="light" />
+    <meta name="description" content="Follow a game, check player stats, and inspect the sources behind every answer." />
+    <title>SportsWatch MCP</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/app.js" defer></script>
@@ -13,9 +13,9 @@
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <a class="brand" href="/" aria-label="Market Lens home">
-          <span class="brand-mark" aria-hidden="true">ML</span>
-          <span>Market Lens</span>
+        <a class="brand" href="/" aria-label="SportsWatch MCP home">
+          <span class="brand-mark" aria-hidden="true">SW</span>
+          <span class="brand-name">SportsWatch <span>MCP</span></span>
         </a>
         <div class="topbar-actions">
           <div class="connection" id="connection" role="status" aria-live="polite">
@@ -27,79 +27,110 @@
       </header>
 
       <main class="workspace">
-        <aside class="control-rail" aria-label="Research controls">
-          <section class="control-section session-section">
-            <h2>Session</h2>
-            <code id="session-id"></code>
-            <p>Memory stays with this session until you start a new conversation.</p>
-          </section>
+        <aside class="control-rail" aria-label="Game and model controls">
+          <div class="rail-scroll">
+            <header class="rail-intro">
+              <span class="eyebrow">GAME SETUP</span>
+              <h1>Start with a game.</h1>
+              <p>Choose a matchup once. Pick an action to draft a question, then send it.</p>
+            </header>
 
-          <section class="control-section">
-            <h2>Runtime</h2>
-            <div class="field-grid">
-              <label for="provider">Provider</label>
-              <select id="provider" name="provider">
-                <option value="claude">Claude Code</option>
-                <option value="codex">Codex</option>
-              </select>
-              <label for="model">Model</label>
-              <input id="model" name="model" value="default" maxlength="100" pattern="[A-Za-z0-9][A-Za-z0-9._:/-]*" autocomplete="off" spellcheck="false" />
-              <label for="reasoning-effort">Reasoning</label>
-              <select id="reasoning-effort" name="reasoning_effort">
-                <option value="low">Low</option>
-                <option value="medium" selected>Medium</option>
-                <option value="high">High</option>
-                <option value="xhigh">Extra high</option>
-              </select>
-            </div>
-            <p class="runtime-note">Use <code>default</code> for Kessel’s provider default, or enter a model supported by the selected route.</p>
-          </section>
+            <section class="control-section" aria-labelledby="matchup-title">
+              <h2 id="matchup-title">Matchup</h2>
+              <div class="game-fields">
+                <label for="league">League</label>
+                <select id="league" name="league">
+                  <option value="nfl">NFL</option>
+                  <option value="mlb">MLB</option>
+                  <option value="ncaa_football">NCAA football</option>
+                </select>
+                <label for="matchup">Team or matchup</label>
+                <input id="matchup" name="matchup" type="text" maxlength="120" placeholder="Steelers at Browns" autocomplete="off" />
+                <div class="field-row">
+                  <div>
+                    <label for="game-date">Game date</label>
+                    <input id="game-date" name="game_date" type="date" />
+                  </div>
+                  <div>
+                    <label for="timezone">Time zone</label>
+                    <input id="timezone" name="timezone" type="text" maxlength="100" placeholder="America/Los_Angeles" autocomplete="off" />
+                  </div>
+                </div>
+                <p class="field-error" id="game-error" role="alert" hidden></p>
+              </div>
+            </section>
 
-          <section class="control-section example-section">
-            <h2>Questions to try</h2>
-            <button class="example-prompt" type="button" data-prompt="Polymarket 561229 and Kalshi KXPRESPERSON-28-JVAN both look like bets on JD Vance winning in 2028. Are they actually the same bet, or could they settle differently?">
-              Could these settle differently?
-            </button>
-            <button class="example-prompt" type="button" data-prompt="I'm thinking about the open Polymarket Bitcoin markets. Find the most relevant ones and tell me which contract has the easiest settlement rule to misunderstand.">
-              Which Bitcoin contract is misleading?
-            </button>
-            <button class="example-prompt" type="button" data-prompt="If a market is priced at 21 cents, does that mean there is exactly a 21% chance the event happens?">
-              What does a 21 cent price mean?
-            </button>
-          </section>
+            <section class="control-section action-section" aria-labelledby="actions-title">
+              <h2 id="actions-title">Ask about this game</h2>
+              <div class="action-list">
+                <button class="action-button" type="button" data-intent="score"><strong>Score &amp; situation</strong><span>Where the game stands now</span></button>
+                <button class="action-button" type="button" data-intent="box"><strong>Box score</strong><span>Team totals and leaders</span></button>
+              </div>
+              <div class="player-action">
+                <label for="player-name">Player stats</label>
+                <div class="player-row">
+                  <input id="player-name" name="player_name" type="text" maxlength="100" placeholder="Player name" autocomplete="off" />
+                  <button id="player-prompt" type="button" aria-label="Use player stats prompt">Use</button>
+                </div>
+                <p class="field-error" id="player-error" role="alert" hidden></p>
+              </div>
+              <div class="action-list">
+                <button class="action-button" type="button" data-intent="plays"><strong>Recent plays</strong><span>What happened last</span></button>
+                <button class="action-button" type="button" data-intent="markets"><strong>Game markets</strong><span>Kalshi and Polymarket</span></button>
+                <button class="action-button" type="button" data-intent="brief"><strong>Full game brief</strong><span>Score, stats, markets, news</span></button>
+              </div>
+            </section>
 
-          <p class="data-note">Public market data only. No trading or account access.</p>
+            <details class="runtime-section" open>
+              <summary>Model settings</summary>
+              <div class="runtime-fields">
+                <label for="provider">Provider</label>
+                <select id="provider" name="provider">
+                  <option value="claude">Claude Code</option>
+                  <option value="codex">Codex</option>
+                </select>
+                <label for="model">Model</label>
+                <input id="model" name="model" value="default" maxlength="100" pattern="[A-Za-z0-9][A-Za-z0-9._:/-]*" autocomplete="off" spellcheck="false" />
+                <label for="reasoning-effort">Reasoning</label>
+                <select id="reasoning-effort" name="reasoning_effort">
+                  <option value="low">Low</option>
+                  <option value="medium" selected>Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">Extra high</option>
+                </select>
+                <p>Use <code>default</code> for the selected provider's default model. Switching providers starts a new conversation.</p>
+              </div>
+            </details>
+          </div>
+          <div class="rail-footer">
+            <span>Read-only sports information</span>
+            <code id="session-id" title="Conversation session ID"></code>
+          </div>
         </aside>
 
         <section class="chat-panel" aria-labelledby="chat-title">
-          <header class="panel-header">
+          <header class="panel-header chat-header">
             <div>
-              <h1 id="chat-title">Market research</h1>
-              <p>Ask about prices, settlement rules, or whether two contracts match.</p>
+              <span class="eyebrow">CONVERSATION</span>
+              <h2 id="chat-title">Ask about the game</h2>
+              <p>Follow up naturally. SportsWatch keeps this conversation's game context.</p>
             </div>
+            <span class="session-tag" id="session-tag">New session</span>
           </header>
-
           <div class="messages" id="messages" aria-live="polite" aria-label="Conversation">
             <div class="empty-state" id="empty-state">
-              <h2>Start with a market ID, ticker, or topic.</h2>
-              <p>The trace panel will show each MCP call and what came back.</p>
+              <span class="empty-kicker">READY WHEN YOU ARE</span>
+              <h3>Which game are you following?</h3>
+              <p>Enter a team or matchup on the left. Pick Score, Box score, Player stats, Recent plays, Markets, or a full brief to draft a question, then send it. You can also write your own.</p>
             </div>
           </div>
-
           <form class="composer" id="composer">
-            <label for="query">Research question</label>
-            <textarea
-              id="query"
-              name="query"
-              maxlength="4000"
-              rows="3"
-              placeholder="What exactly makes YES win?"
-              required
-            ></textarea>
+            <label for="query">Your question</label>
+            <textarea id="query" name="query" maxlength="4000" rows="3" placeholder="What's the score of the Steelers at Browns game?" required></textarea>
             <div class="composer-footer">
               <span><output id="character-count">0</output> / 4000</span>
-              <span class="key-hint">Enter to send, Shift + Enter for a new line</span>
-              <button class="primary-button" id="send" type="submit">Send</button>
+              <span class="key-hint">Enter to send; Shift + Enter for a new line</span>
+              <button class="primary-button" id="send" type="submit">Ask SportsWatch</button>
             </div>
           </form>
         </section>
@@ -107,15 +138,16 @@
         <aside class="trace-panel" aria-labelledby="trace-title">
           <header class="panel-header trace-header">
             <div>
-              <h2 id="trace-title">Run trace</h2>
+              <span class="eyebrow">SOURCE TRACE</span>
+              <h2 id="trace-title">Tool activity</h2>
               <p id="trace-subtitle">No request yet</p>
             </div>
             <span class="trace-state" id="trace-state">Idle</span>
           </header>
           <div class="trace-content" id="trace-content" aria-live="polite">
             <div class="trace-empty">
-              <h3>No tool activity</h3>
-              <p>Send a question to inspect model choice and MCP calls.</p>
+              <h3>No calls yet</h3>
+              <p>After an answer, this panel shows the MCP tools used, their arguments, and outcomes.</p>
             </div>
           </div>
         </aside>

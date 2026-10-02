@@ -55,7 +55,7 @@ class AsyncMarketClient:
         self._http = http_client or httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self.timeout,
-            headers={"User-Agent": "cross-market-agent/0.1"},
+            headers={"User-Agent": "sportswatch-mcp/0.1"},
         )
 
     async def __aenter__(self) -> Self:

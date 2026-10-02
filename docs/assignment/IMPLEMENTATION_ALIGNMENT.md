@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document maps Market Lens to CSCI 599 Assignment 1. The canonical requirements remain in
+This document maps SportsWatch MCP to CSCI 599 Assignment 1. The canonical requirements remain in
 [Assignment_1_Description.md](Assignment_1_Description.md). The product-facing overview, setup,
 API usage, deployment status, costs, and architecture diagrams remain in the repository
 [README](../../README.md).
