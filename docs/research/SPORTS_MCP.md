@@ -146,7 +146,7 @@ Verified full-game series are:
 | League/scope | Series ticker | Expected provider title |
 |---|---|---|
 | MLB | `KXMLBGAME` | Professional Baseball Game |
-| NFL | `KXNFLGAME` | Professional Football Game |
+| NFL | `KXNFLGAME` | NFL Game |
 | NCAA primary/FBS schedule | `KXNCAAFGAME` | College Football Game |
 | NCAA FCS schedule | `KXNCAAFCSGAME` | College Football FCS Game |
 

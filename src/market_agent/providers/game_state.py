@@ -2926,7 +2926,6 @@ def _football_player_stats(
                 or not all(isinstance(key, str) for key in keys)
                 or not isinstance(labels, list)
                 or not all(isinstance(label, str) for label in labels)
-                or len(keys) != len(labels)
             ):
                 raise StateValidationError(
                     "malformed_response", "football player statistic metadata is invalid"
@@ -2939,13 +2938,16 @@ def _football_player_stats(
             for entry in athletes:
                 player_id, player_name = _espn_player_identity(entry)
                 values = entry.get("stats")
-                if not isinstance(values, list) or len(values) != len(keys):
+                if not isinstance(values, list) or len(values) != len(labels):
                     raise StateValidationError(
                         "malformed_response", "football player statistic values are invalid"
                     )
+                # ESPN can include an unrendered key (for example adjQBR) while its
+                # labels and athlete values still form the displayed stat columns.
+                names = keys if len(keys) == len(labels) else labels
                 statistics = [
                     parsed
-                    for key, label, value in zip(keys, labels, values, strict=True)
+                    for key, label, value in zip(names, labels, values, strict=True)
                     if (parsed := _football_statistic(key, label, value)) is not None
                 ]
                 players.append(

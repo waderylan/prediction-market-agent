@@ -24,6 +24,31 @@ from market_agent.providers.sports_search import (
 pytestmark = pytest.mark.unit
 
 
+async def test_nfl_series_current_title_allows_discovery():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("/series/KXNFLGAME"):
+            return httpx.Response(
+                200, json={"series": {"ticker": "KXNFLGAME", "title": "NFL Game"}}
+            )
+        return httpx.Response(200, json={"events": [], "milestones": [], "cursor": ""})
+
+    async with http_client(handler, "kalshi") as http:
+        client = KalshiClient(http_client=http)
+        markets, coverage = await search_kalshi(
+            client,
+            resolve_query("Steelers", "nfl"),
+            status=MarketStatus.OPEN,
+            limit=5,
+            series_ticker=None,
+        )
+    assert markets == []
+    assert coverage.pages_scanned == 1
+    assert calls == ["/trade-api/v2/series/KXNFLGAME", "/trade-api/v2/events"]
+
+
 def kalshi_fixture(event_id="KXMLBGAME-OPAQUE-1", labels=("New York Y", "San Diego")):
     event = {
         "event_ticker": event_id,

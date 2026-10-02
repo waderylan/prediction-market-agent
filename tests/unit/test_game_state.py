@@ -223,6 +223,35 @@ def football_box_summary(event=None):
     return result
 
 
+async def test_football_box_score_uses_display_labels_when_keys_have_extra_column():
+    event = scoreboard_event(game_status=completed_status())
+    summary = football_box_summary(event)
+    for team_row in summary["boxscore"]["players"]:
+        passing = team_row["statistics"][0]
+        passing["keys"] = ["completions/passingAttempts", "adjQBR", "QBRating"]
+        passing["labels"] = ["C/ATT", "RTG"]
+        passing["athletes"][0]["stats"] = ["20/30", "99.5"]
+
+    def handler(request):
+        if request.url.path.endswith("/summary"):
+            return httpx.Response(200, json=summary)
+        return httpx.Response(200, json={"events": [event]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client)
+        score = await client.get_box_score(found.games[0].game_ref)
+    finally:
+        await http.aclose()
+
+    passing = score.player_stats.home[0].players[0].statistics
+    assert [(stat.name, stat.value) for stat in passing] == [
+        ("C/ATT", "20/30"),
+        ("RTG", "99.5"),
+    ]
+    assert score.line_score.periods and score.team_stats.home
+
+
 def baseball_box_summary(event=None):
     event = deepcopy(event or mlb_event())
     competition = event["competitions"][0]

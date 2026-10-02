@@ -39,7 +39,7 @@ MAX_MARKET_RECORD_BYTES = 250_000
 # Observed provider series, not identifier templates. Revalidate titles before use.
 KALSHI_SERIES: dict[str, tuple[League, str]] = {
     "KXMLBGAME": ("mlb", "Professional Baseball Game"),
-    "KXNFLGAME": ("nfl", "Professional Football Game"),
+    "KXNFLGAME": ("nfl", "NFL Game"),
     "KXNCAAFGAME": ("ncaa_football", "College Football Game"),
     "KXNCAAFCSGAME": ("ncaa_football", "College Football FCS Game"),
 }
