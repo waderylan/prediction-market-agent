@@ -136,6 +136,11 @@ Kessel injects its key into the agent processes; the browser never receives it. 
 The application still owns LangGraph memory and MCP execution. Kessel is a local development
 backend and is not included in the Docker image or Cloud Run deployment.
 
+To verify Kessel's streamed parallel tool-call protocol for either route, launch
+`scripts/check_kessel_parallel.py` through `kessel run --provider claude --` or
+`kessel run --provider codex --`. The script assembles streamed calls by index and returns one
+tool result per ID without printing the key.
+
 ## Test the MCP workflow in Codex
 
 The repository includes [the sports-information skill](.agents/skills/sports-information/SKILL.md).

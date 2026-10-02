@@ -53,11 +53,7 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
                 http_client=http_client,
                 http_async_client=http_async_client,
             )
-            app.state.agent = ChatAgent(
-                model,
-                model_timeout=settings.llm_timeout_seconds,
-                parallel_tool_calls="127.0.0.1:8000/v1/" not in str(settings.openai_base_url),
-            )
+            app.state.agent = ChatAgent(model, model_timeout=settings.llm_timeout_seconds)
         else:
             app.state.agent = agent
         try:

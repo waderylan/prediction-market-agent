@@ -10,8 +10,8 @@ deployment and the watch branch remain separate work.
 - Added `scripts/run_kessel_ui.py`: starts separate localhost agents through Kessel's Claude Code
   and Codex routes. The browser selects provider, model, and reasoning effort and shows MCP calls.
   Kessel injects credentials into agent processes; no key is present in browser requests or files.
-- Adapted the agent to disable parallel tool calls for Kessel, which rejects that option. Retained
-  the existing behavior for other model endpoints.
+- The first Kessel version rejected parallel tool calls. After Kessel gained parallel support,
+  restored the agent's parallel tool-call setting for all model endpoints.
 - Verified `POST /api/chat/inspect` through each provider with a no-tool moneyline question:
   both returned a substantive answer and an empty activity list.
 - Verified real sports routing while both games were live (19:45 PDT): Claude Code used
@@ -35,6 +35,16 @@ deployment and the watch branch remain separate work.
 - The configured MCP tools in this Codex session still use an older NFL parser; the repo's fresh
   stdio process passed the affected live game. Restart clients that host the old MCP process to
   load the checked-in fix.
+
+### Kessel parallel tool calls — 2026-10-01
+
+- Claude Code returned two independent sports-game discovery calls followed by two game-state
+  calls in one `/chat/inspect` turn; all four succeeded and the answer used both results.
+- `scripts/check_kessel_parallel.py` exercised streaming through both Claude Code and Codex:
+  two `delta.tool_calls` were assembled by index, each `tool_call_id` received a matching tool
+  response, and the final response used both. Both providers passed.
+- A deterministic agent integration test checks that two concurrent MCP calls retain distinct
+  tool-call IDs and both success results reach the model.
 
 ## Remaining
 

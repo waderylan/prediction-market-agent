@@ -788,13 +788,11 @@ class ChatAgent:
         connect: ToolConnection = market_tools,
         *,
         model_timeout: float = 60,
-        parallel_tool_calls: bool = True,
     ) -> None:
         self.model = model
         self.connect = connect
         self.memory = InMemorySaver()
         self.model_timeout = model_timeout
-        self.parallel_tool_calls = parallel_tool_calls
         # Fixed-size synchronization only. Conversation state lives exclusively in LangGraph.
         self._locks = [asyncio.Lock() for _ in range(32)]
         self._capacity = asyncio.Semaphore(4)
@@ -809,9 +807,7 @@ class ChatAgent:
         by_name = {tool.name: tool for tool in tools}
         turn_prompt = SYSTEM_PROMPT + "\n" + _source_availability_message(tools)
         bound_model = (
-            self.model.bind_tools(tools, parallel_tool_calls=self.parallel_tool_calls)
-            if tools
-            else self.model
+            self.model.bind_tools(tools, parallel_tool_calls=True) if tools else self.model
         )
         model_options = {
             key: value

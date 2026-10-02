@@ -318,6 +318,39 @@ async def test_parallel_tool_requests_cannot_overflow_activity_contract(connecti
     assert "tool-call limit was reached" in turn.response.lower()
 
 
+async def test_parallel_tool_results_keep_each_call_id(connections):
+    def answer(messages):
+        results = [message for message in messages if isinstance(message, ToolMessage)]
+        assert {message.tool_call_id for message in results} == {"first", "second"}
+        assert all(message.status == "success" for message in results)
+        assert all(json.loads(message.content)["market_id"] == "561229" for message in results)
+        return AIMessage("Both tool results received")
+
+    model = ScriptedModel(
+        replies=[
+            AIMessage(
+                "",
+                tool_calls=[
+                    {
+                        "name": "polymarket_get_market",
+                        "args": {"market_id": "561229"},
+                        "id": "first",
+                    },
+                    {
+                        "name": "polymarket_get_market",
+                        "args": {"market_id": "561229"},
+                        "id": "second",
+                    },
+                ],
+            ),
+            answer,
+        ]
+    )
+    turn = await ChatAgent(model, connections()).chat_detailed("Read both", "parallel-results")
+    assert turn.response == "Both tool results received"
+    assert [item.status for item in turn.activity] == ["success", "success"]
+
+
 async def test_model_failure_and_session_recovery(connections):
     model = ScriptedModel(replies=[RuntimeError("sensitive diagnostic"), AIMessage("Recovered")])
     agent = ChatAgent(model, connections())
