@@ -57,8 +57,20 @@ deployment and the watch branch remain separate work.
   follow-up recalled a code word and a different session did not; a Steelers–Browns question
   succeeded with sports discovery and state calls; malformed `/chat` input returned HTTP 422.
 
+### Partial failure and request routing — 2026-10-01
+
+- An integration probe made independent Polymarket and Kalshi MCP calls in one model response.
+  Polymarket succeeded while Kalshi raised an error. The model received two distinct results,
+  the activity trace marked success/error separately, and the sensitive provider diagnostic did
+  not reach the response.
+- Real Claude-route narrow requests used only the requested source: Kalshi search for a Kalshi
+  price; Polymarket search for a Polymarket price. A comparison used both search and detail tools
+  and reported a postponement-rule mismatch. An injury-news request used sports discovery/state
+  and Tavily. Its first Tavily call was skipped because it arrived before game detail; the agent
+  then fetched detail and completed a valid Tavily search. The host guard worked as designed.
+
 ## Remaining
 
 - Verify same-session memory, cross-session isolation, malformed HTTP requests, and additional
   request-specific tool routing with the real model.
-- Probe partial failures across MCP servers and inspect controlled outputs and traces.
+- Run one broad sourced game brief and inspect response scope, sources, and tool budget.

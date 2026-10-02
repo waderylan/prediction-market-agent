@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import Field
 
@@ -244,6 +245,70 @@ def test_tool_failure_is_controlled(connections, mode):
         result = client.post("/chat", json={"query": "Read this market", "session_id": "a"})
     assert result.status_code == 200
     assert result.json()["response"] == "Could not verify market data"
+
+
+async def test_one_mcp_failure_preserves_other_provider_result(load_fixture):
+    def polymarket_handler(request):
+        return httpx.Response(200, json=load_fixture("polymarket", "market_success"))
+
+    http = httpx.AsyncClient(
+        base_url="https://gamma-api.polymarket.com",
+        transport=httpx.MockTransport(polymarket_handler),
+    )
+    polymarket = create_server(PolymarketClient(http_client=http, max_retries=0))
+    kalshi = FastMCP("failed-kalshi", log_level="CRITICAL")
+
+    @kalshi.tool()
+    async def kalshi_get_market(market_id: str) -> dict:
+        raise ToolError("sensitive provider diagnostic")
+
+    @asynccontextmanager
+    async def connect():
+        try:
+            async with (
+                create_connected_server_and_client_session(polymarket) as polymarket_session,
+                create_connected_server_and_client_session(kalshi) as kalshi_session,
+            ):
+                yield [
+                    *await load_mcp_tools(polymarket_session),
+                    *await load_mcp_tools(kalshi_session),
+                ]
+        finally:
+            await http.aclose()
+
+    def answer(messages):
+        results = [message for message in messages if isinstance(message, ToolMessage)]
+        assert {message.tool_call_id for message in results} == {"good", "failed"}
+        good = next(message for message in results if message.tool_call_id == "good")
+        failed = next(message for message in results if message.tool_call_id == "failed")
+        assert good.status == "success"
+        assert json.loads(good.content)["market_id"] == "561229"
+        assert failed.status == "error"
+        assert "sensitive provider diagnostic" not in failed.content
+        return AIMessage("Polymarket is verified; Kalshi is unavailable.")
+
+    model = ScriptedModel(
+        replies=[
+            AIMessage(
+                "",
+                tool_calls=[
+                    {
+                        "name": "polymarket_get_market",
+                        "args": {"market_id": "561229"},
+                        "id": "good",
+                    },
+                    {"name": "kalshi_get_market", "args": {"market_id": "bad"}, "id": "failed"},
+                ],
+            ),
+            answer,
+        ]
+    )
+    turn = await ChatAgent(model, connect).chat_detailed("Compare sources", "partial-failure")
+    assert turn.response == "Polymarket is verified; Kalshi is unavailable."
+    assert [(item.server, item.status) for item in turn.activity] == [
+        ("polymarket", "success"),
+        ("kalshi", "error"),
+    ]
 
 
 def test_connection_failure(connections):
