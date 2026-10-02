@@ -864,11 +864,11 @@ class DiscoveryCoverage(BaseModel):
 
     requested_local_date: date
     derived_local_date: bool
-    scoreboard_requests: int = Field(ge=0, le=3)
+    scoreboard_requests: int = Field(ge=0, le=6)
     provider_dates_requested: list[date] = Field(max_length=3)
-    events_scanned: int = Field(ge=0, le=600)
+    events_scanned: int = Field(ge=0, le=1200)
     matching_games: int = Field(ge=0, le=10)
-    discarded_event_count: int = Field(ge=0, le=600)
+    discarded_event_count: int = Field(ge=0, le=1200)
     warnings: list[StateWarning] = Field(default_factory=list, max_length=20)
     utc_boundary_check: bool = False
     utc_boundary_note: str = (
@@ -3930,45 +3930,67 @@ class SportsStateClient:
         events_scanned = 0
         discarded = 0
         requests = 0
+        requested_dates: list[date] = []
+        groups: tuple[str | None, ...] = (None,)
+        if league == "ncaa_football":
+            # ESPN's default college scoreboard excludes FCS-only matchups.
+            groups = ("80", "81")
+            if (
+                sports_query is not None
+                and sports_query.teams
+                and all(team.division == "FCS" for team in sports_query.teams)
+            ):
+                groups = ("81", "80")
         for provider_day in provider_dates:
             sport, provider_league = ESPN_ROUTES[league]
             url = f"{ESPN_BASE}/{sport}/{provider_league}/scoreboard"
-            root, _ = await self._request_json(
-                url,
-                params={"dates": provider_day.strftime("%Y%m%d"), "limit": 200},
-                operation="find_games",
-                league=league,
-            )
-            requests += 1
-            payload = _object(root, "scoreboard response")
-            events = _objects(payload.get("events"), "scoreboard events")
-            if len(events) > MAX_SCOREBOARD_EVENTS:
-                raise StateValidationError(
-                    "response_too_large", "scoreboard returned more than 200 events"
+            for group in groups:
+                params: dict[str, str | int] = {
+                    "dates": provider_day.strftime("%Y%m%d"),
+                    "limit": 200,
+                }
+                if group is not None:
+                    params["groups"] = group
+                root, _ = await self._request_json(
+                    url,
+                    params=params,
+                    operation="find_games",
+                    league=league,
                 )
-            events_scanned += len(events)
-            retrieved_at = self._now()
-            for event in events:
-                try:
-                    summary = _event_summary(event, league, zone, retrieved_at)
-                except StateValidationError:
-                    discarded += 1
-                    if len(warnings) < 20:
-                        warnings.append(
-                            StateWarning(
-                                code="discarded_provider_event",
-                                message="One malformed provider event was skipped.",
+                requests += 1
+                if provider_day not in requested_dates:
+                    requested_dates.append(provider_day)
+                payload = _object(root, "scoreboard response")
+                events = _objects(payload.get("events"), "scoreboard events")
+                if len(events) > MAX_SCOREBOARD_EVENTS:
+                    raise StateValidationError(
+                        "response_too_large", "scoreboard returned more than 200 events"
+                    )
+                events_scanned += len(events)
+                retrieved_at = self._now()
+                for event in events:
+                    try:
+                        summary = _event_summary(event, league, zone, retrieved_at)
+                    except StateValidationError:
+                        discarded += 1
+                        if len(warnings) < 20:
+                            warnings.append(
+                                StateWarning(
+                                    code="discarded_provider_event",
+                                    message="One malformed provider event was skipped.",
+                                )
                             )
-                        )
-                    continue
-                if summary.local_date != selected_day:
-                    continue
-                if sports_query is not None and not all(
-                    requested.name in {summary.home_team, summary.away_team}
-                    for requested in sports_query.teams
-                ):
-                    continue
-                games.setdefault(summary.provider_game_id, summary)
+                        continue
+                    if summary.local_date != selected_day:
+                        continue
+                    if sports_query is not None and not all(
+                        requested.name in {summary.home_team, summary.away_team}
+                        for requested in sports_query.teams
+                    ):
+                        continue
+                    games.setdefault(summary.provider_game_id, summary)
+                if games and not schedule_query:
+                    break
             if games and not schedule_query:
                 break
         all_ranked = sorted(
@@ -3991,12 +4013,12 @@ class SportsStateClient:
             requested_local_date=selected_day,
             derived_local_date=local_date is None,
             scoreboard_requests=requests,
-            provider_dates_requested=provider_dates[:requests],
+            provider_dates_requested=requested_dates,
             events_scanned=events_scanned,
             matching_games=len(ranked),
             discarded_event_count=discarded,
             warnings=warnings,
-            utc_boundary_check=requests > 1,
+            utc_boundary_check=len(requested_dates) > 1,
         )
         returned_games: list[GameSummary | CompactGameSummary] = (
             [

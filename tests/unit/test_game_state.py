@@ -252,6 +252,71 @@ async def test_football_box_score_uses_display_labels_when_keys_have_extra_colum
     assert score.line_score.periods and score.team_stats.home
 
 
+async def test_fcs_discovery_and_box_score_include_group_81_games():
+    event = scoreboard_event(
+        game_status=completed_status(),
+        teams=competitors(
+            home="Sacred Heart Pioneers",
+            away="New Hampshire Wildcats",
+            home_id="2529",
+            away_id="160",
+        ),
+    )
+    event["competitions"][0]["situation"] = None
+    summary = football_box_summary(event)
+    for row in summary["boxscore"]["players"]:
+        passing = row["statistics"][0]
+        passing["keys"] = ["completions/passingAttempts", "passingYards", "adjQBR"]
+    groups = []
+
+    def handler(request):
+        if request.url.path.endswith("/summary"):
+            return httpx.Response(200, json=summary)
+        group = request.url.params["groups"]
+        groups.append(group)
+        return httpx.Response(200, json={"events": [event] if group == "81" else []})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client, "New Hampshire Wildcats", "ncaa_football")
+        box = await client.get_box_score(found.games[0].game_ref)
+    finally:
+        await http.aclose()
+
+    assert groups == ["81"]
+    assert found.coverage.scoreboard_requests == 1
+    assert box.player_stats.home[0].players[0].statistics[1].name == "YDS"
+
+
+async def test_ncaa_schedule_scans_both_divisions_without_duplicate_games():
+    event = scoreboard_event(
+        game_status=completed_status(),
+        teams=competitors(
+            home="Sacred Heart Pioneers",
+            away="New Hampshire Wildcats",
+            home_id="2529",
+            away_id="160",
+        ),
+    )
+    groups = []
+
+    def handler(request):
+        groups.append(request.url.params["groups"])
+        return httpx.Response(200, json={"events": [event]})
+
+    client, http = client_with(handler)
+    try:
+        found = await discover(client, "all", "ncaa_football")
+    finally:
+        await http.aclose()
+
+    assert groups == ["80", "81", "80", "81"]
+    assert len(found.games) == 1
+    assert found.coverage.scoreboard_requests == 4
+    assert len(found.coverage.provider_dates_requested) == 2
+    assert found.coverage.utc_boundary_check is True
+
+
 def baseball_box_summary(event=None):
     event = deepcopy(event or mlb_event())
     competition = event["competitions"][0]

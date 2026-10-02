@@ -56,6 +56,8 @@ next/recent selectors, pagination, or exhaustive mode.
 Clarifications use `discovery_mode="clarification"`, distinct from successful `team` and `schedule`
 discovery. Coverage explicitly marks `utc_boundary_check=true` when multiple ESPN UTC date pages
 were required to cover the one requested local calendar day.
+NCAA discovery checks ESPN's FBS (`groups=80`) and FCS (`groups=81`) scoreboards; team
+queries try the team's division first, while `all` combines both and deduplicates games.
 
 Each returned summary contains canonical and raw home/away names, ESPN event ID, opaque
 `game_ref`, UTC/local start, score, lifecycle, period/clock, bounded last play, source URL,
@@ -254,7 +256,7 @@ envelope, malformed sibling events are skipped with bounded discard warnings.
 
 | Operation | Bound |
 |---|---|
-| Discovery | One requested-date ESPN scoreboard; adjacent UTC boundary pages only when no match, maximum 3 total |
+| Discovery | Up to 3 UTC dates; one ESPN scoreboard per date for MLB/NFL, two division scoreboards per date for NCAA (maximum 6 requests) |
 | ESPN detail | One summary request |
 | MLB fallback | After ESPN transport/HTTP/schema failure only: one date schedule + one exact live feed |
 | Attempts | Maximum 2 per logical request |
