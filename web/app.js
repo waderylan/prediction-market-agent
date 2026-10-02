@@ -7,6 +7,7 @@ const sessionLabel = document.querySelector("#session-id");
 const connection = document.querySelector("#connection");
 const connectionLabel = document.querySelector("#connection-label");
 const newSession = document.querySelector("#new-session");
+const providerSelect = document.querySelector("#provider");
 const modelSelect = document.querySelector("#model");
 const effortSelect = document.querySelector("#reasoning-effort");
 const traceContent = document.querySelector("#trace-content");
@@ -31,9 +32,11 @@ function createSession() {
 }
 
 function restoreRuntime() {
+  const savedProvider = sessionStorage.getItem("market-lens-provider");
   const savedModel = sessionStorage.getItem("market-lens-model");
   const savedEffort = sessionStorage.getItem("market-lens-effort");
-  if (["sol", "terra", "luna"].includes(savedModel)) modelSelect.value = savedModel;
+  if (["claude", "codex"].includes(savedProvider)) providerSelect.value = savedProvider;
+  if (savedModel && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(savedModel)) modelSelect.value = savedModel;
   if (["low", "medium", "high", "xhigh"].includes(savedEffort)) {
     effortSelect.value = savedEffort;
   }
@@ -170,10 +173,10 @@ function addDefinition(list, term, value) {
   list.append(dt, dd);
 }
 
-function showRunningTrace(model, effort) {
+function showRunningTrace(provider, model, effort) {
   traceState.className = "trace-state running";
   traceState.textContent = "Running";
-  traceSubtitle.textContent = `${model} / ${effort}`;
+  traceSubtitle.textContent = `${provider} / ${model} / ${effort}`;
   traceContent.replaceChildren();
   const skeleton = document.createElement("div");
   skeleton.className = "response-skeleton";
@@ -186,7 +189,7 @@ function showRunningTrace(model, effort) {
   traceContent.append(skeleton);
 }
 
-function showTrace(activity, model, effort, elapsedMs) {
+function showTrace(activity, provider, model, effort, elapsedMs) {
   traceState.className = "trace-state";
   traceState.textContent = "Complete";
   traceSubtitle.textContent = activity.length
@@ -197,6 +200,7 @@ function showTrace(activity, model, effort, elapsedMs) {
   const summary = document.createElement("dl");
   summary.className = "run-summary";
   for (const [term, value] of [
+    ["Provider", provider],
     ["Model", model],
     ["Effort", effort],
     ["Elapsed", `${(elapsedMs / 1000).toFixed(1)} s`],
@@ -254,10 +258,10 @@ function showTrace(activity, model, effort, elapsedMs) {
   traceContent.append(list);
 }
 
-function showTraceError(model, effort, elapsedMs) {
+function showTraceError(provider, model, effort, elapsedMs) {
   traceState.className = "trace-state failed";
   traceState.textContent = "Failed";
-  traceSubtitle.textContent = `${model} / ${effort} / ${(elapsedMs / 1000).toFixed(1)} s`;
+  traceSubtitle.textContent = `${provider} / ${model} / ${effort} / ${(elapsedMs / 1000).toFixed(1)} s`;
   traceContent.replaceChildren();
   const empty = document.createElement("div");
   empty.className = "trace-empty";
@@ -286,10 +290,11 @@ async function sendQuery(text) {
   query.value = "";
   characterCount.value = "0";
   const pending = appendSkeleton();
-  const selectedModel = modelSelect.value;
+  const selectedProvider = providerSelect.value;
+  const selectedModel = modelSelect.value.trim() || "default";
   const selectedEffort = effortSelect.value;
   const started = performance.now();
-  showRunningTrace(selectedModel, selectedEffort);
+  showRunningTrace(selectedProvider, selectedModel, selectedEffort);
 
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 150000);
@@ -300,6 +305,7 @@ async function sendQuery(text) {
       body: JSON.stringify({
         query: text.trim(),
         session_id: sessionId,
+        provider: selectedProvider,
         model: selectedModel,
         reasoning_effort: selectedEffort,
       }),
@@ -314,8 +320,8 @@ async function sendQuery(text) {
     }
     const elapsed = performance.now() - started;
     pending.remove();
-    appendMessage("assistant", data.response, { label: `${selectedModel} / ${selectedEffort}` });
-    showTrace(data.activity, selectedModel, selectedEffort, elapsed);
+    appendMessage("assistant", data.response, { label: `${selectedProvider} / ${selectedModel} / ${selectedEffort}` });
+    showTrace(data.activity, selectedProvider, selectedModel, selectedEffort, elapsed);
     setConnection("online", "API ready");
   } catch (error) {
     const elapsed = performance.now() - started;
@@ -328,7 +334,7 @@ async function sendQuery(text) {
         : `The request could not be completed. ${error.message}`,
       { error: true, label: "Not completed" },
     );
-    showTraceError(selectedModel, selectedEffort, elapsed);
+    showTraceError(selectedProvider, selectedModel, selectedEffort, elapsed);
     setConnection("offline", "Check services");
   } finally {
     window.clearTimeout(timeout);
@@ -370,8 +376,9 @@ newSession.addEventListener("click", () => {
   query.focus();
 });
 
-for (const control of [modelSelect, effortSelect]) {
+for (const control of [providerSelect, modelSelect, effortSelect]) {
   control.addEventListener("change", () => {
+    sessionStorage.setItem("market-lens-provider", providerSelect.value);
     sessionStorage.setItem("market-lens-model", modelSelect.value);
     sessionStorage.setItem("market-lens-effort", effortSelect.value);
   });

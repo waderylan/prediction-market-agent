@@ -29,12 +29,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-button, textarea, select { font: inherit; }
-button, select { color: inherit; }
+button, textarea, select, input { font: inherit; }
+button, select, input { color: inherit; }
 
 button:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
+input:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -193,7 +194,7 @@ a:focus-visible {
   text-transform: uppercase;
 }
 
-.field-grid select {
+.field-grid select, .field-grid input {
   width: 100%;
   min-width: 0;
   padding: 7px 24px 7px 8px;
@@ -203,6 +204,15 @@ a:focus-visible {
   color: var(--text);
   font: 11px/1.2 var(--mono);
   cursor: pointer;
+}
+
+.field-grid input { padding-right: 8px; cursor: text; }
+
+.runtime-note {
+  margin: 12px 0 0;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .example-section { padding-bottom: 8px; }

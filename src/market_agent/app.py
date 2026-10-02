@@ -18,7 +18,9 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=True)
     query: str = Field(min_length=1, max_length=4000)
     session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
-    model: Literal["sol", "terra", "luna"] | None = None
+    model: str | None = Field(
+        default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    )
     reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
 
 
@@ -51,7 +53,11 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
                 http_client=http_client,
                 http_async_client=http_async_client,
             )
-            app.state.agent = ChatAgent(model, model_timeout=settings.llm_timeout_seconds)
+            app.state.agent = ChatAgent(
+                model,
+                model_timeout=settings.llm_timeout_seconds,
+                parallel_tool_calls="127.0.0.1:8000/v1/" not in str(settings.openai_base_url),
+            )
         else:
             app.state.agent = agent
         try:
@@ -65,7 +71,9 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
 
     @app.post("/chat", response_model=ChatResponse)
     async def chat(body: ChatRequest) -> ChatResponse:
-        model_name = f"gpt-5.6-{body.model}" if body.model else None
+        model_name = (
+            f"gpt-5.6-{body.model}" if body.model in {"sol", "terra", "luna"} else body.model
+        )
         response = await app.state.agent.chat(
             body.query,
             body.session_id,
@@ -76,7 +84,9 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
 
     @app.post("/chat/inspect", response_model=ChatInspectionResponse)
     async def chat_inspect(body: ChatRequest) -> ChatInspectionResponse:
-        model_name = f"gpt-5.6-{body.model}" if body.model else None
+        model_name = (
+            f"gpt-5.6-{body.model}" if body.model in {"sol", "terra", "luna"} else body.model
+        )
         turn = await app.state.agent.chat_detailed(
             body.query,
             body.session_id,

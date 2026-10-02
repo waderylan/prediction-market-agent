@@ -37,12 +37,13 @@
           <section class="control-section">
             <h2>Runtime</h2>
             <div class="field-grid">
-              <label for="model">Model</label>
-              <select id="model" name="model">
-                <option value="sol">Sol</option>
-                <option value="terra">Terra</option>
-                <option value="luna">Luna</option>
+              <label for="provider">Provider</label>
+              <select id="provider" name="provider">
+                <option value="claude">Claude Code</option>
+                <option value="codex">Codex</option>
               </select>
+              <label for="model">Model</label>
+              <input id="model" name="model" value="default" maxlength="100" pattern="[A-Za-z0-9][A-Za-z0-9._:/-]*" autocomplete="off" spellcheck="false" />
               <label for="reasoning-effort">Reasoning</label>
               <select id="reasoning-effort" name="reasoning_effort">
                 <option value="low">Low</option>
@@ -51,6 +52,7 @@
                 <option value="xhigh">Extra high</option>
               </select>
             </div>
+            <p class="runtime-note">Use <code>default</code> for Kessel’s provider default, or enter a model supported by the selected route.</p>
           </section>
 
           <section class="control-section example-section">

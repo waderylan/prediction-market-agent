@@ -125,13 +125,16 @@ lifetime.
 ### Inspection UI
 
 ```powershell
-uv run python scripts/run_chat_ui.py
+uv run python scripts/run_kessel_ui.py
 ```
 
-This starts Market Lens at `http://127.0.0.1:3000`, the FastAPI backend, and a local Codex model
-gateway. The application still owns LangGraph memory and MCP execution. The UI displays the actual
-tool activity for each turn. The gateway uses local CLI authentication and is not included as a
-production backend.
+This starts Market Lens at `http://127.0.0.1:3000` and two local agents through the already-running
+Kessel gateway. The runtime controls select Claude Code or Codex and a model name (`default` uses
+Kessel's provider default). The trace shows MCP calls, arguments, outcomes, and elapsed time.
+Kessel injects its key into the agent processes; the browser never receives it. Pass
+`--kessel-exe PATH` if Kessel is installed elsewhere. The UI and both agent APIs bind to localhost.
+The application still owns LangGraph memory and MCP execution. Kessel is a local development
+backend and is not included in the Docker image or Cloud Run deployment.
 
 ## Test the MCP workflow in Codex
 

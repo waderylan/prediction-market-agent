@@ -173,6 +173,22 @@ def test_http_selects_allowlisted_model_and_effort(connections):
     assert model.observed_options == [{"model": "gpt-5.6-terra", "reasoning_effort": "high"}]
 
 
+def test_http_accepts_kessel_model_and_rejects_unsafe_name(connections):
+    model = ScriptedModel(replies=[AIMessage("Selected")])
+    with TestClient(create_app(ChatAgent(model, connections()))) as client:
+        accepted = client.post(
+            "/chat",
+            json={"query": "Explain this", "session_id": "model-choice", "model": "default"},
+        )
+        rejected = client.post(
+            "/chat",
+            json={"query": "Explain this", "session_id": "model-choice", "model": "bad model"},
+        )
+    assert accepted.status_code == 200
+    assert model.observed_options == [{"model": "default"}]
+    assert rejected.status_code == 422
+
+
 def test_inspection_endpoint_returns_bounded_tool_activity(connections):
     model = ScriptedModel(replies=[tool_call(), AIMessage("Contract readout")])
     with TestClient(create_app(ChatAgent(model, connections()))) as client:
@@ -250,7 +266,7 @@ def test_connection_failure(connections):
         {"query": "x", "session_id": "a", "extra": True},
         {"query": "x" * 4001, "session_id": "a"},
         {"query": "x", "session_id": "a/b"},
-        {"query": "x", "session_id": "a", "model": "astra"},
+        {"query": "x", "session_id": "a", "model": "bad model"},
         {"query": "x", "session_id": "a", "reasoning_effort": "ultra"},
     ],
 )
