@@ -69,8 +69,21 @@ deployment and the watch branch remain separate work.
   and Tavily. Its first Tavily call was skipped because it arrived before game detail; the agent
   then fetched detail and completed a valid Tavily search. The host guard worked as designed.
 
+### Broad sourced briefs — 2026-10-01
+
+- Real NFL and MLB briefs called sports discovery, state, and summary box score; Kalshi and
+  Polymarket search/detail; and one Tavily search. The first runs attempted Tavily before detail,
+  so the host skipped those attempts. The MLB answer also combined incompatible start times.
+- Strengthened the system prompt to make Tavily wait for exact-game detail and to keep each
+  provider's time statement separate. The MLB rerun completed all nine calls successfully with
+  no skipped Tavily call. It used ESPN's 5:00 PM PDT start for the game and attributed Kalshi's
+  different 2:00 PM EDT *originally scheduled* time to that contract's rules.
+- Kalshi's original schedule in its rules differs from ESPN's current game start. The contract
+  remains a separate market with its own postponement/cancellation rules; the brief must not
+  present those times as equivalent or claim that the sporting result settles the contract.
+- Final local gate: 397 non-live tests passed; 9 public-provider live tests passed; 7 real-agent
+  Kessel/Claude live tests passed; Ruff check and format check passed; mypy passed.
+
 ## Remaining
 
-- Verify same-session memory, cross-session isolation, malformed HTTP requests, and additional
-  request-specific tool routing with the real model.
-- Run one broad sourced game brief and inspect response scope, sources, and tool budget.
+- Cloud Run deployment and submission remain pending by user choice.
