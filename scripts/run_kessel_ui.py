@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 from http import HTTPStatus
@@ -20,21 +21,30 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
 PORTS = {"claude": 8080, "codex": 8081}
 DEFAULT_KESSEL = ROOT.parents[1] / "kessel" / ".venv" / "Scripts" / "kessel.exe"
+CLOUD_RUN_URL_FILE = ROOT / ".cloud-run-url"
 
 
 class KesselUiHandler(SimpleHTTPRequestHandler):
     """Keep Kessel credentials in backend processes, never in browser responses."""
 
+    cloud_run_url: str | None = None
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, directory=str(WEB_ROOT), **kwargs)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/api/health":
-            status = {provider: _healthy(port) for provider, port in PORTS.items()}
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == "/api/health":
+            target = urllib.parse.parse_qs(parsed.query).get("target", ["local"])[0]
+            if target == "cloud":
+                status = {"cloud": bool(self.cloud_run_url and _healthy_url(self.cloud_run_url))}
+            elif target == "local":
+                status = {provider: _healthy(port) for provider, port in PORTS.items()}
+            else:
+                self.send_error(HTTPStatus.BAD_REQUEST)
+                return
             payload = json.dumps({"providers": status}).encode()
-            self._send_json(
-                HTTPStatus.OK if all(status.values()) else HTTPStatus.BAD_GATEWAY, payload
-            )
+            self._send_json(HTTPStatus.OK, payload)
             return
         super().do_GET()
 
@@ -49,14 +59,21 @@ class KesselUiHandler(SimpleHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             if not isinstance(body, dict):
                 raise ValueError
+            target = body.pop("target", "local")
             provider = body.pop("provider", None)
-            if provider not in PORTS:
+            if target == "local" and provider in PORTS:
+                base_url = f"http://127.0.0.1:{PORTS[provider]}"
+            elif target == "cloud" and self.cloud_run_url:
+                base_url = self.cloud_run_url
+                body.pop("model", None)
+                body.pop("reasoning_effort", None)
+            else:
                 raise ValueError
         except (ValueError, json.JSONDecodeError):
             self._send_json(HTTPStatus.BAD_REQUEST, b'{"detail":"Invalid request or provider."}')
             return
         request = urllib.request.Request(
-            f"http://127.0.0.1:{PORTS[provider]}{self.path.removeprefix('/api')}",
+            f"{base_url}{self.path.removeprefix('/api')}",
             data=json.dumps(body).encode(),
             method="POST",
             headers={"Content-Type": "application/json"},
@@ -69,7 +86,7 @@ class KesselUiHandler(SimpleHTTPRequestHandler):
         except (urllib.error.URLError, TimeoutError):
             self._send_json(
                 HTTPStatus.BAD_GATEWAY,
-                b'{"detail":"The selected local agent is unavailable."}',
+                b'{"detail":"The selected agent is unavailable."}',
             )
 
     def _send_json(self, status: int, payload: bytes) -> None:
@@ -86,8 +103,12 @@ class KesselUiHandler(SimpleHTTPRequestHandler):
 
 
 def _healthy(port: int) -> bool:
+    return _healthy_url(f"http://127.0.0.1:{port}", timeout=1)
+
+
+def _healthy_url(base_url: str, *, timeout: float = 5) -> bool:
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1) as response:
+        with urllib.request.urlopen(f"{base_url}/health", timeout=timeout) as response:
             return response.status == HTTPStatus.OK
     except (urllib.error.URLError, TimeoutError):
         return False
@@ -124,18 +145,31 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=3000, help="Browser UI port")
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--cloud-only", action="store_true", help="Skip the local Kessel agents")
+    parser.add_argument("--cloud-run-url")
     parser.add_argument("--kessel-exe", type=Path, default=DEFAULT_KESSEL)
     args = parser.parse_args()
-    if not args.kessel_exe.is_file():
+    cloud_run_url = args.cloud_run_url
+    if cloud_run_url is None and CLOUD_RUN_URL_FILE.is_file():
+        cloud_run_url = CLOUD_RUN_URL_FILE.read_text(encoding="utf-8").strip()
+    if cloud_run_url and not cloud_run_url.startswith("https://"):
+        parser.error("Cloud Run URL must use HTTPS")
+    if not args.cloud_only and not args.kessel_exe.is_file():
         parser.error("Kessel executable is missing; pass --kessel-exe")
+    KesselUiHandler.cloud_run_url = cloud_run_url.rstrip("/") if cloud_run_url else None
 
     processes: list[subprocess.Popen[bytes]] = []
     server: ThreadingHTTPServer | None = None
     try:
-        for provider, port in PORTS.items():
+        for provider, port in () if args.cloud_only else PORTS.items():
             environment = os.environ.copy()
             environment.update(
-                {"PORT": str(port), "OPENAI_MODEL": "default", "LLM_TIMEOUT_SECONDS": "150"}
+                {
+                    "PORT": str(port),
+                    "OPENAI_MODEL": "default",
+                    "GEMINI_API_KEY": "",
+                    "LLM_TIMEOUT_SECONDS": "150",
+                }
             )
             process = subprocess.Popen(
                 [
@@ -161,7 +195,7 @@ def main() -> None:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), KesselUiHandler)
         url = f"http://127.0.0.1:{args.port}"
         print(f"SportsWatch MCP is ready at {url}")
-        print("Press Ctrl+C to stop the UI and its two local agents.")
+        print("Press Ctrl+C to stop the UI and any local agents.")
         if not args.no_browser:
             webbrowser.open(url)
         server.serve_forever()

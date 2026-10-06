@@ -8,6 +8,7 @@ const connection = document.querySelector("#connection");
 const connectionLabel = document.querySelector("#connection-label");
 const newSession = document.querySelector("#new-session");
 const providerSelect = document.querySelector("#provider");
+const cloudRunToggle = document.querySelector("#cloud-run-toggle");
 const modelSelect = document.querySelector("#model");
 const effortSelect = document.querySelector("#reasoning-effort");
 const traceContent = document.querySelector("#trace-content");
@@ -41,6 +42,7 @@ function createSession() {
 }
 
 function restoreRuntime() {
+  cloudRunToggle.checked = sessionStorage.getItem("sportswatch-cloud-run") === "true";
   const savedProvider = sessionStorage.getItem("sportswatch-provider");
   const savedModel = sessionStorage.getItem("sportswatch-model");
   const savedEffort = sessionStorage.getItem("sportswatch-effort");
@@ -49,6 +51,14 @@ function restoreRuntime() {
   if (["low", "medium", "high", "xhigh"].includes(savedEffort)) {
     effortSelect.value = savedEffort;
   }
+  updateRuntimeControls();
+}
+
+function updateRuntimeControls() {
+  cloudRunToggle.disabled = busy;
+  providerSelect.disabled = busy || cloudRunToggle.checked;
+  modelSelect.disabled = busy || cloudRunToggle.checked;
+  effortSelect.disabled = busy || cloudRunToggle.checked;
 }
 
 function localDateIn(timezone) {
@@ -93,10 +103,12 @@ function setConnection(state, label) {
 
 async function checkHealth() {
   try {
-    const response = await fetch("/api/health", { cache: "no-store" });
+    const target = cloudRunToggle.checked ? "cloud" : "local";
+    const response = await fetch(`/api/health?target=${target}`, { cache: "no-store" });
     const health = await response.json();
-    if (health.providers?.[providerSelect.value] !== true) throw new Error("unavailable");
-    setConnection("online", `${providerSelect.value} ready`);
+    const selected = cloudRunToggle.checked ? "cloud" : providerSelect.value;
+    if (health.providers?.[selected] !== true) throw new Error("unavailable");
+    setConnection("online", cloudRunToggle.checked ? "Cloud Run ready" : `${selected} ready`);
   } catch {
     setConnection("offline", "API unavailable");
   }
@@ -411,14 +423,15 @@ async function sendQuery(text) {
   query.disabled = true;
   send.disabled = true;
   newSession.disabled = true;
-  providerSelect.disabled = true;
+  updateRuntimeControls();
   appendMessage("user", text.trim());
   query.value = "";
   characterCount.value = "0";
   const pending = appendSkeleton();
-  const selectedProvider = providerSelect.value;
-  const selectedModel = modelSelect.value.trim() || "default";
-  const selectedEffort = effortSelect.value;
+  const useCloudRun = cloudRunToggle.checked;
+  const selectedProvider = useCloudRun ? "Cloud Run" : providerSelect.value;
+  const selectedModel = useCloudRun ? "gemini-3.8-flash" : modelSelect.value.trim() || "default";
+  const selectedEffort = useCloudRun ? "low" : effortSelect.value;
   const started = performance.now();
   showRunningTrace(selectedProvider, selectedModel, selectedEffort);
 
@@ -431,9 +444,12 @@ async function sendQuery(text) {
       body: JSON.stringify({
         query: text.trim(),
         session_id: sessionId,
-        provider: selectedProvider,
-        model: selectedModel,
-        reasoning_effort: selectedEffort,
+        target: useCloudRun ? "cloud" : "local",
+        ...(useCloudRun ? {} : {
+          provider: selectedProvider,
+          model: selectedModel,
+          reasoning_effort: selectedEffort,
+        }),
       }),
       signal: controller.signal,
     });
@@ -448,7 +464,7 @@ async function sendQuery(text) {
     pending.remove();
     appendMessage("assistant", data.response, { label: `${selectedProvider} / ${selectedModel} / ${selectedEffort}` });
     showTrace(data.activity, selectedProvider, selectedModel, selectedEffort, elapsed);
-    setConnection("online", `${selectedProvider} ready`);
+    setConnection("online", useCloudRun ? "Cloud Run ready" : `${selectedProvider} ready`);
     sessionTag.textContent = "In conversation";
   } catch (error) {
     const elapsed = performance.now() - started;
@@ -457,7 +473,7 @@ async function sendQuery(text) {
     appendMessage(
       "assistant",
       timedOut
-        ? "The local research request timed out. Check the gateway and try again."
+        ? "The research request timed out. Check the selected service and try again."
         : `The request could not be completed. ${error.message}`,
       { error: true, label: "Not completed" },
     );
@@ -469,7 +485,7 @@ async function sendQuery(text) {
     query.disabled = false;
     send.disabled = false;
     newSession.disabled = false;
-    providerSelect.disabled = false;
+    updateRuntimeControls();
     query.focus();
   }
 }
@@ -528,6 +544,13 @@ for (const control of [providerSelect, modelSelect, effortSelect]) {
 }
 
 providerSelect.addEventListener("change", () => {
+  startNewConversation();
+  void checkHealth();
+});
+
+cloudRunToggle.addEventListener("change", () => {
+  sessionStorage.setItem("sportswatch-cloud-run", String(cloudRunToggle.checked));
+  updateRuntimeControls();
   startNewConversation();
   void checkHealth();
 });

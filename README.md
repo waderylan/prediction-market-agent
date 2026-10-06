@@ -93,7 +93,9 @@ uv sync --all-extras
 Copy-Item .env.example .env
 ```
 
-Set `OPENAI_API_KEY` in the ignored `.env`, then start the service:
+Set `GEMINI_API_KEY` in the ignored `.env` to use Gemini through the Google LangChain integration.
+`GEMINI_MODEL` defaults to `gemini-3.8-flash`. A nonempty Gemini key takes precedence over
+`OPENAI_API_KEY`, which remains available for OpenAI and local Kessel checks. Then start the service:
 
 ```powershell
 uv run python main.py
@@ -124,9 +126,18 @@ lifetime.
 
 ### Inspection UI
 
+This browser UI was built for fun as an optional local development workbench. It is not part of
+Assignment 1, is not required for grading, and is not deployed to Cloud Run. The assignment
+submission is the FastAPI/LangGraph service and its `POST /chat` endpoint.
+
 ```powershell
 uv run python scripts/run_kessel_ui.py
 ```
+
+The optional **Use Cloud Run** switch sends browser requests through the local UI proxy to the
+deployed service. `deploy.ps1` and `deploy.sh` save the live URL in the ignored `.cloud-run-url`
+file. For a cloud-only workbench, run `uv run python scripts/run_kessel_ui.py --cloud-only`.
+If the URL changes, update that local file or pass `--cloud-run-url` when launching the UI.
 
 This starts SportsWatch MCP at `http://127.0.0.1:3000` and two local agents through the already-running
 Kessel gateway. In the browser, choose NFL, MLB, or NCAA football and a date to ask who's playing.
@@ -242,10 +253,26 @@ $kessel = (Resolve-Path ..\..\kessel\.venv\Scripts\kessel.exe).Path
 The API is then at `http://127.0.0.1:8090`. This Host override is only needed for this local
 Docker Desktop path; omit it for ordinary model endpoints and deployment.
 
-Cloud Run deployment uses one worker and `--max-instances 1` so the assignment's in-process session
-memory remains coherent within the service instance. Deployment requires an Artifact Registry
-image and runtime environment variables. The local Codex gateway and local credentials never enter
-the image. The live Cloud Run URL is a remaining submission deliverable.
+For Cloud Run, create a project under the Gmail account that redeemed the course coupon and link
+that project to the coupon's billing account. Install and authenticate the Google Cloud CLI with
+that account. Set `GEMINI_API_KEY` in the ignored `.env`, then deploy from Windows PowerShell:
+
+```powershell
+.\deploy.ps1 -ProjectId YOUR_PROJECT_ID
+```
+
+On Bash, use `./deploy.sh YOUR_PROJECT_ID`. Both scripts enable the required APIs, create the
+`sportswatch` Artifact Registry repository if needed, build the Dockerfile with Cloud Build,
+and deploy `csci599-a1` to `us-west1` with 512 MiB of memory, zero
+minimum instances, and one maximum instance. They pass only the Gemini model settings and an
+optional Tavily key from `.env` to Cloud Run. `.gcloudignore` limits the build upload to the
+Docker inputs; `.env`, backup files, browser UI, and local credentials are not uploaded or baked
+into the image. After deployment, send `POST /chat` requests to the printed service URL.
+
+Cloud Run deployment uses one worker and `--max-instances 1` so in-process session memory remains coherent
+within the running instance. Scale-to-zero or instance replacement can still erase that memory,
+as permitted by the assignment. The deployed URL is saved only in the ignored `.cloud-run-url`
+file; enter it in the Brightspace URL field when submitting.
 
 Public market, ESPN, and MLB StatsAPI requests require no account credentials. Model inference,
 Cloud Run, Cloud Build, Artifact Registry storage, and keyed Tavily searches can incur provider
@@ -276,26 +303,29 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Q[Question and session context] --> R[Reason about required sources]
-    R --> D[Discover exact game and market candidates]
-    D --> I{One identity established?}
-    I -->|No| C[Return choices or clarification]
-    I -->|Yes| E[Run independent detail calls concurrently]
-    E --> H[Validate typed evidence and matching report]
-    H --> W[Optional bounded web research]
-    W --> O[Source-attributed answer]
-    H --> O
+    Q[User query and session context] --> A[Agent entry]
+    A --> R[LLM reasoning step]
+    R --> T{Select a tool?}
+    T -->|Yes| C[MCP tools/call]
+    C --> S[MCP server response]
+    S --> V[Validate evidence and exact game identity]
+    V --> Y[LLM synthesis step]
+    Y -->|Another tool needed| R
+    T -->|No tool needed| Y
+    Y -->|Answer ready| O[Final response]
 ```
 
 ```mermaid
 flowchart LR
-    ENV[Runtime environment variables] --> APP[Containerized FastAPI service]
-    IMG[Non-root image with 4 MCP servers] --> APP
-    APP --> EXT[Public data providers and model API]
-    IMG -. publish target .-> AR[Artifact Registry]
-    AR -. deployment target .-> CR[Cloud Run, one instance]
-    CR -. exposes .-> URL[Public POST /chat URL]
-    DEV[Local Codex gateway] -. development only .-> APP
+    ENV[Local ignored .env] --> DEV[Local Docker test]
+    DEV --> APP[FastAPI and 4 MCP processes]
+    ENV --> SHELL[Deploy script shell variables]
+    SRC[Dockerfile and source] --> BUILD[Cloud Build Docker image]
+    BUILD --> AR[Artifact Registry]
+    AR --> CR[Cloud Run service, max 1 instance]
+    SHELL -->|set-env-vars| CR
+    CR --> URL[Live POST /chat URL]
+    CR --> EXT[Gemini API and public data providers]
 ```
 
 ## Assignment context

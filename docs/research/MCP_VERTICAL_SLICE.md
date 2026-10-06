@@ -126,8 +126,9 @@ real-market value; the primary model may explain but cannot upgrade an ambiguous
 
 ## Local development and deployment
 
-The local UI starts the HTTP application and an optional host Codex gateway. The gateway
-only supplies model decisions. The application still owns memory and MCP calls.
+The browser UI was built for fun as an optional local workbench. It is outside the Assignment 1
+submission and Cloud Run deployment. It starts the HTTP application and an optional host Codex
+gateway. The gateway only supplies model decisions. The application still owns memory and MCP calls.
 CLI authentication remains outside the container.
 
 The repository sports-information skill provides a second local test surface for Codex clients

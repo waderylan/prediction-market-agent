@@ -20,6 +20,10 @@ API usage, deployment status, costs, and architecture diagrams remain in the rep
 | Cloud deployment | The Docker image is designed for Google Cloud Run. A live URL remains required for submission. |
 | Testing | Unit, integration, stdio, bounded live-provider, and optional real-model suites cover the application and MCP boundaries. |
 
+The browser inspection UI is an optional project built for fun. It is a local development
+workbench, not an Assignment 1 requirement or part of the Cloud Run deployment. Grading uses the
+FastAPI `POST /chat` service.
+
 ## Repository deliverables
 
 - `main.py`: application entry point.
@@ -43,7 +47,8 @@ API usage, deployment status, costs, and architecture diagrams remain in the rep
 - Deploy the image to Cloud Run with one worker and `--max-instances 1`.
 - Verify the public `POST /chat` endpoint with a new session and a same-session follow-up.
 - Confirm the submitted source archive excludes `.env`, credentials, caches, virtual
-  environments, and local build artifacts.
+  environments, local build artifacts, and the optional browser workbench (`web/` and
+  `scripts/run_kessel_ui.py` / `scripts/run_chat_ui.py`).
 - Confirm the final submission includes the live service URL, source archive, README, diagrams,
   and Rylan Wade's completed `PROCESS_LOG.md`.
 

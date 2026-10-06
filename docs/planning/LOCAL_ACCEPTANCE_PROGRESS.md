@@ -3,6 +3,9 @@
 Scope: local agent, all four MCP services, browser inspection UI, and Docker parity. Cloud Run
 deployment and the watch branch remain separate work.
 
+The browser inspection UI was built for fun. It is optional local tooling, not part of the
+Assignment 1 submission or Cloud Run service. Its checks helped inspect the required agent path.
+
 ## Completed
 
 ### Kessel browser workbench — 2026-10-01

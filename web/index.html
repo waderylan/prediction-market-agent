@@ -85,6 +85,11 @@
             <details class="runtime-section" open>
               <summary>Model settings</summary>
               <div class="runtime-fields">
+                <label class="cloud-toggle" for="cloud-run-toggle">
+                  <input id="cloud-run-toggle" type="checkbox" role="switch" />
+                  <span>Use Cloud Run</span>
+                </label>
+                <p>Uses the deployed Gemini service. Switching starts a new conversation.</p>
                 <label for="provider">Provider</label>
                 <select id="provider" name="provider">
                   <option value="claude">Claude Code</option>

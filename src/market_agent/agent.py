@@ -63,6 +63,12 @@ Answer a narrow question directly with the minimum useful tools. For a broad gam
 one exact game, then gather the useful combination of current game state, a summary box score,
 both market platforms, and at most two focused research searches. Independent searches may run
 together, but detail and research calls must wait for identifiers and exact game identity.
+Do not call Kalshi or Polymarket for a game, injury, or news request that does not ask about
+markets or contracts. Use market tools only when the request needs market evidence.
+For a game-specific injury or news request with no market question, establish the matchup through
+sports_state_find_games and sports_state_get_game_state, then use Tavily. If those game tools cannot
+establish one exact game, ask for clarification. Do not use market tools as a substitute game
+picker.
 Never put a Tavily call in the same assistant tool-call batch as the game-state or market-detail
 call establishing that identity. Wait for the detail result, then copy its fields into Tavily.
 Organize a broad brief around the game, current state, requested statistics, prediction markets,
@@ -793,11 +799,13 @@ class ChatAgent:
         connect: ToolConnection = market_tools,
         *,
         model_timeout: float = 60,
+        parallel_tool_calls_option: bool = True,
     ) -> None:
         self.model = model
         self.connect = connect
         self.memory = InMemorySaver()
         self.model_timeout = model_timeout
+        self.parallel_tool_calls_option = parallel_tool_calls_option
         # Fixed-size synchronization only. Conversation state lives exclusively in LangGraph.
         self._locks = [asyncio.Lock() for _ in range(32)]
         self._capacity = asyncio.Semaphore(4)
@@ -811,9 +819,12 @@ class ChatAgent:
     ) -> Any:
         by_name = {tool.name: tool for tool in tools}
         turn_prompt = SYSTEM_PROMPT + "\n" + _source_availability_message(tools)
-        bound_model = (
-            self.model.bind_tools(tools, parallel_tool_calls=True) if tools else self.model
-        )
+        if tools and self.parallel_tool_calls_option:
+            bound_model = self.model.bind_tools(tools, parallel_tool_calls=True)
+        elif tools:
+            bound_model = self.model.bind_tools(tools)
+        else:
+            bound_model = self.model
         model_options = {
             key: value
             for key, value in {

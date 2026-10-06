@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import FastAPI
+from langchain_core.language_models import BaseChatModel
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,31 +40,53 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
         if agent is None:
             settings = load_settings()
             configure_logging(settings.log_level)
-            # Own these clients per lifespan; SDK defaults cache pools across event loops.
-            headers = {"Host": settings.openai_host_header} if settings.openai_host_header else {}
-            http_client = DefaultHttpxClient(headers=headers)
-            http_async_client = DefaultAsyncHttpxClient(headers=headers)
-            model = ChatOpenAI(
-                model=settings.openai_model,
-                api_key=settings.openai_api_key,
-                base_url=str(settings.openai_base_url),
-                reasoning_effort="low",
-                timeout=settings.llm_timeout_seconds,
-                max_retries=0,
-                max_completion_tokens=2000,
-                use_responses_api=False,
-                http_client=http_client,
-                http_async_client=http_async_client,
+            http_client = None
+            http_async_client = None
+            model: BaseChatModel
+            if settings.use_gemini:
+                model = ChatGoogleGenerativeAI(
+                    model=settings.model_name,
+                    api_key=settings.model_api_key,
+                    vertexai=False,
+                    reasoning_effort="low",
+                    timeout=settings.llm_timeout_seconds,
+                    max_retries=0,
+                    max_output_tokens=2000,
+                )
+            else:
+                # Own these clients per lifespan; SDK defaults cache pools across event loops.
+                headers = (
+                    {"Host": settings.openai_host_header} if settings.openai_host_header else {}
+                )
+                http_client = DefaultHttpxClient(headers=headers)
+                http_async_client = DefaultAsyncHttpxClient(headers=headers)
+                model = ChatOpenAI(
+                    model=settings.model_name,
+                    api_key=settings.model_api_key,
+                    base_url=str(settings.openai_base_url),
+                    reasoning_effort="low",
+                    timeout=settings.llm_timeout_seconds,
+                    max_retries=0,
+                    max_completion_tokens=2000,
+                    use_responses_api=False,
+                    http_client=http_client,
+                    http_async_client=http_async_client,
+                )
+            app.state.agent = ChatAgent(
+                model,
+                model_timeout=settings.llm_timeout_seconds,
+                parallel_tool_calls_option=not settings.use_gemini,
             )
-            app.state.agent = ChatAgent(model, model_timeout=settings.llm_timeout_seconds)
         else:
             app.state.agent = agent
         try:
             yield
         finally:
             if agent is None:
-                await http_async_client.aclose()
-                http_client.close()
+                if http_async_client is not None:
+                    await http_async_client.aclose()
+                if http_client is not None:
+                    http_client.close()
 
     app = FastAPI(title="SportsWatch MCP", lifespan=lifespan)
 

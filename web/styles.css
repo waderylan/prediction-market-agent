@@ -301,6 +301,8 @@ a:focus-visible {
 }
 
 .runtime-fields { margin-top: 16px; }
+.runtime-fields .cloud-toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.runtime-fields .cloud-toggle input { width: 17px; min-width: 17px; height: 17px; margin: 0; accent-color: var(--accent); }
 .runtime-fields label:not(:first-child) { margin-top: 4px; }
 .runtime-fields p { margin: 7px 0 0; color: var(--light-muted); font-size: 10px; line-height: 1.45; }
 .runtime-fields code { color: var(--accent); }

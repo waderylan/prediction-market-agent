@@ -5,6 +5,10 @@ AI_TRANSCRIPT.md
 .env
 .env.*
 !.env.example
+.env~
+..env.un~
+.cloud-run-url
+.codex-tmp/
 
 # Python environments and caches
 .venv/
