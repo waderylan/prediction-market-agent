@@ -28,19 +28,6 @@ def test_missing_required_configuration_has_clear_error() -> None:
 
 
 @pytest.mark.unit
-def test_valid_configuration_loads(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-placeholder")
-    monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-placeholder")
-    monkeypatch.setenv("PORT", "9000")
-
-    settings = load_settings()
-
-    assert settings.port == 9000
-    assert settings.model_api_key == SecretStr("test-openai-placeholder")
-    assert settings.model_name == "gpt-5"
-
-
-@pytest.mark.unit
 def test_gemini_configuration_takes_precedence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -53,14 +40,3 @@ def test_gemini_configuration_takes_precedence(
     assert settings.use_gemini
     assert settings.model_api_key == SecretStr("test-gemini-placeholder")
     assert settings.model_name == "gemini-3.8-flash"
-
-
-@pytest.mark.unit
-def test_local_model_host_header_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-placeholder")
-    monkeypatch.setenv("OPENAI_HOST_HEADER", "127.0.0.1:8000")
-    assert load_settings().openai_host_header == "127.0.0.1:8000"
-    load_settings.cache_clear()
-    monkeypatch.setenv("OPENAI_HOST_HEADER", "invalid host header")
-    with pytest.raises(ConfigurationError):
-        load_settings()

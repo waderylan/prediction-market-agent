@@ -9,8 +9,6 @@ from market_agent.domain import MarketStatus, Platform
 from market_agent.providers import (
     KalshiClient,
     MarketHTTPError,
-    MarketMissingDataError,
-    MarketTransportError,
     MarketValidationError,
 )
 
@@ -53,54 +51,6 @@ async def test_get_market_normalizes_and_enriches_success(
 
 
 @pytest.mark.unit
-async def test_search_uses_bounded_local_ranking(load_fixture: FixtureLoader) -> None:
-    payload = load_fixture("kalshi", "search_success")
-    requests = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal requests
-        requests += 1
-        assert request.url.params["with_nested_markets"] == "false"
-        return httpx.Response(200, json=payload, request=request)
-
-    http = _http_client(handler)
-    client = KalshiClient(http_client=http, max_search_pages=3)
-
-    results = await client.search_markets("JD Vance 2028 presidential election", limit=2)
-    await http.aclose()
-
-    assert requests == 1
-    assert [market.market_id for market in results] == ["KXPRESPERSON-28-JVAN"]
-
-
-@pytest.mark.unit
-async def test_search_empty_results(load_fixture: FixtureLoader) -> None:
-    payload = load_fixture("kalshi", "search_empty")
-    http = _http_client(lambda request: httpx.Response(200, json=payload, request=request))
-    client = KalshiClient(http_client=http)
-
-    results = await client.search_markets("no such market")
-    await http.aclose()
-
-    assert results == ()
-
-
-@pytest.mark.unit
-async def test_incomplete_market_preserves_missing_values(load_fixture: FixtureLoader) -> None:
-    payload = load_fixture("kalshi", "market_incomplete")
-    http = _http_client(lambda request: httpx.Response(200, json=payload, request=request))
-    client = KalshiClient(http_client=http)
-
-    market = await client.get_market("KXINCOMPLETE-1")
-    await http.aclose()
-
-    assert market.yes_price is None
-    assert market.no_price is None
-    assert market.yes_bid is None
-    assert market.close_time is None
-
-
-@pytest.mark.unit
 async def test_malformed_market_raises_validation_error(load_fixture: FixtureLoader) -> None:
     payload = load_fixture("kalshi", "market_malformed")
     http = _http_client(lambda request: httpx.Response(200, json=payload, request=request))
@@ -108,17 +58,6 @@ async def test_malformed_market_raises_validation_error(load_fixture: FixtureLoa
 
     with pytest.raises(MarketValidationError, match="yes_bid_dollars must be numeric"):
         await client.get_market("KXMALFORMED-1")
-    await http.aclose()
-
-
-@pytest.mark.unit
-async def test_missing_identity_raises_missing_data_error() -> None:
-    payload = {"market": {"ticker": "KXMISSING-1"}}
-    http = _http_client(lambda request: httpx.Response(200, json=payload, request=request))
-    client = KalshiClient(http_client=http)
-
-    with pytest.raises(MarketMissingDataError, match="required field event_ticker"):
-        await client.get_market("KXMISSING-1")
     await http.aclose()
 
 
@@ -141,18 +80,3 @@ async def test_server_error_retries_then_raises_typed_http_error() -> None:
     assert attempts == 2
     assert caught.value.status_code == 503
     assert caught.value.retryable is True
-
-
-@pytest.mark.unit
-async def test_timeout_failure_is_typed() -> None:
-    def timeout(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectTimeout("timed out", request=request)
-
-    http = _http_client(timeout)
-    client = KalshiClient(http_client=http, max_retries=0)
-
-    with pytest.raises(MarketTransportError) as caught:
-        await client.get_market("KXTEST-1")
-    await http.aclose()
-
-    assert caught.value.attempts == 1

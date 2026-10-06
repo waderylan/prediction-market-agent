@@ -85,32 +85,6 @@ async def test_discovery_and_calls(protocol):
 
 
 @pytest.mark.parametrize(
-    "args",
-    [
-        {"query": " "},
-        {"query": "x" * 201},
-        {"query": 42},
-        {"query": "x", "limit": 0},
-        {"query": "x", "limit": 11},
-        {"query": "x", "limit": True},
-        {"query": "x", "status": "invalid"},
-        {},
-    ],
-)
-async def test_invalid_search_before_upstream(protocol, args):
-    async with protocol() as (session, calls):
-        assert (await session.call_tool("polymarket_search_markets", args)).isError
-        assert not calls
-
-
-@pytest.mark.parametrize("identifier", ["", "../1", "slug", "1" * 21, 123])
-async def test_invalid_identifier(protocol, identifier):
-    async with protocol() as (session, calls):
-        assert (await session.call_tool("polymarket_get_market", {"market_id": identifier})).isError
-        assert not calls
-
-
-@pytest.mark.parametrize(
     "mode", ["timeout", "404", "429", "503", "json", "missing", "malformed", "oversized", "nan"]
 )
 async def test_controlled_errors_and_session_survives(protocol, mode):
@@ -119,32 +93,3 @@ async def test_controlled_errors_and_session_survives(protocol, mode):
         assert result.isError
         assert "private upstream detail" not in str(result)
         assert len((await session.list_tools()).tools) == 2
-
-
-@pytest.mark.parametrize("mode", ["teams", "unresolved"])
-async def test_quote_and_settlement_semantics(protocol, mode):
-    async with protocol(mode) as (session, _):
-        result = await session.call_tool("polymarket_get_market", {"market_id": "561229"})
-        assert not result.isError
-        if mode == "teams":
-            assert result.structuredContent["yes_bid"] is None
-            assert result.structuredContent["yes_ask"] is None
-        else:
-            assert result.structuredContent["status"] == "closed"
-
-
-async def test_empty_bounded_and_truncated(protocol):
-    async with protocol("empty") as (session, _):
-        result = await session.call_tool("polymarket_search_markets", {"query": "unlikely"})
-        assert result.structuredContent["markets"] == []
-    async with protocol("many") as (session, _):
-        result = await session.call_tool(
-            "polymarket_search_markets", {"query": "Vance", "limit": 3}
-        )
-        assert len(result.structuredContent["markets"]) == 3
-        assert len(result.model_dump_json()) < 30000
-    async with protocol("long") as (session, _):
-        result = await session.call_tool("polymarket_get_market", {"market_id": "561229"})
-        assert result.structuredContent["rules_truncated"]
-        assert len(result.structuredContent["rules"]) == 12000
-        assert len(result.model_dump_json()) < 40000

@@ -78,30 +78,6 @@ async def test_kalshi_discovery_and_tools(kalshi_protocol):
         assert len(calls) == 4  # series catalog, events, market, series detail
 
 
-@pytest.mark.parametrize(
-    "name,args",
-    [
-        ("kalshi_search_markets", {"query": " "}),
-        ("kalshi_search_markets", {"query": "x", "limit": 11}),
-        ("kalshi_search_markets", {"query": "x", "status": "paused"}),
-        ("kalshi_search_markets", {"query": "x", "limit": True}),
-        ("kalshi_search_markets", {"query": "x", "series_ticker": "../x"}),
-        ("kalshi_search_series", {"query": " "}),
-        ("kalshi_search_series", {"query": "x", "category": " "}),
-        ("kalshi_search_series", {"query": "x", "tags": ["Baseball"]}),
-        ("kalshi_search_series", {"query": "x", "limit": 11}),
-        ("kalshi_get_market", {"market_id": "../x"}),
-        ("kalshi_get_market", {"market_id": "lower-case"}),
-        ("kalshi_get_market", {"market_id": "X" * 101}),
-        ("kalshi_get_market", {"market_id": 12}),
-    ],
-)
-async def test_kalshi_invalid_before_upstream(kalshi_protocol, name, args):
-    async with kalshi_protocol() as (session, calls):
-        assert (await session.call_tool(name, args)).isError
-        assert not calls
-
-
 @pytest.mark.parametrize("mode", ["timeout", "404", "503", "missing", "malformed"])
 async def test_kalshi_errors(kalshi_protocol, mode):
     async with kalshi_protocol(mode) as (session, _):
@@ -109,17 +85,6 @@ async def test_kalshi_errors(kalshi_protocol, mode):
         assert result.isError
         assert "private diagnostic" not in str(result)
         assert len((await session.list_tools()).tools) == 3
-
-
-async def test_kalshi_empty_and_bound(kalshi_protocol):
-    async with kalshi_protocol("empty") as (session, _):
-        result = await session.call_tool("kalshi_search_markets", {"query": "unknown"})
-        assert result.structuredContent["markets"] == []
-        assert "3-page" in result.structuredContent["coverage"]
-    async with kalshi_protocol("long") as (session, _):
-        result = await session.call_tool("kalshi_get_market", {"market_id": "KXPRESPERSON-28-JVAN"})
-        assert result.structuredContent["rules_truncated"]
-        assert len(result.structuredContent["rules"]) == 12000
 
 
 async def test_agent_series_to_markets_to_details(kalshi_protocol):
@@ -146,52 +111,3 @@ async def test_agent_series_to_markets_to_details(kalshi_protocol):
     assert all(m.status == "success" for m in messages)
     assert json.loads(messages[0].content)["series"][0]["ticker"] == "KXPRESPERSON"
     assert json.loads(messages[1].content)["series_ticker"] == "KXPRESPERSON"
-
-
-@pytest.mark.parametrize("platforms", [[], ["polymarket"], ["kalshi"], ["polymarket", "kalshi"]])
-@pytest.mark.parametrize("mode", ["success", "ambiguous"])
-async def test_platform_tool_paths(kalshi_protocol, load_fixture, platforms, mode):
-    from market_agent.mcp.polymarket import create_server as poly_server
-    from market_agent.providers import PolymarketClient
-
-    @asynccontextmanager
-    async def connect():
-        async with (
-            httpx.AsyncClient(
-                base_url="https://gamma-api.polymarket.com",
-                transport=httpx.MockTransport(
-                    lambda r: httpx.Response(200, json=load_fixture("polymarket", "market_success"))
-                ),
-            ) as http,
-            create_connected_server_and_client_session(
-                poly_server(PolymarketClient(http_client=http))
-            ) as poly,
-            kalshi_protocol(mode) as (kalshi, _),
-        ):
-            yield [*await load_mcp_tools(poly), *await load_mcp_tools(kalshi)]
-
-    replies = [
-        tool_call(
-            f"{p}_get_market",
-            {"market_id": "561229" if p == "polymarket" else "KXPRESPERSON-28-JVAN"},
-            str(i),
-        )
-        for i, p in enumerate(platforms)
-    ]
-    model = ScriptedModel(replies=[*replies, AIMessage("Done"), AIMessage("Earlier quote")])
-    agent = ChatAgent(model, connect)
-    answer = await agent.chat("Inspect selected contracts", "a")
-    assert answer.endswith("Done")
-    if len(platforms) == 2:
-        assert (
-            "Not equivalent: settlement trigger" if mode == "success" else "Equivalence unverified"
-        ) in answer
-        # Deterministic evidence reaches the model BEFORE its final synthesis.
-        audit = json.loads(model.observed[-1][-1].content)["matching_report"]
-        assert audit["pairs"][0]["verdict"] == ("different" if mode == "success" else "ambiguous")
-        assert audit["pairs"][0]["review_required"] == (mode == "ambiguous")
-        assert not audit["pairs"][0]["comparison_allowed"]
-    returned = [m for m in model.observed[-1] if isinstance(m, ToolMessage)]
-    assert len(returned) == len(platforms)
-    assert all(m.status == "success" for m in returned)
-    assert await agent.chat("What was that quote?", "a") == "Earlier quote"

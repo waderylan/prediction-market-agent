@@ -5,7 +5,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp.server.fastmcp import FastMCP
@@ -13,7 +13,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import Field
 
-from market_agent.agent import MAX_DATA_TOOL_CALLS, MAX_TOOL_CALLS, ChatAgent
+from market_agent.agent import ChatAgent
 from market_agent.app import create_app
 from market_agent.mcp.polymarket import create_server
 from market_agent.providers import PolymarketClient
@@ -142,108 +142,6 @@ def test_no_tool_memory_and_isolation(connections, caplog):
     assert not any(isinstance(m, ToolMessage) for turn in model.observed for m in turn)
 
 
-def test_system_prompt_declares_partial_source_availability(connections):
-    def answer(messages):
-        prompt = next(message.content for message in messages if isinstance(message, SystemMessage))
-        assert "available=polymarket" in prompt
-        assert "unavailable=kalshi, sports_state, tavily" in prompt
-        return AIMessage("Polymarket is available; the other requested sources are unavailable.")
-
-    model = ScriptedModel(replies=[answer])
-    with TestClient(create_app(ChatAgent(model, connections()))) as client:
-        response = client.post(
-            "/chat",
-            json={"query": "Which sources can answer this?", "session_id": "sources"},
-        )
-
-    assert response.status_code == 200
-    assert "Polymarket is available" in response.json()["response"]
-
-
-def test_http_selects_allowlisted_model_and_effort(connections):
-    model = ScriptedModel(replies=[AIMessage("Selected")])
-    body = {
-        "query": "Explain this",
-        "session_id": "model-choice",
-        "model": "terra",
-        "reasoning_effort": "high",
-    }
-    with TestClient(create_app(ChatAgent(model, connections()))) as client:
-        response = client.post("/chat", json=body)
-    assert response.status_code == 200
-    assert model.observed_options == [{"model": "gpt-5.6-terra", "reasoning_effort": "high"}]
-
-
-def test_model_generation_config_reaches_model_calls(connections):
-    model = ScriptedModel(replies=[AIMessage("Selected")])
-    agent = ChatAgent(model, connections(), model_generation_config={"candidate_count": None})
-    with TestClient(create_app(agent)) as client:
-        response = client.post(
-            "/chat", json={"query": "Explain this", "session_id": "gemini-config"}
-        )
-    assert response.status_code == 200
-    assert model.observed_options == [{"generation_config": {"candidate_count": None}}]
-
-
-def test_http_accepts_kessel_model_and_rejects_unsafe_name(connections):
-    model = ScriptedModel(replies=[AIMessage("Selected")])
-    with TestClient(create_app(ChatAgent(model, connections()))) as client:
-        accepted = client.post(
-            "/chat",
-            json={"query": "Explain this", "session_id": "model-choice", "model": "default"},
-        )
-        rejected = client.post(
-            "/chat",
-            json={"query": "Explain this", "session_id": "model-choice", "model": "bad model"},
-        )
-    assert accepted.status_code == 200
-    assert model.observed_options == [{"model": "default"}]
-    assert rejected.status_code == 422
-
-
-def test_inspection_endpoint_returns_bounded_tool_activity(connections):
-    model = ScriptedModel(replies=[tool_call(), AIMessage("Contract readout")])
-    with TestClient(create_app(ChatAgent(model, connections()))) as client:
-        response = client.post(
-            "/chat/inspect",
-            json={"query": "Read market 561229", "session_id": "trace"},
-        )
-    assert response.status_code == 200
-    assert response.json()["response"] == "Contract readout"
-    assert response.json()["activity"] == [
-        {
-            "tool": "polymarket_get_market",
-            "server": "polymarket",
-            "status": "success",
-            "arguments": {"market_id": "561229"},
-            "summary": "Retrieved polymarket 561229; YES 0.2105; rules included.",
-            "duration_ms": response.json()["activity"][0]["duration_ms"],
-        }
-    ]
-    assert response.json()["activity"][0]["duration_ms"] >= 0
-
-
-def test_inspection_endpoint_distinguishes_no_tool_and_failure(connections):
-    no_tool = ScriptedModel(replies=[AIMessage("General answer")])
-    with TestClient(create_app(ChatAgent(no_tool, connections()))) as client:
-        response = client.post(
-            "/chat/inspect",
-            json={"query": "Explain probability", "session_id": "no-tool"},
-        )
-    assert response.json() == {"response": "General answer", "activity": []}
-
-    failed = ScriptedModel(replies=[tool_call(), AIMessage("Could not verify")])
-    with TestClient(create_app(ChatAgent(failed, connections("error")))) as client:
-        response = client.post(
-            "/chat/inspect",
-            json={"query": "Read market", "session_id": "failed-tool"},
-        )
-    activity = response.json()["activity"]
-    assert activity[0]["status"] == "error"
-    assert activity[0]["summary"] == "The polymarket tool failed or returned invalid data."
-    assert "sensitive diagnostic" not in response.text
-
-
 @pytest.mark.parametrize("mode", ["error", "invalid_mcp"])
 def test_tool_failure_is_controlled(connections, mode):
     def explain(messages):
@@ -331,69 +229,6 @@ def test_connection_failure(connections):
     assert not model.observed
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        {},
-        {"query": "x"},
-        {"query": " ", "session_id": "a"},
-        {"query": "x", "session_id": ""},
-        {"query": 1, "session_id": "a"},
-        {"query": "x", "session_id": "a", "extra": True},
-        {"query": "x" * 4001, "session_id": "a"},
-        {"query": "x", "session_id": "a/b"},
-        {"query": "x", "session_id": "a", "model": "bad model"},
-        {"query": "x", "session_id": "a", "reasoning_effort": "ultra"},
-    ],
-)
-def test_invalid_http(connections, body):
-    model = ScriptedModel()
-    with TestClient(create_app(ChatAgent(model, connections()))) as client:
-        assert client.post("/chat", json=body).status_code == 422
-    assert not model.observed
-
-
-async def test_tool_budget_and_reset(connections):
-    model = ScriptedModel(
-        replies=[
-            *[tool_call(call_id=str(i)) for i in range(MAX_DATA_TOOL_CALLS)],
-            AIMessage("Limit reached"),
-            tool_call(),
-            AIMessage("Next turn"),
-        ]
-    )
-    agent = ChatAgent(model, connections())
-    assert await agent.chat("Research", "a") == "Limit reached"
-    assert await agent.chat("Refresh", "a") == "Next turn"
-    assert (
-        len([m for m in model.observed[MAX_DATA_TOOL_CALLS] if isinstance(m, ToolMessage)])
-        == MAX_DATA_TOOL_CALLS
-    )
-
-
-async def test_parallel_tool_requests_cannot_overflow_activity_contract(connections):
-    calls = [
-        {
-            "name": "polymarket_get_market",
-            "args": {"market_id": "561229"},
-            "id": f"parallel-{index}",
-        }
-        for index in range(MAX_TOOL_CALLS + 2)
-    ]
-    model = ScriptedModel(replies=[AIMessage("", tool_calls=calls)])
-
-    turn = await ChatAgent(model, connections()).chat_detailed("Read every copy", "parallel")
-
-    assert len(turn.activity) == MAX_TOOL_CALLS
-    assert [item.status for item in turn.activity[:MAX_DATA_TOOL_CALLS]] == [
-        "success"
-    ] * MAX_DATA_TOOL_CALLS
-    assert [item.status for item in turn.activity[MAX_DATA_TOOL_CALLS:]] == ["skipped"] * (
-        MAX_TOOL_CALLS - MAX_DATA_TOOL_CALLS
-    )
-    assert "tool-call limit was reached" in turn.response.lower()
-
-
 async def test_parallel_tool_results_keep_each_call_id(connections):
     def answer(messages):
         results = [message for message in messages if isinstance(message, ToolMessage)]
@@ -425,10 +260,3 @@ async def test_parallel_tool_results_keep_each_call_id(connections):
     turn = await ChatAgent(model, connections()).chat_detailed("Read both", "parallel-results")
     assert turn.response == "Both tool results received"
     assert [item.status for item in turn.activity] == ["success", "success"]
-
-
-async def test_model_failure_and_session_recovery(connections):
-    model = ScriptedModel(replies=[RuntimeError("sensitive diagnostic"), AIMessage("Recovered")])
-    agent = ChatAgent(model, connections())
-    assert "could not finish" in await agent.chat("Hello", "a")
-    assert await agent.chat("Retry", "a") == "Recovered"

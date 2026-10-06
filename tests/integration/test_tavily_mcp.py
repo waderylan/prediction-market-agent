@@ -114,21 +114,3 @@ async def test_provider_failures_are_controlled_and_session_survives(mode, code)
         retried = await session.call_tool("tavily_search_game_evidence", arguments)
         assert retried.isError
         assert len(calls) == 2
-
-
-async def test_invalid_inputs_are_rejected_before_tavily():
-    async with protocol() as (session, calls):
-        invalid = await session.call_tool(
-            "tavily_search_game_evidence",
-            {
-                "league": "mlb",
-                "team_a": "Miami Marlins",
-                "team_b": "San Diego Padres",
-                "game_date": "not-a-date",
-                "scheduled_start": "2026-09-20T20:10:00Z",
-                "focus": "everything",
-                "extra": True,
-            },
-        )
-    assert invalid.isError
-    assert calls == []

@@ -39,13 +39,13 @@ elapsed = time.perf_counter() - started
 activity = result["activity"]
 log(f"[received] {elapsed:.1f}s total, {len(activity)} tool call(s)")
 for call in activity:
-    log(
-        f"  - {call['server']}.{call['tool']} {call['status']} "
-        f"{call['duration_ms'] / 1000:.1f}s"
-    )
+    log(f"  - {call['server']}.{call['tool']} {call['status']} {call['duration_ms'] / 1000:.1f}s")
 if activity:
     tool_time = sum(call["duration_ms"] for call in activity) / 1000
-    log(f"[time] tools {tool_time:.1f}s (summed), model + overhead {max(elapsed - tool_time, 0):.1f}s")
+    log(
+        f"[time] tools {tool_time:.1f}s (summed), "
+        f"model + overhead {max(elapsed - tool_time, 0):.1f}s"
+    )
 log("")
 sys.stdout.reconfigure(encoding="utf-8")
 print(result["response"])
