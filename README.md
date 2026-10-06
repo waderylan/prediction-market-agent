@@ -1,206 +1,127 @@
 # SportsWatch MCP
 
-> Sports research that knows whether every source is talking about the same game.
+Sports scores, prediction-market prices, and game news live in different systems. A team name
+is often enough to find a plausible result, but it is not enough to prove that a score, two
+contracts, and an article describe the same game. I built SportsWatch to make that check before
+an agent combines the sources in an answer.
 
-SportsWatch MCP turns one game into a connected, source-checked research thread. Start with the score,
-drill into a player or play, inspect Kalshi and Polymarket, then check the news around the game
-without rebuilding the context in every tab.
+The service follows MLB, NFL, and NCAA Division I football games across live state, box scores,
+player statistics, play history, Kalshi, Polymarket, and current reporting. It keeps the game in
+the conversation, so a follow-up can move from a score to a player or a contract without asking
+the user to start over. It is read-only: no trades, account access, betting picks, or model-made
+win probabilities.
 
-The application covers MLB, NFL, and NCAA Division I football. It resolves the exact game before
-combining sources, so a similar matchup name or stale snapshot does not quietly become part of the
-answer.
+## What the agent does differently
 
-## Follow one game across every source
+1. **It resolves the event before joining data.** SportsWatch compares league, teams, date,
+   scheduled start, and game number where available. Doubleheaders and similarly named matchups
+   stay separate. Provider IDs remain in their own namespaces.
+2. **It checks contracts in code.** A deterministic matcher checks the named outcome, full-game
+   scope, postponement window, cancellation payout, and complete supplied rules. It returns
+   `equivalent`, `different`, or `ambiguous`. The model can explain that verdict but cannot
+   promote an ambiguous pair into an equivalent one. A final sporting result does not establish
+   prediction-market settlement.
+3. **It keeps evidence attached to its source.** Scores, quotes, and articles retain separate
+   observation times. Tool output and search snippets are untrusted input; typed validation and
+   game-identity checks run before the model uses them. Missing evidence stays missing in the
+   answer.
 
-A research thread can move through questions like these without starting over:
-
-1. "What's happening in the Yankees game?"
-2. "Show me the pitchers and the last five plays."
-3. "How are Kalshi and Polymarket pricing it?"
-4. "Do those contracts actually settle under the same rules?"
-5. "Any lineup or injury news that changes the context?"
-
-SportsWatch MCP keeps the selected game attached to the thread. A direct question receives a direct
-answer. A broad request can expand into a sourced brief with game state, statistics, market
-snapshots, contract terms, and current reporting.
-
-## The hard part is joining evidence safely
-
-Fetching a score is straightforward. The failure-prone step is deciding whether a scoreboard
-event, two market contracts, and a news report describe the same game under the same conditions.
-SportsWatch MCP makes that decision before it writes the answer.
-
-| Research problem | SportsWatch MCP response |
-|---|---|
-| Providers use different IDs and team labels | Discover the event through each provider and validate league, participants, date, and scheduled start |
-| Scores, quotes, and articles arrive at different times | Keep each observation separate and show its retrieval or quote time |
-| Two contracts have similar headlines | Check named outcomes and available settlement terms before comparing prices |
-| One provider is unavailable | Name the missing source and return a useful answer from the evidence that passed validation |
-
-You can keep asking questions without losing track of what each source actually proved.
-A sporting result does not establish prediction-market settlement. A market price is not an
-independent forecast. Missing timestamps, incomplete rules, and weak research evidence stay visible
-in the answer.
-
-## Questions it handles
-
-- What is the score, inning, count, or down and distance for this game?
-- Show the box score, one player's game line, or the latest five plays.
-- Find the Kalshi or Polymarket full-game-winner contract for this matchup.
-- Compare two market contracts when their event and settlement terms support comparison.
-- Build a sourced game brief with current state, market snapshots, injuries, lineups, weather, or
-  schedule news.
-
-SportsWatch MCP is read-only. It does not place orders, access market accounts, generate an independent
-win probability, or make betting picks.
+For example, a session can ask for a game score, then the last five plays, then both markets'
+prices, then whether the contracts settle under the same terms. A narrow question uses only the
+sources it needs. A full brief can chain calls across all four MCP servers.
 
 ## System design
 
-The primary product is a FastAPI service backed by a LangGraph reasoning loop. LangGraph owns
-session memory, source availability, tool budgets, host-side schema validation, and final answer
-synthesis. Four independent MCP servers expose focused, typed tools:
+Four independent MCP servers expose typed tools through real `tools/list` discovery and
+`tools/call` invocation. These servers are written in this repository; the external services
+provide data, not the MCP transport.
 
-| Source | Responsibility |
-|---|---|
-| Kalshi MCP | Sports contract discovery, exact contract detail, prices, rules, links, and settlement fields |
-| Polymarket MCP | Sports contract discovery through Gamma, exact detail, prices, rules, links, and settlement fields |
-| Sports-state MCP | Exact-game state, box scores, player game statistics, and bounded play history |
-| Tavily MCP | At most two identity-bound searches for injuries, lineups, weather, schedule changes, game news, or recaps |
+| Server | Why it exists |
+| --- | --- |
+| Sports-state MCP | Resolves an exact game, then returns state, box scores, player lines, and bounded play history. ESPN public JSON is primary; MLB StatsAPI is an MLB-only fallback. |
+| Kalshi MCP | Finds sports contracts and returns provider-backed prices, rules, and settlement fields for an exact ticker. |
+| Polymarket MCP | Finds Gamma sports markets and returns exact market detail by returned numeric ID. |
+| Tavily MCP | Adds bounded, game-specific reporting after the game identity is established. |
 
-Independent calls from one reasoning step execute concurrently. Identifier-dependent detail and
-research calls wait until discovery establishes the required identity. Each turn allows eight
-market or sports-state calls and two Tavily searches.
+LangGraph handles model-driven tool choice and session memory through `InMemorySaver`. The host
+validates each tool result and computes market-to-market and market-to-game checks before final
+synthesis. Independent calls in one reasoning step can run concurrently; a detail call waits for
+the identifier returned by discovery. Each turn is capped at eight market or state calls and two
+Tavily searches.
 
-FastAPI opens and discovers the four stdio MCP sessions concurrently when a container starts.
-Requests reuse those sessions and the model client. A transport failure removes only the affected
-source from new turns; its session is closed by its owning task and reconnected without a heartbeat
-or idle polling. Tool execution errors and invalid responses remain controlled per tool call.
+FastAPI discovers the four stdio servers concurrently when a container starts and reuses those
+sessions across requests. A closed transport removes only that server from new turns and is
+reconnected after active turns release it. Tool errors and malformed responses are handled per
+call. There is no background keepalive.
 
-### Trust boundaries
+The sports-state interface includes `sports_state_find_games`, `sports_state_get_game_state`,
+`sports_state_get_box_score`, `sports_state_list_players`, `sports_state_get_player_stats`, and
+`sports_state_get_play_by_play`. Market discovery and detail use `kalshi_search_markets`,
+`kalshi_search_series`, `kalshi_get_market`, `polymarket_search_markets`, and
+`polymarket_get_market`. Research uses `tavily_search_game_evidence`. Returned `game_ref`, player
+IDs, market IDs, and tickers are opaque; callers pass them to detail tools unchanged.
 
-- ESPN public JSON is the primary sports-state source. It is free, unauthenticated, undocumented,
-  and has no SLA.
-- MLB StatsAPI is an MLB-only fallback after exact game identity checks. NFL and NCAA football do
-  not receive a substituted fallback.
-- Market prices are provider observations, not model forecasts. Quote time and retrieval time are
-  different fields.
-- Tavily titles and snippets are bounded, untrusted evidence. They cannot establish structured
-  game state, contract equivalence, or settlement.
-- Contract rules are also untrusted input. Truncated or differing rules cannot support a complete
-  equivalence decision.
+### Data boundaries
+
+- ESPN public JSON is undocumented and has no SLA. MLB StatsAPI is only a fallback for MLB after
+  exact game checks; there is no substituted NFL or college football feed.
+- A market price is a provider observation, not an independent forecast. Quote time and
+  retrieval time are different clocks. Game completion does not imply contract settlement.
+- Search snippets cannot prove a score, contract equivalence, or settlement rule. Truncated or
+  differing rules leave a comparison `ambiguous` unless an explicit conflict proves it
+  `different`.
+- Matching currently covers supported full-game winner contracts. Spreads, totals, props,
+  futures, and partial-game winners need different identity and settlement checks.
+
+## Measured behavior
+
+| Check | Observation |
+| --- | --- |
+| Warm Cloud Run no-tool chat | 13.54s before instance-owned MCP sessions; 2.09s after. One sample per revision. |
+| First chat after scale-to-zero | 24.52s. Keeping zero minimum instances trades cold-start time for zero idle compute billing. |
+| Four simultaneous no-tool chats | All returned HTTP 200 in 4.16–4.47s each. |
+| Memory after startup and concurrent checks | About 374 MiB sampled against a 1 GiB limit; no OOM or 429 in 12 new-revision probes. |
+
+These timings include network and Gemini time and are not a latency guarantee. The
+[measurement report](docs/research/PERFORMANCE_VERIFICATION.md) records the queries, local stub
+measurements, chained tool checks, memory sampling limits, and cost configuration. Tests also
+kill a real MCP child process during a call, verify the other three servers remain usable, and
+check that the failed server reconnects.
 
 ## Run locally
 
-Requirements: Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). The deployed model defaults to
+Gemini 3.8 Flash at low reasoning effort. `OPENAI_API_KEY` and an OpenAI-compatible base URL are
+available for local alternatives; a nonempty Gemini key takes precedence. `TAVILY_API_KEY` is
+optional.
 
 ```powershell
 uv sync --all-extras
 Copy-Item .env.example .env
 ```
 
-Set `GEMINI_API_KEY` in the ignored `.env` to use Gemini through the Google LangChain integration.
-`GEMINI_MODEL` defaults to `gemini-3.8-flash`. A nonempty Gemini key takes precedence over
-`OPENAI_API_KEY`, which remains available for OpenAI and local Kessel checks. Then start the service:
+Set `GEMINI_API_KEY` in the ignored `.env`, then start the service:
 
 ```powershell
 uv run python main.py
 ```
 
-The application listens on `0.0.0.0:$PORT`, with port 8080 as the default. Interactive API
-documentation is available at `/docs`.
-
-### API
-
-```http
-POST /chat
-Content-Type: application/json
-
-{
-  "query": "Give me a sourced Yankees game brief",
-  "session_id": "sports-1"
-}
-```
-
-```json
-{"response":"..."}
-```
-
-Reuse a session ID for follow-ups. Use a new, unguessable ID for a separate conversation. Session
-IDs are not authentication, and the in-memory LangGraph checkpointer lasts for the process
-lifetime.
-
-### Inspection UI
-
-This browser UI was built for fun as an optional local development workbench. It is not part of
-Assignment 1, is not required for grading, and is not deployed to Cloud Run. The assignment
-submission is the FastAPI/LangGraph service and its `POST /chat` endpoint.
+The API binds to `0.0.0.0` and reads `PORT` (default 8080). `POST /chat` takes `query` and
+`session_id` and returns `response`:
 
 ```powershell
-uv run python scripts/run_kessel_ui.py
+$body = @{ query = "What's the Yankees score?"; session_id = "demo-1" } | ConvertTo-Json
+Invoke-RestMethod http://127.0.0.1:8080/chat -Method Post -ContentType application/json -Body $body
 ```
 
-The optional **Use Cloud Run** switch sends browser requests through the local UI proxy to the
-deployed service. `deploy.ps1` and `deploy.sh` save the live URL in the ignored `.cloud-run-url`
-file. For a cloud-only workbench, run `uv run python scripts/run_kessel_ui.py --cloud-only`.
-If the URL changes, update that local file or pass `--cloud-run-url` when launching the UI.
+Reuse the session ID for follow-ups. `/chat/inspect` accepts the same body and adds bounded tool
+activity; `/health` reports service health. Session IDs are not authentication. Memory lasts for
+the running instance and is lost when Cloud Run scales to zero or replaces it.
 
-This starts SportsWatch MCP at `http://127.0.0.1:3000` and two local agents through the already-running
-Kessel gateway. In the browser, choose NFL, MLB, or NCAA football and a date to ask who's playing.
-Enter a team or matchup for score, box score, recent plays, player stats, market, or full-brief
-questions. Each action drafts a question you can edit before sending. Follow-up questions use the same
-conversation. The model settings select Claude Code or Codex and a model name (`default` uses
-Kessel's provider default); switching providers starts a new conversation. The trace shows MCP
-calls, arguments, outcomes, and elapsed time.
-Kessel injects its key into the agent processes; the browser never receives it. Pass
-`--kessel-exe PATH` if Kessel is installed elsewhere. The UI and both agent APIs bind to localhost.
-The application still owns LangGraph memory and MCP execution. Kessel is a local development
-backend and is not included in the Docker image or Cloud Run deployment.
+An optional local browser workbench in `scripts/run_kessel_ui.py` provides editable game
+questions and an activity trace. It is not part of the Cloud Run image.
 
-To verify Kessel's streamed parallel tool-call protocol for either route, launch
-`scripts/check_kessel_parallel.py` through `kessel run --provider claude --` or
-`kessel run --provider codex --`. The script assembles streamed calls by index and returns one
-tool result per ID without printing the key.
-
-## Test the MCP workflow in Codex
-
-The repository includes [the sports-information skill](.agents/skills/sports-information/SKILL.md).
-Codex discovers it from the repository and uses the configured `kalshi`, `polymarket`,
-`sports_state`, and `tavily` MCP connections.
-
-```powershell
-codex exec '$sports-information Find today''s MLB games in UTC. Use sports state only.'
-```
-
-This path is a direct MCP test surface. It checks tool discovery, routing instructions, schemas,
-and provider behavior inside a normal Codex conversation. It does not exercise the application's
-LangGraph memory, host-side deterministic matcher, per-turn budgets, or `/chat` contract. The
-FastAPI and LangGraph path remains the product and assignment implementation.
-
-## MCP tool surface
-
-| Tool | Purpose |
-|---|---|
-| `kalshi_search_markets` | Find Kalshi candidates by ordinary team or matchup text |
-| `kalshi_search_series` | Narrow discovery with an exact Kalshi sports series |
-| `kalshi_get_market` | Retrieve one returned Kalshi ticker |
-| `polymarket_search_markets` | Find Polymarket candidates by ordinary team or matchup text |
-| `polymarket_get_market` | Retrieve one returned numeric Gamma market ID |
-| `sports_state_find_games` | Resolve one game by query, league, local date, and IANA timezone |
-| `sports_state_get_game_state` | Read score, lifecycle, and sport-specific situation |
-| `sports_state_get_box_score` | Read a summary, full layout, or one box-score section |
-| `sports_state_list_players` | List players with provider-backed game-stat lines |
-| `sports_state_get_player_stats` | Read one returned player's game statistics |
-| `sports_state_get_play_by_play` | Read a chronological, paged window of plays |
-| `tavily_search_game_evidence` | Search current evidence for one established game identity |
-
-Market IDs, `game_ref`, player IDs, and play IDs are opaque. Consumers copy returned values
-unchanged. Sports discovery supports full-game winners; spreads, totals, props, partial-game
-winners, series, and futures require separate schemas and settlement rules.
-
-## Verification
-
-The default test suite uses recorded HTTP fixtures and scripted model decisions while exercising
-real in-memory MCP sessions:
+### Verify
 
 ```powershell
 uv run pytest -m "not live_smoke"
@@ -209,170 +130,110 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
-The [adversarial testing report](docs/research/ADVERSARIAL_TESTING_REPORT.md) maps failure classes
-and retained unit tests to the behavior they protect.
+Recorded fixtures and scripted model decisions keep the default suite independent of paid
+model calls. Opt-in provider and real-model checks live in `tests/live/`. The
+[adversarial test report](docs/research/ADVERSARIAL_TESTING_REPORT.md) covers transport closure,
+tool errors, invalid responses, and provider failures.
 
-Bounded public-provider checks are opt-in:
+## Deploy and cost
 
-```powershell
-$env:RUN_LIVE_SMOKE = "1"
-uv run pytest tests/live
-Remove-Item Env:RUN_LIVE_SMOKE
-```
-
-The live checks accept empty slates and evidence sets. They validate schemas and bounded provider
-behavior without assuming that a specific game or market is open. Real-model checks are separate:
-set `RUN_LIVE_AGENT=1` and run `tests/live/test_chat_live.py` with a configured model backend.
-
-For a named game, check the current stdio sports-state server and every supported box-score view:
-
-```powershell
-uv run python scripts/check_live_sports.py --game nfl:Steelers:2026-10-01 --game mlb:Phillies:2026-10-01
-```
-
-Use `--game ncaa_football:all:YYYY-MM-DD` to sample a college game on a known slate. The command
-fails on an empty slate or tool error and prints only a compact result for each selected game.
-
-## Container and Cloud Run
+The multi-stage Docker image uses locked Python dependencies, runs as a non-root user, and needs
+no Node runtime. For a local container check:
 
 ```powershell
 docker build -t sportswatch-mcp:local .
 docker run --rm -p 8080:8080 --env-file .env sportswatch-mcp:local
 ```
 
-The multi-stage image installs locked runtime dependencies, runs as UID 10001, and includes all
-four Python MCP processes. It requires no Node runtime.
+With Google Cloud CLI authenticated and `GCP_PROJECT_ID` and `GEMINI_API_KEY` set in the ignored
+`.env`, deploy with `bash deploy.sh YOUR_PROJECT_ID` on Bash or `.\deploy.ps1 -ProjectId YOUR_PROJECT_ID`
+on PowerShell. The scripts build through Cloud Build, store the image in Artifact Registry, and
+deploy one FastAPI worker to Cloud Run in `us-west1`. Runtime secrets are passed from the local
+environment; they are not baked into the image. The live URL is stored only in ignored
+`.cloud-run-url`.
 
-For a **local Docker test through Kessel** on Docker Desktop, launch the container from `kessel run`
-so Docker inherits the key without printing it. Kessel accepts loopback Host headers, so set
-`OPENAI_HOST_HEADER` for the container's `host.docker.internal` route:
-
-```powershell
-$kessel = (Resolve-Path ..\..\kessel\.venv\Scripts\kessel.exe).Path
-& $kessel run --provider claude -- docker run --rm -p 127.0.0.1:8090:8080 `
-  -e OPENAI_API_KEY -e OPENAI_MODEL=default `
-  -e OPENAI_BASE_URL=http://host.docker.internal:8000/v1/claude `
-  -e OPENAI_HOST_HEADER=127.0.0.1:8000 sportswatch-mcp:local
-```
-
-The API is then at `http://127.0.0.1:8090`. This Host override is only needed for this local
-Docker Desktop path; omit it for ordinary model endpoints and deployment.
-
-For Cloud Run, create a project under the Gmail account that redeemed the course coupon and link
-that project to the coupon's billing account. Install and authenticate the Google Cloud CLI with
-that account. Set `GEMINI_API_KEY` in the ignored `.env`, then deploy from Windows PowerShell:
-
-```powershell
-.\deploy.ps1 -ProjectId YOUR_PROJECT_ID
-```
-
-On Bash, use `./deploy.sh YOUR_PROJECT_ID`. Both scripts enable the required APIs, create the
-`sportswatch` Artifact Registry repository if needed, build the Dockerfile with Cloud Build,
-and deploy `csci599-a1` to `us-west1` with 1 GiB of memory, one vCPU, four concurrent
-requests per instance, zero minimum instances, and one maximum instance. They pass only the
-Gemini model settings and an optional Tavily key from `.env` to Cloud Run. `.gcloudignore` limits the build upload to the
-Docker inputs; `.env`, backup files, browser UI, and local credentials are not uploaded or baked
-into the image. After deployment, send `POST /chat` requests to the printed service URL.
-
-Cloud Run deployment uses one worker and `--max-instances 1` so in-process session memory remains coherent
-within the running instance. Scale-to-zero or instance replacement can still erase that memory,
-as permitted by the assignment. The deployed URL is saved only in the ignored `.cloud-run-url`
-file; enter it in the Brightspace URL field when submitting.
-
-Request-based billing and zero minimum instances keep idle Cloud Run compute charges at zero.
-Persistent MCP sessions last only while an instance exists; they do not poll or keep it running.
-The 1 GiB limit provides headroom for the Python app and its four MCP child processes. The
-four-request concurrency setting matches the agent's own active-turn limit and should be reduced
-if measured peak memory approaches 1 GiB. Startup, request time, image storage, and external APIs
-can still cost money. At the October 2026 Tier 1 list rates, 1 vCPU and 1 GiB cost about
-$0.0000265 per active second before Cloud Run's monthly free tier; 1,000 sequential two-second
-requests would be about $0.053 of gross Cloud Run compute. Gemini 3.8 Flash paid pricing is
-$0.75 per million input tokens and $3.75 per million output tokens, including thinking tokens.
-Check the Gemini key's billing tier and credit eligibility separately. See
-[Cloud Run pricing](https://cloud.google.com/run/pricing),
-[Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing), and
-[Gemini billing](https://ai.google.dev/gemini-api/docs/billing/).
-
-Public market, ESPN, and MLB StatsAPI requests require no account credentials. Model inference,
-Cloud Run, Cloud Build, Artifact Registry storage, and keyed Tavily searches can incur provider
-charges. The service performs no continuous polling or background research.
+The deployed service uses request-based billing, 1 vCPU, 1 GiB, concurrency 4, zero minimum
+instances, and one maximum instance. It can scale to zero with no idle compute charge; no
+process polls while idle. At the October 2026 Tier 1 list rates, active Cloud Run time is
+$0.000024 per vCPU-second plus $0.0000025 per GiB-second, before the monthly free tier.
+Startup and shutdown are billable time; request fees, image storage, builds, and network use
+can add charges. [Cloud Run pricing](https://cloud.google.com/run/pricing)
+has the current rates. Gemini 3.8 Flash was $0.75 per million input tokens and $3.75 per million
+output tokens, including thinking tokens, through December 2026. A tool-using answer may make
+several model calls. Check the [current Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing)
+and your key's billing tier. Public sports and market reads need no account key; keyed Tavily
+searches have separate usage limits and possible charges.
 
 ## Architecture
 
+### 1. System
+
 ```mermaid
 flowchart LR
-    U[User] -->|query and session_id| F[FastAPI POST /chat]
-    F --> G[LangGraph agent]
-    G <--> L[Configured LLM]
+    U[User] --> API[FastAPI POST /chat]
+    API --> G[LangGraph agent]
+    G <--> L[Gemini or configured model]
     G <--> M[InMemorySaver]
-    G --> V[Host validation and deterministic matching]
-    G --> MP[Instance-owned MCP session pool]
-    MP --> A[MCP client adapter]
-    A <--> K[Kalshi MCP]
-    A <--> P[Polymarket MCP]
-    A <--> S[Sports-state MCP]
-    A <--> T[Tavily MCP]
+    G --> V[Typed validation and contract matcher]
+    G <--> C[MCP client and instance session pool]
+    C <--> K[Kalshi MCP]
+    C <--> P[Polymarket MCP]
+    C <--> S[Sports-state MCP]
+    C <--> T[Tavily MCP]
     K --> KA[Kalshi API]
     P --> PA[Polymarket Gamma API]
-    S --> ESPN[ESPN public JSON]
-    S -. MLB fallback .-> MLB[MLB StatsAPI]
-    T --> TA[Tavily Search API]
-    G --> F
-    F --> U
+    S --> E[ESPN public JSON]
+    S -. MLB fallback .-> B[MLB StatsAPI]
+    T --> TA[Tavily API]
+    G --> API
+    API --> U
 ```
+
+### 2. Tool invocation
 
 ```mermaid
 flowchart LR
-    Q[User query and session context] --> A[Agent entry]
-    A --> R[LLM reasoning step]
-    D[MCP tools/list at instance startup] -. discovered tools .-> R
-    R --> T{Select a tool?}
-    T -->|Yes| C[MCP tools/call]
+    D[Startup: MCP tools/list] -. discovered tools .-> R[LLM reasoning]
+    Q[Query and session context] --> A[Agent entry]
+    A --> R
+    R --> X{Tool needed?}
+    X -->|No| O[Final response]
+    X -->|Yes| C[MCP tools/call]
     C --> S[MCP server response]
-    C -->|Transport failure| F[Hide affected source; reconnect after active turns]
+    C -->|Transport closed| F[Hide source and reconnect]
     F -. next turn .-> R
-    S --> V[Validate evidence and exact game identity]
-    V --> Y[LLM synthesis step]
-    Y -->|Another tool needed| R
-    T -->|No tool needed| Y
-    Y -->|Answer ready| O[Final response]
+    S --> V[Validate typed evidence and game identity]
+    V --> Y[LLM synthesis]
+    Y -->|More evidence needed| R
+    Y -->|Ready| O
 ```
+
+### 3. Deployment
 
 ```mermaid
 flowchart LR
-    ENV[Local ignored .env] --> DEV[Local Docker test]
-    DEV --> APP[FastAPI and 4 MCP processes]
-    ENV --> SHELL[Deploy script shell variables]
-    SRC[Dockerfile and source] --> BUILD[Cloud Build Docker image]
+    ENV[Ignored local .env] --> DEV[Local Docker test]
+    DEV --> APP[FastAPI and four MCP processes]
+    APP --> GEM[Gemini API]
+    ENV --> SH[Deploy script shell variables]
+    SRC[Dockerfile and source] --> BUILD[Cloud Build image]
     BUILD --> AR[Artifact Registry]
-    AR --> CR[Cloud Run service, 1 GiB, concurrency 4, min 0, max 1]
-    SHELL -->|set-env-vars| CR
+    AR --> CR[Cloud Run: 1 vCPU, 1 GiB, min 0, max 1]
+    SH -->|set-env-vars| CR
     CR --> URL[Live POST /chat URL]
-    CR --> EXT[Gemini API and public data providers]
+    CR --> GEM
+    CR --> EXT[Public data providers]
 ```
 
-## Assignment context
+## References
 
-This repository implements CSCI 599 Assignment 1: a deployed tool-using agent with MCP integration
-and conversational memory. The product design extends the assignment's minimum contract with
-typed sports data, source provenance, deterministic market checks, and direct Codex testing.
-
-- [Assignment implementation and submission mapping](docs/assignment/IMPLEMENTATION_ALIGNMENT.md)
-- [Canonical assignment description](docs/assignment/Assignment_1_Description.md)
-- [Runtime architecture](docs/research/MCP_VERTICAL_SLICE.md)
-- [Testing strategy](docs/research/TESTING.md)
-- [Product scope](docs/planning/PROJECT_PROPOSAL.md)
-- [Implementation milestones](docs/planning/IMPLEMENTATION_PLAN.md)
-
-`PROCESS_LOG.md` is Rylan Wade's personal reflection. `AI_TRANSCRIPT.md` is separate development
-evidence governed by `AGENTS.md`; it does not replace personal authorship.
-
-## Technical references
-
-- [Sports market MCP design](docs/research/SPORTS_MCP.md)
-- [Sports-state MCP design](docs/research/GAME_STATE_MCP.md)
-- [Tavily research MCP design](docs/research/WEB_RESEARCH_MCP.md)
-- [Contract matching](docs/research/CONTRACT_MATCHING.md)
-- [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
-- [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview)
-- [FastAPI](https://fastapi.tiangolo.com/)
+The four MCP servers are implemented here over [Kalshi](https://docs.kalshi.com/),
+[Polymarket Gamma](https://docs.polymarket.com/market-data/overview),
+[ESPN public JSON](docs/research/GAME_STATE_MCP.md),
+[MLB StatsAPI](https://docs.statsapi.mlb.com/), and [Tavily](https://docs.tavily.com/).
+Implementation notes cover [contract matching](docs/research/CONTRACT_MATCHING.md),
+[sports-state design](docs/research/GAME_STATE_MCP.md), and
+[research boundaries](docs/research/WEB_RESEARCH_MCP.md). Framework references:
+[LangGraph](https://docs.langchain.com/oss/python/langgraph/overview),
+[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk), and
+[FastAPI](https://fastapi.tiangolo.com/).

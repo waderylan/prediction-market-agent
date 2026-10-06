@@ -25,16 +25,17 @@ def test_readme_documents_product_setup_limits_and_architecture():
     assert "ESPN public JSON" in readme
     assert "MLB StatsAPI" in readme
     assert "undocumented" in readme and "no SLA" in readme
-    assert "sporting result does not establish prediction-market settlement" in readme
+    assert "A final sporting result does not establish" in readme
+    assert "prediction-market settlement." in readme
     assert readme.count("```mermaid") == 3
     assert "Sports-state MCP" in readme
-    assert "Sports-state MCP design" in readme
+    assert "sports-state design" in readme
     assert "tavily_search_game_evidence" in readme
-    assert "Tavily research MCP design" in readme
-    assert "sports-information skill" in readme
-    assert "FastAPI and LangGraph path remains the product" in readme
+    assert "research boundaries" in readme
+    assert "/chat/inspect" in readme
+    assert "LangGraph handles model-driven tool choice" in readme
     assert "uv run python main.py" in readme
-    assert "Cloud Run deployment uses one worker" in readme
+    assert "one FastAPI worker" in readme
     assert "ADVERSARIAL_TESTING_REPORT.md" in readme
 
 
