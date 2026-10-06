@@ -105,7 +105,7 @@ Set `GEMINI_API_KEY` in the ignored `.env`, then start the service:
 uv run python main.py
 ```
 
-A local detour: [Kessel](https://github.com/waderylan/kessel) can run this agent through a
+For local use, [Kessel](https://github.com/waderylan/kessel) can run this agent through a
 Codex or Claude Code login.
 
 The API binds to `0.0.0.0` and reads `PORT` (default 8080). `POST /chat` takes `query` and
