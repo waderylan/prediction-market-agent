@@ -174,6 +174,17 @@ def test_http_selects_allowlisted_model_and_effort(connections):
     assert model.observed_options == [{"model": "gpt-5.6-terra", "reasoning_effort": "high"}]
 
 
+def test_model_generation_config_reaches_model_calls(connections):
+    model = ScriptedModel(replies=[AIMessage("Selected")])
+    agent = ChatAgent(model, connections(), model_generation_config={"candidate_count": None})
+    with TestClient(create_app(agent)) as client:
+        response = client.post(
+            "/chat", json={"query": "Explain this", "session_id": "gemini-config"}
+        )
+    assert response.status_code == 200
+    assert model.observed_options == [{"generation_config": {"candidate_count": None}}]
+
+
 def test_http_accepts_kessel_model_and_rejects_unsafe_name(connections):
     model = ScriptedModel(replies=[AIMessage("Selected")])
     with TestClient(create_app(ChatAgent(model, connections()))) as client:

@@ -12,7 +12,7 @@ from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 from pydantic import BaseModel, ConfigDict, Field
 
 from market_agent.agent import ChatAgent, ToolActivity
-from market_agent.config import load_settings
+from market_agent.config import Settings, load_settings
 from market_agent.logging import configure_logging
 from market_agent.mcp.pool import MCPToolPool
 
@@ -35,6 +35,21 @@ class ChatInspectionResponse(ChatResponse):
     activity: list[ToolActivity]
 
 
+def _gemini_model(settings: Settings) -> ChatGoogleGenerativeAI:
+    return ChatGoogleGenerativeAI(
+        model=settings.model_name,
+        api_key=settings.model_api_key,
+        vertexai=False,
+        thinking_level="low",
+        temperature=None,
+        top_p=None,
+        top_k=None,
+        timeout=settings.llm_timeout_seconds,
+        max_retries=0,
+        max_output_tokens=2000,
+    )
+
+
 def create_app(agent: ChatAgent | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -45,16 +60,11 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
             http_async_client = None
             pool = MCPToolPool()
             model: BaseChatModel
+            model_generation_config = None
             if settings.use_gemini:
-                model = ChatGoogleGenerativeAI(
-                    model=settings.model_name,
-                    api_key=settings.model_api_key,
-                    vertexai=False,
-                    reasoning_effort="low",
-                    timeout=settings.llm_timeout_seconds,
-                    max_retries=0,
-                    max_output_tokens=2000,
-                )
+                model = _gemini_model(settings)
+                # The adapter otherwise sends candidate_count=1 to Gemini 3.x.
+                model_generation_config = {"candidate_count": None}
             else:
                 # Own these clients per lifespan; SDK defaults cache pools across event loops.
                 headers = (
@@ -79,6 +89,7 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
                 model,
                 pool.tools,
                 model_timeout=settings.llm_timeout_seconds,
+                model_generation_config=model_generation_config,
                 parallel_tool_calls_option=not settings.use_gemini,
                 transport_failure=pool.transport_failed,
             )

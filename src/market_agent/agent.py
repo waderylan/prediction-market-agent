@@ -804,6 +804,7 @@ class ChatAgent:
         connect: ToolConnection = market_tools,
         *,
         model_timeout: float = 60,
+        model_generation_config: dict[str, Any] | None = None,
         parallel_tool_calls_option: bool = True,
         transport_failure: Callable[[str], None] | None = None,
     ) -> None:
@@ -811,6 +812,7 @@ class ChatAgent:
         self.connect = connect
         self.memory = InMemorySaver()
         self.model_timeout = model_timeout
+        self.model_generation_config = model_generation_config
         self.parallel_tool_calls_option = parallel_tool_calls_option
         self.transport_failure = transport_failure
         # Fixed-size synchronization only. Conversation state lives exclusively in LangGraph.
@@ -842,6 +844,7 @@ class ChatAgent:
             for key, value in {
                 "model": model_name,
                 "reasoning_effort": reasoning_effort,
+                "generation_config": self.model_generation_config,
             }.items()
             if value is not None
         }
