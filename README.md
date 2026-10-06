@@ -105,6 +105,11 @@ Set `GEMINI_API_KEY` in the ignored `.env`, then start the service:
 uv run python main.py
 ```
 
+Local shortcut: [Kessel](https://github.com/waderylan/kessel) runs the same agent through an
+existing Codex or Claude Code login. Leave `GEMINI_API_KEY` empty, set `OPENAI_MODEL=default` in
+`.env`, and launch with `kessel run --provider codex -- uv run python main.py` (or use `claude` as
+the provider). Kessel supplies the local API URL and key to the app.
+
 The API binds to `0.0.0.0` and reads `PORT` (default 8080). `POST /chat` takes `query` and
 `session_id` and returns `response`:
 
@@ -119,10 +124,6 @@ the running instance and is lost when Cloud Run scales to zero or replaces it.
 
 An optional local browser workbench in `scripts/run_kessel_ui.py` provides editable game
 questions and an activity trace. It is not part of the Cloud Run image.
-
-`chat.py` is a small command-line client for local testing only: `python chat.py "your prompt" 7`
-sends the prompt to the deployed service (URL read from ignored `.cloud-run-url`) under session
-`7` and prints the response, tool calls, and timings.
 
 ### Verify
 
