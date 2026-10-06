@@ -105,10 +105,8 @@ Set `GEMINI_API_KEY` in the ignored `.env`, then start the service:
 uv run python main.py
 ```
 
-Local shortcut: [Kessel](https://github.com/waderylan/kessel) runs the same agent through an
-existing Codex or Claude Code login. Leave `GEMINI_API_KEY` empty, set `OPENAI_MODEL=default` in
-`.env`, and launch with `kessel run --provider codex -- uv run python main.py` (or use `claude` as
-the provider). Kessel supplies the local API URL and key to the app.
+A local detour: [Kessel](https://github.com/waderylan/kessel) can run this agent through a
+Codex or Claude Code login.
 
 The API binds to `0.0.0.0` and reads `PORT` (default 8080). `POST /chat` takes `query` and
 `session_id` and returns `response`:
