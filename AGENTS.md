@@ -108,5 +108,6 @@ For every qualifying event entry:
 - Do not claim that code, tests, tools, deployment, or verification worked unless the relevant action was actually performed and inspected.
 - Do not fabricate personal experiences, prompts, lessons, or reflections for `PROCESS_LOG.md`; ask Rylan Wade when personal input is required.
 - Preserve user-authored and unrelated changes.
+- `chat.py` in the repository root is a local-testing-only client for the deployed `POST /chat/inspect` endpoint. It reads the URL from the gitignored `.cloud-run-url` file and must never contain a URL or key. It is not part of the graded service or the README.
 - Keep `CLAUDE.md` as the single-line import `@AGENTS.md`.
 - Keep project behavior and documentation aligned with `docs/assignment/Assignment_1_Description.md`.

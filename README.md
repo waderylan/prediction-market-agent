@@ -121,6 +121,10 @@ the running instance and is lost when Cloud Run scales to zero or replaces it.
 An optional local browser workbench in `scripts/run_kessel_ui.py` provides editable game
 questions and an activity trace. It is not part of the Cloud Run image.
 
+`chat.py` is a small command-line client for local testing only: `python chat.py "your prompt" 7`
+sends the prompt to the deployed service (URL read from ignored `.cloud-run-url`) under session
+`7` and prints the response, tool calls, and timings.
+
 ### Verify
 
 ```powershell
