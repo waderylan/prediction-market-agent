@@ -71,6 +71,11 @@ Independent calls from one reasoning step execute concurrently. Identifier-depen
 research calls wait until discovery establishes the required identity. Each turn allows eight
 market or sports-state calls and two Tavily searches.
 
+FastAPI opens and discovers the four stdio MCP sessions concurrently when a container starts.
+Requests reuse those sessions and the model client. A transport failure removes only the affected
+source from new turns; its session is closed by its owning task and reconnected without a heartbeat
+or idle polling. Tool execution errors and invalid responses remain controlled per tool call.
+
 ### Trust boundaries
 
 - ESPN public JSON is the primary sports-state source. It is free, unauthenticated, undocumented,
@@ -263,9 +268,9 @@ that account. Set `GEMINI_API_KEY` in the ignored `.env`, then deploy from Windo
 
 On Bash, use `./deploy.sh YOUR_PROJECT_ID`. Both scripts enable the required APIs, create the
 `sportswatch` Artifact Registry repository if needed, build the Dockerfile with Cloud Build,
-and deploy `csci599-a1` to `us-west1` with 512 MiB of memory, zero
-minimum instances, and one maximum instance. They pass only the Gemini model settings and an
-optional Tavily key from `.env` to Cloud Run. `.gcloudignore` limits the build upload to the
+and deploy `csci599-a1` to `us-west1` with 1 GiB of memory, one vCPU, four concurrent
+requests per instance, zero minimum instances, and one maximum instance. They pass only the
+Gemini model settings and an optional Tavily key from `.env` to Cloud Run. `.gcloudignore` limits the build upload to the
 Docker inputs; `.env`, backup files, browser UI, and local credentials are not uploaded or baked
 into the image. After deployment, send `POST /chat` requests to the printed service URL.
 
@@ -273,6 +278,20 @@ Cloud Run deployment uses one worker and `--max-instances 1` so in-process sessi
 within the running instance. Scale-to-zero or instance replacement can still erase that memory,
 as permitted by the assignment. The deployed URL is saved only in the ignored `.cloud-run-url`
 file; enter it in the Brightspace URL field when submitting.
+
+Request-based billing and zero minimum instances keep idle Cloud Run compute charges at zero.
+Persistent MCP sessions last only while an instance exists; they do not poll or keep it running.
+The 1 GiB limit provides headroom for the Python app and its four MCP child processes. The
+four-request concurrency setting matches the agent's own active-turn limit and should be reduced
+if measured peak memory approaches 1 GiB. Startup, request time, image storage, and external APIs
+can still cost money. At the October 2026 Tier 1 list rates, 1 vCPU and 1 GiB cost about
+$0.0000265 per active second before Cloud Run's monthly free tier; 1,000 sequential two-second
+requests would be about $0.053 of gross Cloud Run compute. Gemini 3.8 Flash paid pricing is
+$0.75 per million input tokens and $3.75 per million output tokens, including thinking tokens.
+Check the Gemini key's billing tier and credit eligibility separately. See
+[Cloud Run pricing](https://cloud.google.com/run/pricing),
+[Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing), and
+[Gemini billing](https://ai.google.dev/gemini-api/docs/billing/).
 
 Public market, ESPN, and MLB StatsAPI requests require no account credentials. Model inference,
 Cloud Run, Cloud Build, Artifact Registry storage, and keyed Tavily searches can incur provider
@@ -287,7 +306,8 @@ flowchart LR
     G <--> L[Configured LLM]
     G <--> M[InMemorySaver]
     G --> V[Host validation and deterministic matching]
-    G --> A[MCP client adapter]
+    G --> MP[Instance-owned MCP session pool]
+    MP --> A[MCP client adapter]
     A <--> K[Kalshi MCP]
     A <--> P[Polymarket MCP]
     A <--> S[Sports-state MCP]
@@ -305,9 +325,12 @@ flowchart LR
 flowchart LR
     Q[User query and session context] --> A[Agent entry]
     A --> R[LLM reasoning step]
+    D[MCP tools/list at instance startup] -. discovered tools .-> R
     R --> T{Select a tool?}
     T -->|Yes| C[MCP tools/call]
     C --> S[MCP server response]
+    C -->|Transport failure| F[Hide affected source; reconnect after active turns]
+    F -. next turn .-> R
     S --> V[Validate evidence and exact game identity]
     V --> Y[LLM synthesis step]
     Y -->|Another tool needed| R
@@ -322,7 +345,7 @@ flowchart LR
     ENV --> SHELL[Deploy script shell variables]
     SRC[Dockerfile and source] --> BUILD[Cloud Build Docker image]
     BUILD --> AR[Artifact Registry]
-    AR --> CR[Cloud Run service, max 1 instance]
+    AR --> CR[Cloud Run service, 1 GiB, concurrency 4, min 0, max 1]
     SHELL -->|set-env-vars| CR
     CR --> URL[Live POST /chat URL]
     CR --> EXT[Gemini API and public data providers]

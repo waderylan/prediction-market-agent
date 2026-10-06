@@ -139,8 +139,9 @@ deployed product.
 
 The Docker image uses locked runtime dependencies, contains the four application MCP modules and
 their reference data, runs as a non-root user, and reads `PORT`.
-Cloud Run deployment is still required. A cloud-accessible backend, one worker, and one
-instance preserve the assignment's instance-lifetime memory expectation.
+The current service runs on Cloud Run with a cloud-accessible backend, one worker, and a maximum
+of one instance. Instance-owned MCP sessions and LangGraph memory last until Cloud Run recycles
+the instance.
 
 Primary framework references:
 [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk),

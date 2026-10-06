@@ -14,10 +14,10 @@ API usage, deployment status, costs, and architecture diagrams remain in the rep
 | LLM-powered agent | The FastAPI application invokes a configured chat model through a LangGraph reasoning loop. |
 | Model-driven tool choice | MCP tools are bound to the model; scripted tests verify routing and live-agent tests remain opt-in. |
 | At least two MCP servers | Four separate stdio servers provide Kalshi, Polymarket, sports-state, and bounded Tavily tools. |
-| Actual MCP integration | `langchain-mcp-adapters` performs MCP initialization, `tools/list`, and `tools/call`; application code does not call tool functions directly. |
+| Actual MCP integration | `langchain-mcp-adapters` performs MCP initialization, `tools/list`, and `tools/call`; FastAPI opens the four sessions concurrently at startup and reuses them for requests. |
 | Conversational memory | LangGraph `InMemorySaver` keys state by the caller's `session_id`. |
 | Required endpoint | `POST /chat` accepts `query` and `session_id` and returns one `response` string. |
-| Cloud deployment | The Docker image is designed for Google Cloud Run. A live URL remains required for submission. |
+| Cloud deployment | The Docker image runs on Google Cloud Run with request-based billing, 1 GiB memory, concurrency 4, zero minimum instances, and one maximum instance. The live URL is stored only in ignored `.cloud-run-url` for submission. |
 | Testing | Unit, integration, stdio, bounded live-provider, and optional real-model suites cover the application and MCP boundaries. |
 
 The browser inspection UI is an optional project built for fun. It is a local development
@@ -30,6 +30,7 @@ FastAPI `POST /chat` service.
 - `src/market_agent/app.py`: FastAPI request and response contract.
 - `src/market_agent/agent.py`: LangGraph workflow, memory, tool budgets, validation, matching,
   concurrent independent calls, and synthesis controls.
+- `src/market_agent/mcp/pool.py`: instance-owned MCP sessions and isolated transport recovery.
 - `src/market_agent/mcp/`: four student-authored MCP servers and their packaged manifest.
 - `tests/`: deterministic unit and integration coverage plus opt-in live checks.
 - `Dockerfile`: non-root production image containing the application and all MCP servers.

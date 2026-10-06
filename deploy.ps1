@@ -48,8 +48,8 @@ if (-not $existingRepository) {
 if ($LASTEXITCODE -ne 0) { throw 'Cloud Build failed.' }
 
 & gcloud run deploy $service --image $image --project $ProjectId --platform managed `
-    --region $region --allow-unauthenticated --memory 512Mi --min-instances 0 `
-    --max-instances 1 --set-env-vars $runtimeVars
+    --region $region --allow-unauthenticated --memory 1Gi --cpu 1 --concurrency 4 `
+    --min-instances 0 --max-instances 1 --set-env-vars $runtimeVars
 if ($LASTEXITCODE -ne 0) { throw 'Cloud Run deployment failed.' }
 
 $serviceUrl = & gcloud run services describe $service --project $ProjectId --region $region --format 'value(status.url)'

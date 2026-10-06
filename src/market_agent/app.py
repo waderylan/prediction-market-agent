@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from market_agent.agent import ChatAgent, ToolActivity
 from market_agent.config import load_settings
 from market_agent.logging import configure_logging
+from market_agent.mcp.pool import MCPToolPool
 
 
 class ChatRequest(BaseModel):
@@ -42,6 +43,7 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
             configure_logging(settings.log_level)
             http_client = None
             http_async_client = None
+            pool = MCPToolPool()
             model: BaseChatModel
             if settings.use_gemini:
                 model = ChatGoogleGenerativeAI(
@@ -72,10 +74,13 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
                     http_client=http_client,
                     http_async_client=http_async_client,
                 )
+            await pool.start()
             app.state.agent = ChatAgent(
                 model,
+                pool.tools,
                 model_timeout=settings.llm_timeout_seconds,
                 parallel_tool_calls_option=not settings.use_gemini,
+                transport_failure=pool.transport_failed,
             )
         else:
             app.state.agent = agent
@@ -83,6 +88,7 @@ def create_app(agent: ChatAgent | None = None) -> FastAPI:
             yield
         finally:
             if agent is None:
+                await pool.close()
                 if http_async_client is not None:
                     await http_async_client.aclose()
                 if http_client is not None:

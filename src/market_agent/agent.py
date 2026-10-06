@@ -195,7 +195,7 @@ ToolConnection = Callable[[], AbstractAsyncContextManager[list[BaseTool]]]
 
 @asynccontextmanager
 async def market_tools() -> AsyncIterator[list[BaseTool]]:
-    """Separate MCP processes with request-owned sessions and partial availability."""
+    """Open request-scoped MCP sessions for direct local tests."""
     connections = json.loads(files("market_agent.mcp").joinpath("servers.json").read_text())
     for connection in connections.values():
         connection["command"] = sys.executable
@@ -800,12 +800,14 @@ class ChatAgent:
         *,
         model_timeout: float = 60,
         parallel_tool_calls_option: bool = True,
+        transport_failure: Callable[[str], None] | None = None,
     ) -> None:
         self.model = model
         self.connect = connect
         self.memory = InMemorySaver()
         self.model_timeout = model_timeout
         self.parallel_tool_calls_option = parallel_tool_calls_option
+        self.transport_failure = transport_failure
         # Fixed-size synchronization only. Conversation state lives exclusively in LangGraph.
         self._locks = [asyncio.Lock() for _ in range(32)]
         self._capacity = asyncio.Semaphore(4)
@@ -936,6 +938,8 @@ class ChatAgent:
                         result = await tool.ainvoke(plan.call)
                     return result if isinstance(result, ToolMessage) else None
                 except Exception:
+                    if self.transport_failure is not None:
+                        self.transport_failure(_server_for_tool(name))
                     return None
                 finally:
                     plan.finished = time.perf_counter()

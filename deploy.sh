@@ -47,7 +47,9 @@ gcloud run deploy "$service" \
   --platform managed \
   --region "$region" \
   --allow-unauthenticated \
-  --memory 512Mi \
+  --memory 1Gi \
+  --cpu 1 \
+  --concurrency 4 \
   --min-instances 0 \
   --max-instances 1 \
   --set-env-vars "$runtime_vars"
