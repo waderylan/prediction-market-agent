@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from importlib.resources import files
 from typing import Any
 from uuid import uuid4
@@ -65,6 +65,11 @@ both market platforms, and at most two focused research searches. Independent se
 together, but detail and research calls must wait for identifiers and exact game identity.
 Do not call Kalshi or Polymarket for a game, injury, or news request that does not ask about
 markets or contracts. Use market tools only when the request needs market evidence.
+For a request about the most recent completed game or score, search exact local dates backward
+from today with sports_state_find_games, then read the chosen game with
+sports_state_get_game_state. An empty day does not identify the latest game. Do not jump to a
+remembered historical game or use a market listing as proof of a sporting result. If the bounded
+calls cannot establish which completed game is latest, say that the latest result is unverified.
 For a game-specific injury or news request with no market question, establish the matchup through
 sports_state_find_games and sports_state_get_game_state, then use Tavily. If those game tools cannot
 establish one exact game, ask for clarification. Do not use market tools as a substitute game
@@ -820,7 +825,12 @@ class ChatAgent:
         reasoning_effort: str | None = None,
     ) -> Any:
         by_name = {tool.name: tool for tool in tools}
-        turn_prompt = SYSTEM_PROMPT + "\n" + _source_availability_message(tools)
+        turn_prompt = (
+            SYSTEM_PROMPT
+            + f"\nCurrent UTC date and time: {datetime.now(UTC).isoformat()}"
+            + "\n"
+            + _source_availability_message(tools)
+        )
         if tools and self.parallel_tool_calls_option:
             bound_model = self.model.bind_tools(tools, parallel_tool_calls=True)
         elif tools:
