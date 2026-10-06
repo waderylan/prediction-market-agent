@@ -1,9 +1,9 @@
 # SportsWatch MCP
 
 Sports scores, prediction-market prices, and game news live in different systems. A team name
-is often enough to find a plausible result, but it is not enough to prove that a score, two
-contracts, and an article describe the same game. I built SportsWatch to make that check before
-an agent combines the sources in an answer.
+can retrieve plausible results, but does not establish that a score, two contracts, and an
+article describe the same game. SportsWatch verifies the event before the agent combines those
+sources in an answer.
 
 The service follows MLB, NFL, and NCAA Division I football games across live state, box scores,
 player statistics, play history, Kalshi, Polymarket, and current reporting. It keeps the game in
@@ -11,20 +11,19 @@ the conversation, so a follow-up can move from a score to a player or a contract
 the user to start over. It is read-only: no trades, account access, betting picks, or model-made
 win probabilities.
 
-## What the agent does differently
+## Evidence checks
 
-1. **It resolves the event before joining data.** SportsWatch compares league, teams, date,
-   scheduled start, and game number where available. Doubleheaders and similarly named matchups
-   stay separate. Provider IDs remain in their own namespaces.
-2. **It checks contracts in code.** A deterministic matcher checks the named outcome, full-game
+1. **Event identity.** SportsWatch compares league, teams, date, scheduled start, and game number
+   where available. Doubleheaders and similarly named matchups stay separate. Provider IDs remain
+   in their own namespaces.
+2. **Contract equivalence.** A deterministic matcher checks the named outcome, full-game
    scope, postponement window, cancellation payout, and complete supplied rules. It returns
    `equivalent`, `different`, or `ambiguous`. The model can explain that verdict but cannot
    promote an ambiguous pair into an equivalent one. A final sporting result does not establish
    prediction-market settlement.
-3. **It keeps evidence attached to its source.** Scores, quotes, and articles retain separate
-   observation times. Tool output and search snippets are untrusted input; typed validation and
-   game-identity checks run before the model uses them. Missing evidence stays missing in the
-   answer.
+3. **Source provenance.** Scores, quotes, and articles retain separate observation times. Tool
+   output and search snippets are untrusted input; typed validation and game-identity checks run
+   before the model uses them. Missing evidence is identified in the answer.
 
 For example, a session can ask for a game score, then the last five plays, then both markets'
 prices, then whether the contracts settle under the same terms. A narrow question uses only the
