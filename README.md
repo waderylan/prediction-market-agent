@@ -96,7 +96,9 @@ check that the failed server reconnects.
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). The deployed model defaults to
 Gemini 3.8 Flash at low reasoning effort. `OPENAI_API_KEY` and an OpenAI-compatible base URL are
 available for local alternatives; a nonempty Gemini key takes precedence. `TAVILY_API_KEY` is
-optional.
+optional; without it Tavily runs keyless and is rate limited after a few searches. The
+app forwards the key to the Tavily MCP subprocess explicitly, so a Cloud Run environment
+variable reaches it.
 
 ```powershell
 uv sync --all-extras

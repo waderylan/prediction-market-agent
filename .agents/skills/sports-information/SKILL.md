@@ -17,8 +17,9 @@ or the `POST /chat` contract.
   and play-by-play.
 - Use only Kalshi tools for a Kalshi request and only Polymarket tools for a Polymarket request.
 - Use both market servers only for an explicit comparison or broad game brief.
-- Use Tavily for injuries, lineups, weather, venue or schedule changes, game news, and postgame
-  recaps after one exact game is identified.
+- Use Tavily for injuries, roster moves (paternity list, injured list), lineups, weather, venue or schedule changes, game news, and postgame
+  recaps after one exact game is identified. Pass a short `topic_hint` for a specific subject and
+  never claim "none" unless a source says so.
 - For a broad game brief, use the useful combination of sports state, a summary box score, both
   market platforms, and no more than two focused Tavily searches. Skip a source that does not add
   information to the answer.

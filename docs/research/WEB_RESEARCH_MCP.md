@@ -24,28 +24,31 @@ tavily_search_game_evidence(
 )
 ```
 
-`league` is `mlb`, `nfl`, or `ncaa_football`. `focus` is `injuries`, `lineups`, `weather`,
-`venue_or_schedule`, `other_game_news`, or `postgame_recap`. `source_policy` is `all` or
-`official_only`; the latter restricts the Tavily request and retained results to league-official
+`league` is `mlb`, `nfl`, or `ncaa_football`. `focus` is `injuries`, `roster_moves`, `lineups`,
+`weather`, `venue_or_schedule`, `other_game_news`, or `postgame_recap`. `source_policy` is `all` or
+`official_only`; an optional `topic_hint` (two or three words, e.g. "paternity list") marks the
+subject the user asked about. `official_only` restricts the Tavily request and retained results to league-official
 domains. Both teams, the local game date, and timezone-aware
 scheduled start must be copied from a typed market or exact-game sports-detail result. The server, not the
 model, constructs the web query.
 
-The result contains at most five sources. Each source preserves title, public HTTPS URL,
-publication date when Tavily supplies one, retrieval time, bounded snippet, relevance score, and
-an `authority_tier` of `league_official`, `established_sports_media`, or `other`, plus the explicit
-`same_matchup_date` relationship. The tier is a small hostname-based ordering heuristic, not proof
-that a claim is correct. Retained title/snippet text must also contain terms relevant to the
-requested focus; a ticket, hotel, or generic event page does not become injury or lineup evidence
-merely because it names the matchup and date. `other_game_news` remains broad after the
-identity/date check. The relationship is deliberately weaker than proof of one game when the teams
-have a same-day doubleheader; the copied scheduled start remains visible for that distinction. The
-result also reports rejected-result count, coverage, request ID, source policy, official-source
-count, and an untrusted-content notice. `result_status` distinguishes retained evidence from
-`no_qualifying_sources`; `empty_reason` states which bounded filters produced the empty result.
+The result contains at most five sources, chosen from up to ten inspected results. Each source
+preserves title, public HTTPS URL, publication date when Tavily supplies one, retrieval time,
+bounded snippet, relevance score, and an `authority_tier`. The tier is a hostname-based ordering
+heuristic, not proof that a claim is correct. Every source also carries `team_match` (`both` or
+`one`), `date_match` (`exact` when the text or URL names the game date, `near_publication` when it
+was published within a few days of it), `topic_hint_match`, and a `relationship`: only `both` plus
+`exact` is `same_matchup_date`; everything else is `related_context` that may describe another game.
+Result-level `rejected_results` lists each dropped URL with a reason (`unsafe_url`, `duplicate`,
+`empty_text`, `no_team_match`, `no_date_match`, `focus_mismatch`, `not_official`, `over_limit`), and
+`empty_reason` summarizes the counts. When a `topic_hint` is given and no retained source mentions
+it, a `topic_hint_unmatched` caution tells the agent to say the topic could not be verified.
 Injury snippets that claim a return or activation carry an `evidence_cautions` entry requiring
-official transaction, lineup, or structured participation corroboration before the claim is
-presented as current fact.
+official transaction, lineup, or structured participation corroboration.
+
+The query uses short names (nickname in MLB/NFL, school in college football), no quotes, the focus
+phrase, the topic hint, and the local date. News-style focuses use Tavily's `news` topic. Team
+matching uses the catalog aliases and drops any alias shared with another team in the league.
 
 `game_date` is the provider-established local calendar date, while `scheduled_start` is the exact
 UTC instant used by the host identity gate. The tool does not receive the game's IANA timezone, so
@@ -58,15 +61,16 @@ date for a September 22 evening game. The exact UTC start remains present in the
 - The graph permits eight market/state attempts plus at most two Tavily searches per turn.
 - Research is rejected before MCP invocation unless league, the unordered participant pair, local
   game date, and scheduled start match a typed detail observation from the same turn.
-- One tool call makes one basic Tavily request for exactly five results. Official-only requests add
+- One tool call makes one basic Tavily request for up to ten results. Official-only requests add
   the selected league's official domain to the provider request and apply the same restriction
   locally. Raw page content, generated
   answers, images, crawl, map, research, and arbitrary extraction are disabled.
-- The server retains only HTTPS results that mention both teams and the exact requested date and
-  whose title/snippet matches the requested evidence focus. Duplicate URLs, private IP URLs,
-  malformed records, wrong opponents, wrong dates, off-focus pages, and empty snippets are rejected.
+- The server retains only HTTPS results that name at least one team, state the game date or were
+  published near it, and match the requested focus or topic hint. Duplicate URLs, private IP
+  URLs, malformed records, unrelated pages, undated pages, off-focus pages, and empty snippets
+  are rejected with a reason.
 - Retained sources are ordered by authority tier, then publication time when supplied, then Tavily
-  relevance. This ordering never bypasses the identity, date, focus, URL, or untrusted-data checks.
+  relevance. Topic match and team/date match break ties. This ordering never bypasses the team, date, focus, URL, or untrusted-data checks.
 - Titles and snippets are normalized, stripped of control characters, and length bounded. They
   remain untrusted source data and cannot override system or tool policy.
 - Provider response bodies, keys, and transport diagnostics do not appear in errors or logs.

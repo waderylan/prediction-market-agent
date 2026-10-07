@@ -17,6 +17,7 @@ from langchain_mcp_adapters.sessions import Connection, StdioConnection
 from langchain_mcp_adapters.tools import load_mcp_tools
 
 from market_agent.logging import log_event
+from market_agent.mcp import server_environment
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,12 @@ class MCPToolPool:
     def __init__(self, connections: dict[str, Connection] | None = None) -> None:
         if connections is None:
             connections = json.loads(files("market_agent.mcp").joinpath("servers.json").read_text())
-        for connection in connections.values():
+        for name, connection in connections.items():
             if connection["transport"] != "stdio":
                 raise ValueError("MCPToolPool requires stdio servers")
             stdio = cast(StdioConnection, connection)
             stdio["command"] = sys.executable
+            stdio["env"] = server_environment(name)
             stdio["session_kwargs"] = {"read_timeout_seconds": timedelta(seconds=45)}
         self._client = MultiServerMCPClient(connections)
         self._servers = {name: _Server(name) for name in connections}

@@ -64,6 +64,7 @@ async def test_schema_and_typed_game_evidence_are_real_mcp_calls():
         }
         assert schema["properties"]["focus"]["enum"] == [
             "injuries",
+            "roster_moves",
             "lineups",
             "weather",
             "venue_or_schedule",
@@ -71,6 +72,7 @@ async def test_schema_and_typed_game_evidence_are_real_mcp_calls():
             "postgame_recap",
         ]
         assert schema["properties"]["source_policy"]["enum"] == ["all", "official_only"]
+        assert "topic_hint" in schema["properties"]
 
         result = await session.call_tool(
             "tavily_search_game_evidence",
@@ -95,7 +97,7 @@ async def test_schema_and_typed_game_evidence_are_real_mcp_calls():
 
 
 @pytest.mark.parametrize(
-    "mode,code", [("error", "provider_error"), ("malformed", "malformed_response")]
+    "mode,code", [("error", "rate_limited"), ("malformed", "malformed_response")]
 )
 async def test_provider_failures_are_controlled_and_session_survives(mode, code):
     async with protocol(mode) as (session, calls):
