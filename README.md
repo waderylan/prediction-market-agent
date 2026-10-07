@@ -5,6 +5,10 @@ can retrieve plausible results, but does not establish that a score, two contrac
 article describe the same game. SportsWatch verifies the event before the agent combines those
 sources in an answer.
 
+Four custom MCP servers connect the agent to game state, Kalshi, Polymarket, and
+game-specific Tavily research, allowing it to answer focused questions or assemble a sourced
+game brief.
+
 The service follows MLB, NFL, and NCAA Division I football games across live state, box scores,
 player statistics, play history, Kalshi, Polymarket, and current reporting. It keeps the game in
 the conversation, so a follow-up can move from a score to a player or a contract without asking
