@@ -40,13 +40,6 @@ cancellation. Scores and prices above are from that snapshot, not current values
 
 ## Deployed stack
 
-![Python 3.12](https://img.shields.io/badge/Python%203.12-334155?style=flat-square)
-![FastAPI](https://img.shields.io/badge/FastAPI-334155?style=flat-square)
-![LangGraph](https://img.shields.io/badge/LangGraph-334155?style=flat-square)
-![FastMCP](https://img.shields.io/badge/FastMCP-334155?style=flat-square)
-![Gemini 3.8 Flash](https://img.shields.io/badge/Gemini%203.8%20Flash-334155?style=flat-square)
-![Cloud Run](https://img.shields.io/badge/Cloud%20Run-334155?style=flat-square)
-
 | Component | Deployed version |
 | --- | --- |
 | Language | Python 3.12 |
