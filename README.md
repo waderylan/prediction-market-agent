@@ -1,43 +1,81 @@
 # SportsWatch MCP
 
-Sports scores, prediction-market prices, and game news live in different systems. A team name
-can retrieve plausible results, but does not establish that a score, two contracts, and an
-article describe the same game. SportsWatch verifies the event before the agent combines those
-sources in an answer.
+Sports scores, prediction-market prices, and game news come from separate sources. A score,
+contract, and article can mention the same team but refer to different games. SportsWatch checks
+league, teams, date, and scheduled start before combining them.
 
 Four custom MCP servers connect the agent to game state, Kalshi, Polymarket, and
 game-specific Tavily research, allowing it to answer focused questions or assemble a sourced
 game brief.
 
-The service follows MLB, NFL, and NCAA Division I football games across live state, box scores,
-player statistics, play history, Kalshi, Polymarket, and current reporting. It keeps the game in
-the conversation, so a follow-up can move from a score to a player or a contract without asking
-the user to start over. It is read-only: no trades, account access, betting picks, or model-made
-win probabilities.
+The service answers MLB, NFL, and NCAA Division I football questions about scores, box scores,
+player statistics, plays, Kalshi and Polymarket contracts, and news. Session memory lets users
+ask follow-ups about the same game without repeating it. It is read-only: no trades, account
+access, betting picks, or model-made win probabilities.
+
+## Live example
+
+One request to the deployed `POST /chat/inspect` asked: "Give me a full report on the October 6,
+2026 Brewers at Padres NLDS Game 3. Include the live game state and box score, Kalshi and
+Polymarket contracts, current playoff-series news, and paternity-list roster moves. Cite the news
+articles you find." It returned HTTP 200 and recorded nine successful MCP calls:
+
+| Tool | Result |
+| --- | --- |
+| `sports_state_find_games` | Found one game: Brewers at Padres. |
+| `kalshi_search_markets` | Found one game with Padres contracts. |
+| `polymarket_search_markets` | Found one Brewers-Padres game. |
+| `sports_state_get_game_state` | Live, bottom of the fifth; Padres 3, Brewers 2. |
+| `sports_state_get_box_score` | Returned a partial summary box score. |
+| `kalshi_get_market` | Returned San Diego YES last trade at 0.7200 and contract rules. |
+| `polymarket_get_market` | Returned San Diego snapshot price at 0.715 and different settlement rules. |
+| `tavily_search_game_evidence` (`other_game_news`) | Retained five sources, including [MLB's Game 3 preview](https://www.mlb.com/news/brewers-padres-nl-division-series-game-3-starting-lineups-and-pitching-matchup) as series context. |
+| `tavily_search_game_evidence` (`roster_moves`) | Retained five sources, including [NBC Sports on Mason Miller's paternity-list placement](https://www.nbcsports.com/mlb/news/star-closer-mason-miller-goes-on-paternity-list-before-padres-face-brewers-in-game-3-of-nlds) for this game. |
+
+The ESPN observation was at 8:27 PM PDT on October 6. The answer reported Jake Cronenworth's
+home run, Nick Pivetta's 4.1 innings and two earned runs, and Mason Miller's paternity-list move.
+It did not treat the two market prices as equivalent: Kalshi has a 48-hour reschedule window and
+fair-value cancellation, while Polymarket waits for game completion and pays 50-50 on
+cancellation. Scores and prices above are from that snapshot, not current values.
+
+## Deployed stack
+
+![Python 3.12](https://img.shields.io/badge/Python%203.12-334155?style=flat-square)
+![FastAPI](https://img.shields.io/badge/FastAPI-334155?style=flat-square)
+![LangGraph](https://img.shields.io/badge/LangGraph-334155?style=flat-square)
+![FastMCP](https://img.shields.io/badge/FastMCP-334155?style=flat-square)
+![Gemini 3.8 Flash](https://img.shields.io/badge/Gemini%203.8%20Flash-334155?style=flat-square)
+![Cloud Run](https://img.shields.io/badge/Cloud%20Run-334155?style=flat-square)
+
+| Component | Deployed version |
+| --- | --- |
+| Language | Python 3.12 |
+| HTTP API | FastAPI (`POST /chat`) |
+| Agent | LangGraph with LangChain model integration |
+| Memory | LangGraph `InMemorySaver`, keyed by `session_id` |
+| MCP | Four custom servers built with FastMCP from the MCP Python SDK, connected through `langchain-mcp-adapters` |
+| Model | Gemini 3.8 Flash via the Google Gemini API |
+| Container | Docker |
+| Hosting | Google Cloud Run |
+| Cloud Run URL | Redacted; available on request |
 
 ## Evidence checks
 
 1. **Event identity.** SportsWatch compares league, teams, date, scheduled start, and game number
-   where available. Doubleheaders and similarly named matchups stay separate. Provider IDs remain
-   in their own namespaces.
+   where available. Doubleheaders and similarly named matchups stay separate. The app does not
+   equate IDs from different providers.
 2. **Contract equivalence.** A deterministic matcher checks the named outcome, full-game
    scope, postponement window, cancellation payout, and complete supplied rules. It returns
-   `equivalent`, `different`, or `ambiguous`. The model can explain that verdict but cannot
-   promote an ambiguous pair into an equivalent one. A final sporting result does not establish
-   prediction-market settlement.
-3. **Source provenance.** Scores, quotes, and articles retain separate observation times. Tool
-   output and search snippets are untrusted input; typed validation and game-identity checks run
-   before the model uses them. Missing evidence is identified in the answer.
-
-For example, a session can ask for a game score, then the last five plays, then both markets'
-prices, then whether the contracts settle under the same terms. A narrow question uses only the
-sources it needs. A full brief can chain calls across all four MCP servers.
+   `equivalent`, `different`, or `ambiguous`. The model cannot change an `ambiguous` verdict to
+   `equivalent`. A final sporting result does not establish prediction-market settlement.
+3. **Source times.** Each score, price, and article keeps its own observation time. The app
+   validates tool results and checks game identity before passing them to the model. The answer
+   identifies missing evidence.
 
 ## System design
 
-Four independent MCP servers expose typed tools through real `tools/list` discovery and
-`tools/call` invocation. These servers are written in this repository; the external services
-provide data, not the MCP transport.
+The agent discovers tools from the four MCP servers with `tools/list` and invokes them with
+`tools/call`.
 
 | Server | Why it exists |
 | --- | --- |
@@ -57,39 +95,20 @@ sessions across requests. A closed transport removes only that server from new t
 reconnected after active turns release it. Tool errors and malformed responses are handled per
 call. There is no background keepalive.
 
-The sports-state interface includes `sports_state_find_games`, `sports_state_get_game_state`,
-`sports_state_get_box_score`, `sports_state_list_players`, `sports_state_get_player_stats`, and
-`sports_state_get_play_by_play`. Market discovery and detail use `kalshi_search_markets`,
-`kalshi_search_series`, `kalshi_get_market`, `polymarket_search_markets`, and
-`polymarket_get_market`. Research uses `tavily_search_game_evidence`. Returned `game_ref`, player
-IDs, market IDs, and tickers are opaque; callers pass them to detail tools unchanged.
+Returned `game_ref`, player IDs, market IDs, and tickers are opaque; callers pass them to detail
+tools unchanged.
 
 ### Data boundaries
 
-- ESPN public JSON is undocumented and has no SLA. MLB StatsAPI is only a fallback for MLB after
-  exact game checks; there is no substituted NFL or college football feed.
-- A market price is a provider observation, not an independent forecast. Quote time and
-  retrieval time are different clocks. Game completion does not imply contract settlement.
+- ESPN public JSON is undocumented and has no SLA. MLB StatsAPI is an MLB-only fallback after
+  exact game checks. NFL and college football have no fallback.
+- Prices come from Kalshi or Polymarket. The app reports quote time and retrieval time
+  separately. Game completion does not imply contract settlement.
 - Search snippets cannot prove a score, contract equivalence, or settlement rule. Truncated or
   differing rules leave a comparison `ambiguous` unless an explicit conflict proves it
   `different`.
 - Matching currently covers supported full-game winner contracts. Spreads, totals, props,
   futures, and partial-game winners need different identity and settlement checks.
-
-## Measured behavior
-
-| Check | Observation |
-| --- | --- |
-| Warm Cloud Run no-tool chat | 13.54s before instance-owned MCP sessions; 2.09s after. One sample per revision. |
-| First chat after scale-to-zero | 24.52s. Keeping zero minimum instances trades cold-start time for zero idle compute billing. |
-| Four simultaneous no-tool chats | All returned HTTP 200 in 4.16–4.47s each. |
-| Memory after startup and concurrent checks | About 374 MiB sampled against a 1 GiB limit; no OOM or 429 in 12 new-revision probes. |
-
-These timings include network and Gemini time and are not a latency guarantee. The
-[measurement report](docs/research/PERFORMANCE_VERIFICATION.md) records the queries, local stub
-measurements, chained tool checks, memory sampling limits, and cost configuration. Tests also
-kill a real MCP child process during a call, verify the other three servers remain usable, and
-check that the failed server reconnects.
 
 ## Run locally
 
@@ -125,9 +144,6 @@ Invoke-RestMethod http://127.0.0.1:8080/chat -Method Post -ContentType applicati
 Reuse the session ID for follow-ups. `/chat/inspect` accepts the same body and adds bounded tool
 activity; `/health` reports service health. Session IDs are not authentication. Memory lasts for
 the running instance and is lost when Cloud Run scales to zero or replaces it.
-
-An optional local browser workbench in `scripts/run_kessel_ui.py` provides editable game
-questions and an activity trace. It is not part of the Cloud Run image.
 
 ### Verify
 
@@ -235,7 +251,7 @@ flowchart LR
 
 ## References
 
-The four MCP servers are implemented here over [Kalshi](https://docs.kalshi.com/),
+The custom MCP servers call [Kalshi](https://docs.kalshi.com/),
 [Polymarket Gamma](https://docs.polymarket.com/market-data/overview),
 [ESPN public JSON](docs/research/GAME_STATE_MCP.md),
 [MLB StatsAPI](https://docs.statsapi.mlb.com/), and [Tavily](https://docs.tavily.com/).
