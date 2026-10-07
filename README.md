@@ -13,31 +13,6 @@ player statistics, plays, Kalshi and Polymarket contracts, and news. Session mem
 ask follow-ups about the same game without repeating it. It is read-only: no trades, account
 access, betting picks, or model-made win probabilities.
 
-## Live example
-
-One request to the deployed `POST /chat/inspect` asked: "Give me a full report on the October 6,
-2026 Brewers at Padres NLDS Game 3. Include the live game state and box score, Kalshi and
-Polymarket contracts, current playoff-series news, and paternity-list roster moves. Cite the news
-articles you find." It returned HTTP 200 and recorded nine successful MCP calls:
-
-| Tool | Result |
-| --- | --- |
-| `sports_state_find_games` | Found one game: Brewers at Padres. |
-| `kalshi_search_markets` | Found one game with Padres contracts. |
-| `polymarket_search_markets` | Found one Brewers-Padres game. |
-| `sports_state_get_game_state` | Live, bottom of the fifth; Padres 3, Brewers 2. |
-| `sports_state_get_box_score` | Returned a partial summary box score. |
-| `kalshi_get_market` | Returned San Diego YES last trade at 0.7200 and contract rules. |
-| `polymarket_get_market` | Returned San Diego snapshot price at 0.715 and different settlement rules. |
-| `tavily_search_game_evidence` (`other_game_news`) | Retained five sources, including [MLB's Game 3 preview](https://www.mlb.com/news/brewers-padres-nl-division-series-game-3-starting-lineups-and-pitching-matchup) as series context. |
-| `tavily_search_game_evidence` (`roster_moves`) | Retained five sources, including [NBC Sports on Mason Miller's paternity-list placement](https://www.nbcsports.com/mlb/news/star-closer-mason-miller-goes-on-paternity-list-before-padres-face-brewers-in-game-3-of-nlds) for this game. |
-
-The ESPN observation was at 8:27 PM PDT on October 6. The answer reported Jake Cronenworth's
-home run, Nick Pivetta's 4.1 innings and two earned runs, and Mason Miller's paternity-list move.
-It did not treat the two market prices as equivalent: Kalshi has a 48-hour reschedule window and
-fair-value cancellation, while Polymarket waits for game completion and pays 50-50 on
-cancellation. Scores and prices above are from that snapshot, not current values.
-
 ## Deployed stack
 
 | Component | Deployed version |
@@ -254,3 +229,28 @@ Implementation notes cover [contract matching](docs/research/CONTRACT_MATCHING.m
 [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview),
 [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk), and
 [FastAPI](https://fastapi.tiangolo.com/).
+
+## Live example
+
+One request to the deployed `POST /chat/inspect` asked: "Give me a full report on the October 6,
+2026 Brewers at Padres NLDS Game 3. Include the live game state and box score, Kalshi and
+Polymarket contracts, current playoff-series news, and paternity-list roster moves. Cite the news
+articles you find." It returned HTTP 200 and recorded nine successful MCP calls:
+
+| Tool | Result |
+| --- | --- |
+| `sports_state_find_games` | Found one game: Brewers at Padres. |
+| `kalshi_search_markets` | Found one game with Padres contracts. |
+| `polymarket_search_markets` | Found one Brewers-Padres game. |
+| `sports_state_get_game_state` | Live, bottom of the fifth; Padres 3, Brewers 2. |
+| `sports_state_get_box_score` | Returned a partial summary box score. |
+| `kalshi_get_market` | Returned San Diego YES last trade at 0.7200 and contract rules. |
+| `polymarket_get_market` | Returned San Diego snapshot price at 0.715 and different settlement rules. |
+| `tavily_search_game_evidence` (`other_game_news`) | Retained five sources, including [MLB's Game 3 preview](https://www.mlb.com/news/brewers-padres-nl-division-series-game-3-starting-lineups-and-pitching-matchup) as series context. |
+| `tavily_search_game_evidence` (`roster_moves`) | Retained five sources, including [NBC Sports on Mason Miller's paternity-list placement](https://www.nbcsports.com/mlb/news/star-closer-mason-miller-goes-on-paternity-list-before-padres-face-brewers-in-game-3-of-nlds) for this game. |
+
+The ESPN observation was at 8:27 PM PDT on October 6. The answer reported Jake Cronenworth's
+home run, Nick Pivetta's 4.1 innings and two earned runs, and Mason Miller's paternity-list move.
+It did not treat the two market prices as equivalent: Kalshi has a 48-hour reschedule window and
+fair-value cancellation, while Polymarket waits for game completion and pays 50-50 on
+cancellation. Scores and prices above are from that snapshot, not current values.
